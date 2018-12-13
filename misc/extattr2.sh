@@ -76,7 +76,6 @@ setfacl -m user:$testuser:rwx,group:$testuser:rwx $RUNDIR
 su $testuser -c "cd $here/..; ./run.sh marcus.cfg" &
 
 sleep 5
-set -x
 while pgrep -U$testuser -q -f run.sh; do
 	find $RUNDIR | xargs -P0 -J% setfacl -m user:$testuser:rwx,group:$testuser:rwx % > /dev/null 2>&1
 done
