@@ -64,6 +64,8 @@ gpart add -t freebsd-ufs -s 340m md$u3
 gnop create md$u2
 gnop create md$u3
 gmirror label test md${u1}p1 md$u2.nopp1 md$u3.nopp1
+[ "`sysctl -in kern.geom.mirror.launch_mirror_before_timeout`" = "0" ] &&
+    sleep $((`sysctl -n kern.geom.mirror.timeout` + 1))
 [ -c /dev/mirror/test ] || exit 1
 
 newfs /dev/mirror/test > /dev/null

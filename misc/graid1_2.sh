@@ -62,6 +62,8 @@ for u in $md1 $md2; do
 	mdconfig -a -t vnode -f /tmp/graid1_2_di$u -u $u
 done
 gmirror label test /dev/md$md1 /dev/md$md2 || exit 1
+[ "`sysctl -in kern.geom.mirror.launch_mirror_before_timeout`" = "0" ] &&
+    sleep $((`sysctl -n kern.geom.mirror.timeout` + 1))
 [ -c /dev/mirror/test ] || exit 1
 
 for i in `jot 150`; do /tmp/graid1_2 /dev/mirror/test; done &

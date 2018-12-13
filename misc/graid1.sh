@@ -54,6 +54,8 @@ sysctl kern.geom.mirror.debug=-1 | grep -q -- -1 ||
     sysctl kern.geom.mirror.debug=$old > /dev/null
 gmirror label -v -b split -s 2048 data /dev/md$md1 /dev/md$md2 \
     /dev/md$md3 > /dev/null || exit 1
+[ "`sysctl -in kern.geom.mirror.launch_mirror_before_timeout`" = "0" ] &&
+    sleep $((`sysctl -n kern.geom.mirror.timeout` + 1))
 [ -c /dev/mirror/data ] || exit 1
 newfs $newfs_flags /dev/mirror/data > /dev/null
 mount /dev/mirror/data $mntpoint

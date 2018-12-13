@@ -59,6 +59,8 @@ done
 
 gmirror label -v -b split -s 2048 test /dev/md$md1 /dev/md$md2 \
     > /dev/null || exit 1
+[ "`sysctl -in kern.geom.mirror.launch_mirror_before_timeout`" = "0" ] &&
+    sleep $((`sysctl -n kern.geom.mirror.timeout` + 1))
 [ -c /dev/mirror/test ] || exit 1
 newfs $newfs_flags /dev/mirror/test > /dev/null
 mount /dev/mirror/test $mntpoint
