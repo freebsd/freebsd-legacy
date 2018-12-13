@@ -82,7 +82,12 @@ done
 wait
 
 s=0
-umount $mntpoint
+for i in `jot 6`; do
+	mount | grep -q "on $mntpoint " || break
+	umount $mntpoint && break || sleep 10
+	[ $i -eq 6 ] &&
+	    { echo FAIL; fstat -mf $mntpoint; exit 1; }
+done
 checkfs /dev/md${mdstart}$part || s=1
 mdconfig -d -u $mdstart || s=2
 exit $s
