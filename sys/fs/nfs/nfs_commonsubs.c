@@ -745,10 +745,14 @@ nfsm_advance(struct nfsrv_descript *nd, int offs, int left)
 	if (offs == 0)
 		goto out;
 	/*
-	 * A negative offs should be considered a serious problem.
+	 * A negative offs might indicate a corrupted mbuf chain and,
+	 * as such, a printf is logged.
 	 */
-	if (offs < 0)
-		panic("nfsrv_advance");
+	if (offs < 0) {
+		printf("nfsrv_advance: negative offs\n");
+		error = EBADRPC;
+		goto out;
+	}
 
 	/*
 	 * If left == -1, calculate it here.
@@ -1885,7 +1889,7 @@ nfsv4_loadattr(struct nfsrv_descript *nd, vnode_t vp,
 		case NFSATTRBIT_QUOTAHARD:
 			NFSM_DISSECT(tl, u_int32_t *, NFSX_HYPER);
 			if (sbp != NULL) {
-			    if (priv_check_cred(cred, PRIV_VFS_EXCEEDQUOTA, 0))
+			    if (priv_check_cred(cred, PRIV_VFS_EXCEEDQUOTA))
 				freenum = sbp->f_bfree;
 			    else
 				freenum = sbp->f_bavail;
@@ -1914,7 +1918,7 @@ nfsv4_loadattr(struct nfsrv_descript *nd, vnode_t vp,
 		case NFSATTRBIT_QUOTASOFT:
 			NFSM_DISSECT(tl, u_int32_t *, NFSX_HYPER);
 			if (sbp != NULL) {
-			    if (priv_check_cred(cred, PRIV_VFS_EXCEEDQUOTA, 0))
+			    if (priv_check_cred(cred, PRIV_VFS_EXCEEDQUOTA))
 				freenum = sbp->f_bfree;
 			    else
 				freenum = sbp->f_bavail;
@@ -2772,7 +2776,7 @@ nfsv4_fillattr(struct nfsrv_descript *nd, struct mount *mp, vnode_t vp,
 				free(cp, M_NFSSTRING);
 			break;
 		case NFSATTRBIT_QUOTAHARD:
-			if (priv_check_cred(cred, PRIV_VFS_EXCEEDQUOTA, 0))
+			if (priv_check_cred(cred, PRIV_VFS_EXCEEDQUOTA))
 				freenum = fs->f_bfree;
 			else
 				freenum = fs->f_bavail;
@@ -2796,7 +2800,7 @@ nfsv4_fillattr(struct nfsrv_descript *nd, struct mount *mp, vnode_t vp,
 			retnum += NFSX_HYPER;
 			break;
 		case NFSATTRBIT_QUOTASOFT:
-			if (priv_check_cred(cred, PRIV_VFS_EXCEEDQUOTA, 0))
+			if (priv_check_cred(cred, PRIV_VFS_EXCEEDQUOTA))
 				freenum = fs->f_bfree;
 			else
 				freenum = fs->f_bavail;
@@ -2848,7 +2852,7 @@ nfsv4_fillattr(struct nfsrv_descript *nd, struct mount *mp, vnode_t vp,
 			break;
 		case NFSATTRBIT_SPACEAVAIL:
 			NFSM_BUILD(tl, u_int32_t *, NFSX_HYPER);
-			if (priv_check_cred(cred, PRIV_VFS_BLOCKRESERVE, 0)) {
+			if (priv_check_cred(cred, PRIV_VFS_BLOCKRESERVE)) {
 				if (pnfssf != NULL)
 					uquad = (u_int64_t)pnfssf->f_bfree;
 				else
