@@ -4804,7 +4804,7 @@ nfsrvd_ioadvise(struct nfsrv_descript *nd, __unused int isdgram,
 	NFSBCOPY(tl, stateid.other, NFSX_STATEIDOTHER);
 	tl += (NFSX_STATEIDOTHER / NFSX_UNSIGNED);
 	offset = fxdr_hyper(tl); tl += 2;
-	len = fxdr_hyper(tl); tl += 2;
+	len = fxdr_hyper(tl);
 	error = nfsrv_getattrbits(nd, &hints, NULL, NULL);
 	if (error != 0)
 		goto nfsmout;
