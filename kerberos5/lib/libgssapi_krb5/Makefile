@@ -88,7 +88,8 @@ CFLAGS+=-I${.OBJDIR:H}/libwind
 CFLAGS+=-I${KRB5DIR}/lib/hx509
 CFLAGS+=-I${.OBJDIR:H}/libhx509
 CFLAGS+=-I${SRCTOP}/contrib/com_err 
-CFLAGS+=-I${KRB5DIR}/base -I.
+CFLAGS+=-I${KRB5DIR}/base
+CFLAGS+=-I.
 
 .include <bsd.lib.mk>
 

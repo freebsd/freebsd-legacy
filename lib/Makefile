@@ -42,7 +42,7 @@ SUBDIR=	${SUBDIR_BOOTSTRAP} \
 	libdevctl \
 	libdevinfo \
 	libdevstat \
-	${_libdl} \
+	libdl \
 	libdwarf \
 	libedit \
 	libelftc \
@@ -165,6 +165,7 @@ _libclang_rt=	libclang_rt
 _libcxxrt=	libcxxrt
 _libcplusplus=	libc++
 _libcplusplus+=	libc++experimental
+_libcplusplus+=	libc++fs
 .endif
 
 SUBDIR.${MK_EFI}+=	libefivar
@@ -191,10 +192,6 @@ SUBDIR.${MK_BHYVE}+=	libvmmapi
 .if ${MACHINE_CPUARCH} != "sparc64"
 _libproc=	libproc
 _librtld_db=	librtld_db
-.endif
-
-.if defined(LINKER_FEATURES) && ${LINKER_FEATURES:Mfilter}
-_libdl=		libdl
 .endif
 
 SUBDIR.${MK_OPENSSL}+=	libmp

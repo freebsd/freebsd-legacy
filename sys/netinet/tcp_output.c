@@ -656,7 +656,8 @@ after_sack_rexmit:
 		if (adv >= (int32_t)(2 * tp->t_maxseg) &&
 		    (adv >= (int32_t)(so->so_rcv.sb_hiwat / 4) ||
 		     recwin <= (so->so_rcv.sb_hiwat / 8) ||
-		     so->so_rcv.sb_hiwat <= 8 * tp->t_maxseg))
+		     so->so_rcv.sb_hiwat <= 8 * tp->t_maxseg ||
+		     adv >= TCP_MAXWIN << tp->rcv_scale))
 			goto send;
 		if (2 * adv >= (int32_t)so->so_rcv.sb_hiwat)
 			goto send;
@@ -1172,14 +1173,18 @@ send:
 	/*
 	 * Calculate receive window.  Don't shrink window,
 	 * but avoid silly window syndrome.
+	 * If a RST segment is sent, advertise a window of zero.
 	 */
-	if (recwin < (so->so_rcv.sb_hiwat / 4) &&
-	    recwin < tp->t_maxseg)
+	if (flags & TH_RST) {
 		recwin = 0;
-	if (SEQ_GT(tp->rcv_adv, tp->rcv_nxt) &&
-	    recwin < (tp->rcv_adv - tp->rcv_nxt))
-		recwin = (tp->rcv_adv - tp->rcv_nxt);
-
+	} else {
+		if (recwin < (so->so_rcv.sb_hiwat / 4) &&
+		    recwin < tp->t_maxseg)
+			recwin = 0;
+		if (SEQ_GT(tp->rcv_adv, tp->rcv_nxt) &&
+		    recwin < (tp->rcv_adv - tp->rcv_nxt))
+			recwin = (tp->rcv_adv - tp->rcv_nxt);
+	}
 	/*
 	 * According to RFC1323 the window field in a SYN (i.e., a <SYN>
 	 * or <SYN,ACK>) segment itself is never scaled.  The <SYN,ACK>

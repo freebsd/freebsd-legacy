@@ -12,6 +12,7 @@ CFLAGS+=-I${KRB5DIR}/lib/wind
 CFLAGS+=-I${KRB5DIR}/lib/hdb
 CFLAGS+=-I${KRB5DIR}/base
 CFLAGS+=-I${KRB5DIR}/kdc
+CFLAGS+=-I${SRCTOP}/contrib/com_err
 CFLAGS+=-I${.OBJDIR:H:H}/lib/libkrb5
 CFLAGS+=-I${.OBJDIR:H:H}/lib/libroken
 CFLAGS+=-I${.OBJDIR:H:H}/lib/libasn1

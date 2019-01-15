@@ -102,6 +102,7 @@ options 	MALLOC_DEBUG_MAXZONES=8	# Separate malloc(9) zones
 options 	VERBOSE_SYSINIT=0	# Support debug.verbose_sysinit, off by default
 # Warning: KUBSAN can result in a kernel too large for loader to load
 #options 	KUBSAN			# Kernel Undefined Behavior Sanitizer
+#options 	KCOV			# Kernel Coverage Sanitizer
 
 # Kernel dump features.
 options 	EKCD			# Support for encrypted kernel dumps
@@ -372,3 +373,8 @@ device		vmx			# VMware VMXNET3 Ethernet
 
 # Netmap provides direct access to TX/RX rings on supported NICs
 device		netmap			# netmap(4) support
+
+# evdev interface
+options 	EVDEV_SUPPORT		# evdev support in legacy drivers
+device		evdev			# input event device support
+device		uinput			# install /dev/uinput cdev
