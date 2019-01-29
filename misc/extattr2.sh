@@ -33,6 +33,7 @@
 # enabled.
 # "panic: softdep_deallocate_dependencies: dangling deps" seen:
 # https://people.freebsd.org/~pho/stress/log/kostik1121.txt
+# Fixed in r343536.
 
 [ `id -u ` -ne 0 ] && echo "Must be root!" && exit 1
 
