@@ -34,11 +34,12 @@
 # "panic: softdep_deallocate_dependencies: dangling deps" seen:
 # https://people.freebsd.org/~pho/stress/log/kostik1121.txt
 # Fixed in r343536.
+# "panic: ffs_truncate3" seen:
+# https://people.freebsd.org/~pho/stress/log/extattr2.txt
 
 [ `id -u ` -ne 0 ] && echo "Must be root!" && exit 1
 
 . ../default.cfg
-[ "`sysctl -in kern.features.ufs_extattr`" != "1" ] && exit 0
 [ -z "`which setfacl`" ] && exit 0
 
 here=`pwd`
