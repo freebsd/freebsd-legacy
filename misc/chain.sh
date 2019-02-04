@@ -2,8 +2,13 @@
 
 # Unkillable process in "vm map (user)" seen.
 # https://people.freebsd.org/~pho/stress/log/kostik1070.txt
+# Fixed by: r327468
+
+# OOM killing: https://people.freebsd.org/~pho/stress/log/chain.txt
 
 # Test scenario by Peter Jeremy <peterj@>
+
+# $FreeBSD$
 
 if [ ! -f /usr/local/include/libmill.h -o \
     ! -x /usr/local/lib/libmill.so ]; then
