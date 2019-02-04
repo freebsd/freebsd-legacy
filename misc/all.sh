@@ -39,29 +39,44 @@
 #		panic: 43 vncache entries remaining			20111220
 # backingstore3.sh
 #		g_vfs_done():md6a[WRITE(offset=...)]error = 28		20111230
+# buildworld3.sh	WiP						20180919
 # chain.sh	WiP							20171225
+# contigmalloc3.sh panic: Bad link elm 0x6766fbc next->prev != elm	20180318
 # crossmp4.sh	Known nullfs issue					20150523
+# dev.sh	g_access(958) error 6 seen				20180329
+# devfs4.sh	WiP							20181031
+# Xextattr2.sh	WiP							20180921
+# fdatasync2.sh	Deadlock						20180312
+# fdgrowtable.sh	Deadlock					20180303
 # fsync.sh	GEOM_JOURNAL: Cannot suspend file system /mnt		20160818
 # fuse.sh	Memory corruption seen in log file kostik734.txt	20141114
 # fuse2.sh	Deadlock seen						20121129
 # fuse3.sh	Deadlock seen						20141120
 # gbde.sh	panic: handle_written_inodeblock: Invalid link count...	20131128
+# gjournal2.sh	panic: Journal overflow					20180125
 # gjournal3.sh	panic: Bio not on queue					20171225
+# gjournal4.sh	CAM stuck in vmwait					20180517
+# graid1_4.sh	umount stuck in mntref r338639				20180921
 # graid1_8.sh	Known issue						20170909
-# graid1_9.sh	WiP							20180108
+# graid1_9.sh	panic: Bad effnlink					20180212
+# kevent13.sh	panic: mutex pipe mutex not owned at sys_pipe.c:1769	20181118
 # lockf5.sh	Spinning threads seen					20160718
+# ifconfig.sh	WiP							20181029
+# ifconfig2.sh	WiP							20181029
 # maxvnodes2.sh	WiP							20161129
 # mdconfig.sh	Panic:  g_read_data(): invalid length 262144		20161128
 # memguard.sh	Waiting for fix commit
 # memguard2.sh	Waiting for fix commit
 # memguard3.sh	Waiting for fix commit
+# mlockall2.sh	Unrecoverable OOM killing seen				20190203
 # mmap32.sh	Kernel loop						20171118
-# msdos5.sh	panic: Freeing unused sector 320185 25 fc000004		20170819
+# newfs4.sh	watchdog fired. newbuf					20180618
 # nfs10.sh	Double fault						20151013
 # nfs16.sh	panic: Failed to register NFS lock locally - error=11	20160608
-# Xnullfs23.sh	panic: Lock (lockmgr) nullfs not locked			20170817
+# oom2.sh	Hang in pfault						20180324
 # pfl3.sh	panic: handle_written_inodeblock: live inodedep		20140812
-# ptrace9.sh	WiP
+# pageout.sh	panic: handle_written_filepage: not started		20180303
+# Xptrace9.sh	WiP
 # quota2.sh	panic: dqflush: stray dquot				20120221
 # quota3.sh	panic: softdep_deallocate_dependencies: unrecovered ...	20111222
 # quota6.sh	panic: softdep_deallocate_dependencies: unrecovered ...	20130206
@@ -75,16 +90,17 @@
 # suj11.sh	panic: ufsdirhash_newblk: bad offset			20120118
 # suj13.sh	general protection fault in bufdaemon			20141130
 # suj30.sh	panic: flush_pagedep_deps: MKDIR_PARENT			20121020
+# suj31.sh	OOM							20180408
 # suj34.sh	Various hangs and panics (SUJ + NULLFS issue)		20131210
 # swap4.sh	WiP							20171208
 # swapoff2.sh	swap_pager_force_pagein: read from swap failed		20171223
+# ucom.sh	Stuck in tail -F					20180129
 # umountf3.sh	KDB: enter: watchdog timeout				20170514
 # umountf7.sh	panic: handle_written_inodeblock: live inodedep ...	20131129
 # umountf9.sh	panic: handle_written_inodeblock: live inodedep ...	20170221
 # unionfs.sh	insmntque: non-locked vp: xx is not exclusive locked...	20130909
 # unionfs2.sh	insmntque: mp-safe fs and non-locked vp is not ...	20111219
 # unionfs3.sh	insmntque: mp-safe fs and non-locked vp is not ...	20111216
-# Xzfs3.sh	Page fault						20161118
 
 # Test not to run for other reasons:
 
@@ -108,7 +124,7 @@
 # suj28.sh
 
 # Exclude NFS loopback tests
-# nfs2.sh	panic: wrong diroffset 					20140219
+# nfs2.sh	panic: wrong diroffset					20140219
 # nfs5.sh
 # nfs6.sh
 # nfs11.sh	vmwait deadlock						20151004
@@ -193,6 +209,8 @@ su $testuser -c "touch $probe" > /dev/null 2>&1
     { echo "No write access to `dirname $RUNDIR`."; exit 1; }
 [ `swapinfo | wc -l` -eq 1 ] &&
     echo "Consider adding a swap disk. Many tests rely on this."
+mount | grep -wq $mntpoint &&
+    echo "\$mntpoint ($mntpoint) is already in use" && exit 1
 [ -x ../testcases/run/run ] ||
 	(cd ..; make)
 ping -c 2 -t 2 $BLASTHOST > /dev/null 2>&1 ||
@@ -200,11 +218,12 @@ ping -c 2 -t 2 $BLASTHOST > /dev/null 2>&1 ||
 echo "$loops" | grep -Eq "^[0-9]+$" ||
     { echo "The -l argument must be a positive number"; exit 1; }
 
-rm -f $alllog $alllist $allelepsed
+rm -f $alllist $allelepsed
 find `dirname $alllast` -maxdepth 1 -name $alllast -mtime +12h -delete
 touch $alllast $alllog
 chmod 640 $alllast $alllog
 find ../testcases -perm -1 \( -name "*.debug" -o -name "*.full" \) -delete
+tail -2000 $alllog > ${alllog}.new; mv ${alllog}.new $alllog
 
 console=/dev/console
 printf "\r\n" > $console &
@@ -250,6 +269,9 @@ while true; do
 	[ -z "$lst" ] && exit
 	echo "$lst" > $alllist
 
+	pgrep -fq vmstat.sh ||
+	    daemon ../tools/vmstat.sh > /tmp/stress2.d/vmstat 2>&1
+
 	n1=0
 	n2=`echo $lst | wc -w | sed 's/ //g'`
 	for i in $lst; do
@@ -264,10 +286,12 @@ while true; do
 		logger "Starting test all: $i"
 		[ $all_debug ] && pre_debug
 		[ -f $i ] || loops=1	# break
-		sync;sync;sync
+		sync; sleep .5; sync; sleep .5
 		start=`date '+%s'`
 		(
-			./$i 2>&1
+		 	[ $USE_TIMEOUT ] &&
+			    timeout -k 1m 1h ./$i 2>&1 ||
+			    ./$i 2>&1
 			e=$?
 			[ $e -ne 0 ] &&
 			    echo "FAIL $i exit code $e"
@@ -276,6 +300,7 @@ while true; do
 		grep -qw FAIL $alloutput &&
 		    echo "$ts $i" >> $allfaillog &&
 		    logger "stress2 test $i failed"
+		grep -qw FATAL $alloutput && exit $e
 		rm -f $alloutput
 		printf "$ts $rev $i $((`date '+%s'` - start))\n" >> \
 		    $allelapsed
