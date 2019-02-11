@@ -42,13 +42,19 @@ sed '1,/^EOF/d' < $odir/$0 > kevent13.c
 cc -o kevent13 -Wall kevent13.c -lpthread
 rm -f kevent13.c
 
+daemon sh -c "(cd $odir/../testcases/swap; ./swap -t 5m -i 20 -h -l 100)" > \
+    /dev/null
 [ -d "$RUNDIR" ] || mkdir -p $RUNDIR
 cd $RUNDIR
-for i in `jot 10`; do
-	/tmp/kevent13 &
-	/tmp/kevent13 &
-	wait
+start=`date +%s`
+while [ $((`date +%s` - start)) -lt 300 ]; do
+	for i in `jot 10`; do
+		/tmp/kevent13 &
+		/tmp/kevent13 &
+		wait
+	done
 done
+while pgrep -q swap; do pkill -9 swap; done
 
 rm -f /tmp/kevent13
 exit 0
