@@ -74,6 +74,8 @@ rm -rf /tmp/stressX.control
 su $testuser -c 'cd ..; ./run.sh io.cfg' > /dev/null 2>&1 &
 pid=$!
 
+last=`tail -1 /var/log/messages | cut -c1-15`
+[ -z "$last" ] && last=dummy
 sleep 2
 cont=/tmp/graid1_7.cont
 touch $cont
@@ -96,18 +98,28 @@ rm $cont
 wait
 gmirror status test | grep -qw md${u1}p2 || gmirror insert test md${u1}p2
 gmirror status test | grep -qw md${u1}p3 || gmirror insert test md${u1}p3
-while ! gmirror status test | grep -q COMPLETE; do sleep 5; done
+i=0
+while ! gmirror status test | grep -q COMPLETE; do
+	sleep 5
+	if [ $((i += 1)) -gt 20 ]; then
+		echo "FAIL to COMPLETE"
+		s=1
+		break
+	fi
+done
 
 while mount | grep $mntpoint | grep -q /mirror/; do
 	umount $mntpoint || sleep 5
 done
+checkfs /dev/mirror/test || s=2
 while gmirror status test | grep -q SYNCHRONIZING; do sleep 10; done
 for i in `jot 10`; do
 	gmirror stop test && break || sleep 30
 done
-[ $i -eq 10 ] && s=1
+[ $i -eq 10 ] && s=3
 gmirror destroy test 2>/dev/null
 [ $unload ] && gmirror unload
 
-mdconfig -d -u $mdstart || s=3
+mdconfig -d -u $mdstart || s=4
+sed "1,/$last/d" < /var/log/messages | tail -20 | grep -m 1 "check-hash" && s=5
 exit $s
