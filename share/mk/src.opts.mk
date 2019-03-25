@@ -83,7 +83,6 @@ __DEFAULT_YES_OPTIONS = \
     CPP \
     CROSS_COMPILER \
     CRYPT \
-    CTM \
     CUSE \
     CXX \
     CXGBETOOL \
@@ -109,6 +108,7 @@ __DEFAULT_YES_OPTIONS = \
     GDB \
     GNU_DIFF \
     GNU_GREP \
+    GOOGLETEST \
     GPIO \
     HAST \
     HTML \
@@ -195,6 +195,7 @@ __DEFAULT_YES_OPTIONS = \
     ZONEINFO
 
 __DEFAULT_NO_OPTIONS = \
+    BEARSSL \
     BSD_GREP \
     CLANG_EXTRAS \
     DTRACE_TESTS \
@@ -220,6 +221,9 @@ __DEFAULT_NO_OPTIONS = \
 __DEFAULT_DEPENDENT_OPTIONS= \
 	CLANG_FULL/CLANG \
 	LLVM_TARGET_ALL/CLANG \
+	LOADER_VERIEXEC/BEARSSL \
+	LOADER_EFI_SECUREBOOT/LOADER_VERIEXEC \
+	VERIEXEC/BEARSSL \
 
 # MK_*_SUPPORT options which default to "yes" unless their corresponding
 # MK_* variable is set to "no".
@@ -321,11 +325,9 @@ __DEFAULT_YES_OPTIONS+=LLVM_LIBUNWIND
 .else
 __DEFAULT_NO_OPTIONS+=LLVM_LIBUNWIND
 .endif
-.if ${__T} == "aarch64" || ${__T} == "amd64" || ${__T} == "armv7"
+.if ${__T} == "aarch64" || ${__T} == "amd64" || ${__T} == "armv7" || \
+    ${__T} == "i386"
 __DEFAULT_YES_OPTIONS+=LLD_BOOTSTRAP LLD_IS_LD
-.elif ${__T} == "i386"
-__DEFAULT_YES_OPTIONS+=LLD_BOOTSTRAP
-__DEFAULT_NO_OPTIONS+=LLD_IS_LD
 .else
 __DEFAULT_NO_OPTIONS+=LLD_BOOTSTRAP LLD_IS_LD
 .endif
@@ -397,6 +399,12 @@ BROKEN_OPTIONS+=NVME
 BROKEN_OPTIONS+=BSD_CRTBEGIN
 .endif
 
+.if ${COMPILER_FEATURES:Mc++11} && (${__T} == "amd64" || ${__T} == "i386")
+__DEFAULT_YES_OPTIONS+=OPENMP
+.else
+__DEFAULT_NO_OPTIONS+=OPENMP
+.endif
+
 .include <bsd.mkopt.mk>
 
 #
@@ -426,11 +434,8 @@ MK_${var}:=	no
 # Order is somewhat important.
 #
 .if !${COMPILER_FEATURES:Mc++11}
+MK_GOOGLETEST:=	no
 MK_LLVM_LIBUNWIND:=	no
-.endif
-
-.if ${MK_BINUTILS} == "no"
-MK_GDB:=	no
 .endif
 
 .if ${MK_CAPSICUM} == "no"
@@ -508,6 +513,10 @@ MK_FREEBSD_UPDATE:=	no
 
 .if ${MK_TESTS} == "no"
 MK_DTRACE_TESTS:= no
+.endif
+
+.if ${MK_TESTS_SUPPORT} == "no"
+MK_GOOGLETEST:=	no
 .endif
 
 .if ${MK_ZONEINFO} == "no"

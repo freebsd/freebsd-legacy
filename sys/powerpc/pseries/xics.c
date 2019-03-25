@@ -61,9 +61,6 @@ __FBSDID("$FreeBSD$");
 #define XICP_IPI	2
 #define MAX_XICP_IRQS	(1<<24)	/* 24-bit XIRR field */
 
-#define	XIVE_XICS_MODE_EMU	0
-#define	XIVE_XICS_MODE_EXP	1
-
 static int	xicp_probe(device_t);
 static int	xicp_attach(device_t);
 static int	xics_probe(device_t);
@@ -78,7 +75,8 @@ static void	xicp_mask(device_t, u_int, void *priv);
 static void	xicp_unmask(device_t, u_int, void *priv);
 
 #ifdef POWERNV
-void	xicp_smp_cpu_startup(void);
+extern void (*powernv_smp_ap_extra_init)(void);
+static void	xicp_smp_cpu_startup(void);
 #endif
 
 static device_method_t  xicp_methods[] = {
@@ -238,7 +236,7 @@ xicp_attach(device_t dev)
 			 * compatibility mode.
 			 */
 			sc->xics_emu = true;
-			opal_call(OPAL_XIVE_RESET, XIVE_XICS_MODE_EMU);
+			opal_call(OPAL_XIVE_RESET, OPAL_XIVE_XICS_MODE_EMU);
 #endif
 	} else {
 		sc->cpu_range[0] = 0;
@@ -280,6 +278,11 @@ xicp_attach(device_t dev)
 	    1 /* Number of IPIs */, FALSE);
 	root_pic = dev;
 
+#ifdef POWERNV
+	if (sc->xics_emu)
+		powernv_smp_ap_extra_init = xicp_smp_cpu_startup;
+#endif
+
 	return (0);
 }
 
@@ -293,6 +296,20 @@ xics_attach(device_t dev)
 	    MAX_XICP_IRQS, 1 /* Number of IPIs */, FALSE);
 
 	return (0);
+}
+
+static __inline struct xicp_intvec *
+xicp_setup_priv(struct xicp_softc *sc, u_int irq, void **priv)
+{
+	if (*priv == NULL) {
+		KASSERT(sc->nintvecs + 1 < nitems(sc->intvecs),
+			("Too many XICP interrupts"));
+		mtx_lock(&sc->sc_mtx);
+		*priv = &sc->intvecs[sc->nintvecs++];
+		mtx_unlock(&sc->sc_mtx);
+	}
+
+	return (*priv);
 }
 
 /*
@@ -311,10 +328,7 @@ xicp_bind(device_t dev, u_int irq, cpuset_t cpumask, void **priv)
 	if (irq == MAX_XICP_IRQS)
 		return;
 
-	if (*priv == NULL)
-		*priv = &sc->intvecs[sc->nintvecs++];
-
-	iv = *priv;
+	iv = xicp_setup_priv(sc, irq, priv);
 
 	/*
 	 * This doesn't appear to actually support affinity groups, so pick a
@@ -426,14 +440,7 @@ xicp_enable(device_t dev, u_int irq, u_int vector, void **priv)
 	/* Bind to this CPU to start: distrib. ID is last entry in gserver# */
 	cpu = PCPU_GET(hwref);
 
-	if (*priv == NULL) {
-		KASSERT(sc->nintvecs + 1 < nitems(sc->intvecs),
-			("Too many XICP interrupts"));
-		mtx_lock(&sc->sc_mtx);
-		*priv = &sc->intvecs[sc->nintvecs++];
-		mtx_unlock(&sc->sc_mtx);
-	}
-	intr = *priv;
+	intr = xicp_setup_priv(sc, irq, priv);
 
 	intr->irq = irq;
 	intr->vector = vector;
@@ -552,7 +559,7 @@ xicp_unmask(device_t dev, u_int irq, void *priv)
 
 #ifdef POWERNV
 /* This is only used on POWER9 systems with the XIVE's XICS emulation. */
-void
+static void
 xicp_smp_cpu_startup(void)
 {
 	struct xicp_softc *sc;

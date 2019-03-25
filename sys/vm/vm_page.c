@@ -633,7 +633,7 @@ vm_page_startup(vm_offset_t vaddr)
 #endif
 
 #if defined(__aarch64__) || defined(__amd64__) || defined(__arm__) || \
-    defined(__i386__) || defined(__mips__)
+    defined(__i386__) || defined(__mips__) || defined(__riscv)
 	/*
 	 * Allocate a bitmap to indicate that a random physical page
 	 * needs to be included in a minidump.
@@ -658,7 +658,8 @@ vm_page_startup(vm_offset_t vaddr)
 #else
 	(void)last_pa;
 #endif
-#if defined(__aarch64__) || defined(__amd64__) || defined(__mips__)
+#if defined(__aarch64__) || defined(__amd64__) || defined(__mips__) || \
+    defined(__riscv)
 	/*
 	 * Include the UMA bootstrap pages, witness pages and vm_page_dump
 	 * in a crash dump.  When pmap_map() uses the direct map, they are
@@ -773,7 +774,8 @@ vm_page_startup(vm_offset_t vaddr)
 		high_avail = new_end;
 	new_end = vm_reserv_startup(&vaddr, new_end, high_avail);
 #endif
-#if defined(__aarch64__) || defined(__amd64__) || defined(__mips__)
+#if defined(__aarch64__) || defined(__amd64__) || defined(__mips__) || \
+    defined(__riscv)
 	/*
 	 * Include vm_page_array and vm_reserv_array in a crash dump.
 	 */
@@ -3175,7 +3177,11 @@ vm_pqbatch_submit_page(vm_page_t m, uint8_t queue)
 	struct vm_pagequeue *pq;
 	int domain;
 
-	vm_page_assert_locked(m);
+	KASSERT((m->oflags & VPO_UNMANAGED) == 0,
+	    ("page %p is unmanaged", m));
+	KASSERT(mtx_owned(vm_page_lockptr(m)) ||
+	    (m->object == NULL && (m->aflags & PGA_DEQUEUE) != 0),
+	    ("missing synchronization for page %p", m));
 	KASSERT(queue < PQ_COUNT, ("invalid queue %d", queue));
 
 	domain = vm_phys_domain(m);
@@ -3197,8 +3203,9 @@ vm_pqbatch_submit_page(vm_page_t m, uint8_t queue)
 
 	/*
 	 * The page may have been logically dequeued before we acquired the
-	 * page queue lock.  In this case, the page lock prevents the page
-	 * from being logically enqueued elsewhere.
+	 * page queue lock.  In this case, since we either hold the page lock
+	 * or the page is being freed, a different thread cannot be concurrently
+	 * enqueuing the page.
 	 */
 	if (__predict_true(m->queue == queue))
 		vm_pqbatch_process_page(pq, m);
@@ -3279,18 +3286,37 @@ vm_page_dequeue_complete(vm_page_t m)
 void
 vm_page_dequeue_deferred(vm_page_t m)
 {
-	int queue;
+	uint8_t queue;
 
 	vm_page_assert_locked(m);
 
-	queue = atomic_load_8(&m->queue);
-	if (queue == PQ_NONE) {
-		KASSERT((m->aflags & PGA_QUEUE_STATE_MASK) == 0,
-		    ("page %p has queue state", m));
+	if ((queue = vm_page_queue(m)) == PQ_NONE)
 		return;
-	}
-	if ((m->aflags & PGA_DEQUEUE) == 0)
-		vm_page_aflag_set(m, PGA_DEQUEUE);
+	vm_page_aflag_set(m, PGA_DEQUEUE);
+	vm_pqbatch_submit_page(m, queue);
+}
+
+/*
+ * A variant of vm_page_dequeue_deferred() that does not assert the page
+ * lock and is only to be called from vm_page_free_prep().  It is just an
+ * open-coded implementation of vm_page_dequeue_deferred().  Because the
+ * page is being freed, we can assume that nothing else is scheduling queue
+ * operations on this page, so we get for free the mutual exclusion that
+ * is otherwise provided by the page lock.
+ */
+static void
+vm_page_dequeue_deferred_free(vm_page_t m)
+{
+	uint8_t queue;
+
+	KASSERT(m->object == NULL, ("page %p has an object reference", m));
+
+	if ((m->aflags & PGA_DEQUEUE) != 0)
+		return;
+	atomic_thread_fence_acq();
+	if ((queue = m->queue) == PQ_NONE)
+		return;
+	vm_page_aflag_set(m, PGA_DEQUEUE);
 	vm_pqbatch_submit_page(m, queue);
 }
 
@@ -3386,7 +3412,7 @@ vm_page_requeue(vm_page_t m)
 {
 
 	vm_page_assert_locked(m);
-	KASSERT(m->queue != PQ_NONE,
+	KASSERT(vm_page_queue(m) != PQ_NONE,
 	    ("%s: page %p is not logically enqueued", __func__, m));
 
 	if ((m->aflags & PGA_REQUEUE) == 0)
@@ -3479,7 +3505,7 @@ vm_page_free_prep(vm_page_t m)
 	 * dequeue.
 	 */
 	if ((m->oflags & VPO_UNMANAGED) == 0)
-		vm_page_dequeue_deferred(m);
+		vm_page_dequeue_deferred_free(m);
 
 	m->valid = 0;
 	vm_page_undirty(m);

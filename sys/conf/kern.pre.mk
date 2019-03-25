@@ -118,12 +118,26 @@ KUBSAN_ENABLED!=	grep KUBSAN opt_global.h || true ; echo
 SAN_CFLAGS+=	-fsanitize=undefined
 .endif
 
-KCOV_ENABLED!=	grep KCOV opt_kcov.h || true ; echo
-.if !empty(KCOV_ENABLED)
+COVERAGE_ENABLED!=	grep COVERAGE opt_global.h || true ; echo
+.if !empty(COVERAGE_ENABLED)
+.if ${COMPILER_TYPE} == "clang" || \
+    (${COMPILER_TYPE} == "gcc" && ${COMPILER_VERSION} >= 80100)
 SAN_CFLAGS+=	-fsanitize-coverage=trace-pc,trace-cmp
+.else
+SAN_CFLAGS+=	-fsanitize-coverage=trace-pc
+.endif
 .endif
 
 CFLAGS+=	${SAN_CFLAGS}
+
+GCOV_ENABLED!=	grep GCOV opt_global.h || true ; echo
+.if !empty(GCOV_ENABLED)
+.if ${COMPILER_TYPE} == "gcc"
+GCOV_CFLAGS+=	 -fprofile-arcs -ftest-coverage
+.endif
+.endif
+
+CFLAGS+=	${GCOV_CFLAGS}
 
 # Put configuration-specific C flags last (except for ${PROF}) so that they
 # can override the others.

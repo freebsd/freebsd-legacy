@@ -55,6 +55,8 @@ __FBSDID("$FreeBSD$");
 #include <dev/acpica/acpivar.h>
 #include "opt_acpi.h"
 
+#include "opt_tpm.h"
+
 #define	BIT(x) (1 << (x))
 
 /* Timeouts in us */
@@ -93,6 +95,12 @@ __FBSDID("$FreeBSD$");
 #define	TPM_CDEV_NAME		"tpm0"
 #define	TPM_CDEV_PERM_FLAG	0600
 
+
+#define TPM2_START_METHOD_ACPI 2
+#define TPM2_START_METHOD_TIS 6
+#define TPM2_START_METHOD_CRB 7
+#define TPM2_START_METHOD_CRB_ACPI 8
+
 struct tpm_sc {
 	device_t	dev;
 
@@ -114,6 +122,10 @@ struct tpm_sc {
 	size_t		pending_data_length;
 
 	struct callout 	discard_buffer_callout;
+#ifdef TPM_HARVEST
+	struct callout 	harvest_callout;
+	int		harvest_ticks;
+#endif
 
 	int		(*transmit)(struct tpm_sc *, size_t);
 };

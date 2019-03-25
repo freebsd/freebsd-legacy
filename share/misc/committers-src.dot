@@ -216,6 +216,7 @@ jmcneill [label="Jared McNeill\njmcneill@FreeBSD.org\n2016/02/24"]
 jmg [label="John-Mark Gurney\njmg@FreeBSD.org\n1997/02/13"]
 jmmv [label="Julio Merino\njmmv@FreeBSD.org\n2013/11/02"]
 joerg [label="Joerg Wunsch\njoerg@FreeBSD.org\n1993/11/14"]
+johalun [label="Johannes Lundberg\njohalun@FreeBSD.org\n2019/01/19"]
 jon [label="Jonathan Chen\njon@FreeBSD.org\n2000/10/17"]
 jonathan [label="Jonathan Anderson\njonathan@FreeBSD.org\n2010/10/07"]
 jpaetzel [label="Josh Paetzel\njpaetzel@FreeBSD.org\n2011/01/21"]
@@ -253,6 +254,7 @@ maxim [label="Maxim Konovalov\nmaxim@FreeBSD.org\n2002/02/07"]
 mdf [label="Matthew Fleming\nmdf@FreeBSD.org\n2010/06/04"]
 mdodd [label="Matthew N. Dodd\nmdodd@FreeBSD.org\n1999/07/27"]
 melifaro [label="Alexander V. Chernikov\nmelifaro@FreeBSD.org\n2011/10/04"]
+mhorne [label="Mitchell Horne\nmhorne@FreeBSD.org\n2019/03/20"]
 miwi [label="Martin Wilke\nmiwi@FreeBSD.org\n2011/02/18\n2018/06/14"]
 mizhka [label="Michael Zhilin\nmizhka@FreeBSD.org\n2016/07/19"]
 mjacob [label="Matt Jacob\nmjacob@FreeBSD.org\n1997/08/13"]
@@ -558,6 +560,7 @@ imp -> dmlb
 imp -> emax
 imp -> furuta
 imp -> joe
+imp -> johalun
 imp -> jon
 imp -> keichii
 imp -> kibab
@@ -691,6 +694,7 @@ marcel -> sjg
 
 markj -> cem
 markj -> lwhsu
+markj -> mhorne
 markj -> rlibby
 
 markm -> jasone

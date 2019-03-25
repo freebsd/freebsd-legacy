@@ -326,7 +326,7 @@ struct thread {
  * or already have been set in the allocator, constructor, etc.
  */
 	struct pcb	*td_pcb;	/* (k) Kernel VA of pcb and kstack. */
-	enum {
+	enum td_states {
 		TDS_INACTIVE = 0x0,
 		TDS_INHIBITED,
 		TDS_CAN_RUN,
@@ -573,7 +573,7 @@ struct proc {
 
 	int		p_flag;		/* (c) P_* flags. */
 	int		p_flag2;	/* (c) P2_* flags. */
-	enum {
+	enum p_states {
 		PRS_NEW = 0,		/* In creation */
 		PRS_NORMAL,		/* threads can be run. */
 		PRS_ZOMBIE
@@ -756,6 +756,9 @@ struct proc {
 #define	P2_AST_SU	0x00000008	/* Handles SU ast for kthreads. */
 #define	P2_PTRACE_FSTP	0x00000010 /* SIGSTOP from PT_ATTACH not yet handled. */
 #define	P2_TRAPCAP	0x00000020	/* SIGTRAP on ENOTCAPABLE */
+#define	P2_ASLR_ENABLE	0x00000040	/* Force enable ASLR. */
+#define	P2_ASLR_DISABLE	0x00000080	/* Force disable ASLR. */
+#define	P2_ASLR_IGNSTART 0x00000100	/* Enable ASLR to consume sbrk area. */
 
 /* Flags protected by proctree_lock, kept in p_treeflags. */
 #define	P_TREE_ORPHANED		0x00000001	/* Reparented, on orphan list */
@@ -1090,9 +1093,12 @@ void	userret(struct thread *, struct trapframe *);
 void	cpu_exit(struct thread *);
 void	exit1(struct thread *, int, int) __dead2;
 void	cpu_copy_thread(struct thread *td, struct thread *td0);
+bool	cpu_exec_vmspace_reuse(struct proc *p, struct vm_map *map);
 int	cpu_fetch_syscall_args(struct thread *td);
 void	cpu_fork(struct thread *, struct proc *, struct thread *, int);
 void	cpu_fork_kthread_handler(struct thread *, void (*)(void *), void *);
+int	cpu_procctl(struct thread *td, int idtype, id_t id, int com,
+	    void *data);
 void	cpu_set_syscall_retval(struct thread *, int);
 void	cpu_set_upcall(struct thread *, void (*)(void *), void *,
 	    stack_t *);

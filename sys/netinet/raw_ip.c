@@ -100,10 +100,9 @@ VNET_DEFINE(ip_fw_chk_ptr_t, ip_fw_chk_ptr) = NULL;
 VNET_DEFINE(ip_fw_ctl_ptr_t, ip_fw_ctl_ptr) = NULL;
 
 int	(*ip_dn_ctl_ptr)(struct sockopt *);
-int	(*ip_dn_io_ptr)(struct mbuf **, int, struct ip_fw_args *);
-void	(*ip_divert_ptr)(struct mbuf *, int);
-int	(*ng_ipfw_input_p)(struct mbuf **, int,
-			struct ip_fw_args *, int);
+int	(*ip_dn_io_ptr)(struct mbuf **, struct ip_fw_args *);
+void	(*ip_divert_ptr)(struct mbuf *, bool);
+int	(*ng_ipfw_input_p)(struct mbuf **, struct ip_fw_args *, bool);
 
 #ifdef INET
 /*
@@ -454,6 +453,8 @@ rip_output(struct mbuf *m, struct socket *so, ...)
 	u_long dst;
 	int flags = ((so->so_options & SO_DONTROUTE) ? IP_ROUTETOIF : 0) |
 	    IP_ALLOWBROADCAST;
+	int cnt;
+	u_char opttype, optlen, *cp;
 
 	va_start(ap, so);
 	dst = va_arg(ap, u_long);
@@ -527,6 +528,34 @@ rip_output(struct mbuf *m, struct socket *so, ...)
 			INP_RUNLOCK(inp);
 			m_freem(m);
 			return (EINVAL);
+		}
+		/*
+		 * Don't allow IP options which do not have the required
+		 * structure as specified in section 3.1 of RFC 791 on
+		 * pages 15-23.
+		 */
+		cp = (u_char *)(ip + 1);
+		cnt = (ip->ip_hl << 2) - sizeof (struct ip);
+		for (; cnt > 0; cnt -= optlen, cp += optlen) {
+			opttype = cp[IPOPT_OPTVAL];
+			if (opttype == IPOPT_EOL)
+				break;
+			if (opttype == IPOPT_NOP) {
+				optlen = 1;
+				continue;
+			}
+			if (cnt < IPOPT_OLEN + sizeof(u_char)) {
+				INP_RUNLOCK(inp);
+				m_freem(m);
+				return (EINVAL);
+			}
+			optlen = cp[IPOPT_OLEN];
+			if (optlen < IPOPT_OLEN + sizeof(u_char) ||
+			    optlen > cnt) {
+				INP_RUNLOCK(inp);
+				m_freem(m);
+				return (EINVAL);
+			}
 		}
 		/*
 		 * This doesn't allow application to specify ID of zero,

@@ -241,8 +241,9 @@ extern int	(*ip_rsvp_vif)(struct socket *, struct sockopt *);
 extern void	(*ip_rsvp_force_done)(struct socket *);
 extern int	(*rsvp_input_p)(struct mbuf **, int *, int);
 
-VNET_DECLARE(struct pfil_head, inet_pfil_hook);	/* packet filter hooks */
-#define	V_inet_pfil_hook	VNET(inet_pfil_hook)
+VNET_DECLARE(struct pfil_head *, inet_pfil_head);
+#define	V_inet_pfil_head	VNET(inet_pfil_head)
+#define	PFIL_INET_NAME		"inet"
 
 void	in_delayed_cksum(struct mbuf *m);
 
@@ -291,13 +292,11 @@ VNET_DECLARE(ip_fw_ctl_ptr_t, ip_fw_ctl_ptr);
 #define	V_ip_fw_ctl_ptr		VNET(ip_fw_ctl_ptr)
 
 /* Divert hooks. */
-extern void	(*ip_divert_ptr)(struct mbuf *m, int incoming);
+extern void	(*ip_divert_ptr)(struct mbuf *m, bool incoming);
 /* ng_ipfw hooks -- XXX make it the same as divert and dummynet */
-extern int	(*ng_ipfw_input_p)(struct mbuf **, int,
-			struct ip_fw_args *, int);
-
+extern int	(*ng_ipfw_input_p)(struct mbuf **, struct ip_fw_args *, bool);
 extern int	(*ip_dn_ctl_ptr)(struct sockopt *);
-extern int	(*ip_dn_io_ptr)(struct mbuf **, int, struct ip_fw_args *);
+extern int	(*ip_dn_io_ptr)(struct mbuf **, struct ip_fw_args *);
 #endif /* _KERNEL */
 
 #endif /* !_NETINET_IP_VAR_H_ */

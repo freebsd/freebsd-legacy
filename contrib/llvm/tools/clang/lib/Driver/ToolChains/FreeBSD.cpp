@@ -12,11 +12,11 @@
 #include "Arch/Mips.h"
 #include "Arch/Sparc.h"
 #include "CommonArgs.h"
-#include "clang/Basic/VirtualFileSystem.h"
 #include "clang/Driver/Compilation.h"
 #include "clang/Driver/Options.h"
 #include "clang/Driver/SanitizerArgs.h"
 #include "llvm/Option/ArgList.h"
+#include "llvm/Support/VirtualFileSystem.h"
 
 using namespace clang::driver;
 using namespace clang::driver::tools;
@@ -355,6 +355,13 @@ ToolChain::CXXStdlibType FreeBSD::GetDefaultCXXStdlibType() const {
   if (getTriple().getOSMajorVersion() >= 10)
     return ToolChain::CST_Libcxx;
   return ToolChain::CST_Libstdcxx;
+}
+
+unsigned FreeBSD::GetDefaultDwarfVersion() const {
+  // Default to use DWARF 2 before FreeBSD 13.
+  if (getTriple().getOSMajorVersion() < 13)
+    return 2;
+  return 4;
 }
 
 void FreeBSD::addLibStdCxxIncludePaths(
