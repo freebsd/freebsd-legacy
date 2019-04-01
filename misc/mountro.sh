@@ -28,16 +28,15 @@
 # $FreeBSD$
 #
 
-
 . ../default.cfg
 
 [ `id -u ` -ne 0 ] && echo "Must be root!" && exit 1
 
 D=$diskimage
-dede $D 1m 128 || exit
+dd if=/dev/zero of=$D bs=1m count=128 status=none || exit 1
 
-mount | grep "$mntpoint"    | grep -q /md  && umount -f $mntpoint
-mdconfig -l | grep -q $mdstart  &&  mdconfig -d -u $mdstart
+mount | grep "$mntpoint " | grep -q /md && umount -f $mntpoint
+mdconfig -l | grep -q $mdstart && mdconfig -d -u $mdstart
 
 mdconfig -a -t vnode -f $D -u $mdstart || { rm -f $D; exit 1; }
 
@@ -51,18 +50,17 @@ chmod 777 $mntpoint/stressX
 export RUNDIR=$mntpoint/stressX
 export runRUNTIME=4m
 (cd ..; ./run.sh disk.cfg > /dev/null 2>&1) &
-sleep 30
+sleep 10
 
 for i in `jot 10`; do
-	mount $mntpoint -u -o ro > /dev/null 2>&1
+	mount -u -o ro $mntpoint
 	sleep 3
-	mount $mntpoint -u -o rw > /dev/null 2>&1
+	mount -u -o rw $mntpoint
 	sleep 3
-done
-df -i $mntpoint
+done > /dev/null 2>&1
 
-umount -f $mntpoint    > /dev/null 2>&1
+umount -f $mntpoint
 mdconfig -d -u $mdstart
 rm -f $D
-kill `ps -x | grep run.sh | grep -v grep | awk '{print $1}'`
+pkill run.sh
 wait
