@@ -3,6 +3,7 @@
 #
 # SPDX-License-Identifier: BSD-2-Clause-FreeBSD
 #
+# Copyright (c) 2012 Peter Holm <pho@FreeBSD.org>
 # Copyright (c) 2019 Dell EMC Isilon
 #
 # Redistribution and use in source and binary forms, with or without
