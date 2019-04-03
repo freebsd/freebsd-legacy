@@ -1,8 +1,9 @@
 #!/bin/sh
 
 #
-# Copyright (c) 2012 Peter Holm <pho@FreeBSD.org>
-# All rights reserved.
+# SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+#
+# Copyright (c) 2019 Dell EMC Isilon
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -42,94 +43,197 @@
 here=`pwd`
 cd /tmp
 sed '1,/^EOF/d' < $here/$0 > mountu.c
-mycc -o mountu -Wall -Wextra -O2 mountu.c
+mycc -o mountu -Wall -Wextra -O2 mountu.c || exit 1
 rm -f mountu.c
 
 pstat() {
-	pid=`ps a | grep -v grep | grep /tmp/mountu | awk '{print $1}'`
+	local pid
+	pid=`ps ax | grep -v grep | grep /tmp/mountu | awk '{print $1}'`
 	[ -n "$pid" ] && procstat -v $pid
 }
 
+ck() {
+	if mount | grep $mntpoint | grep -q "read-only"; then
+		if pstat $!| awk "\$2 == \"$map\"" | grep -q " rw-"; then
+			echo
+			echo "$1 difference"
+			mount | grep $mntpoint
+			printf "RW mount mapping and RO mount mapping:\n%s\n" "$r"
+			pstat $! | awk "\$2 == \"$map\""
+			status=$((status + 1))
+		fi
+	else
+		echo "$1 mount point RO did not succeed"
+		mount | grep $mntpoint
+		status=$((status + 1))
+	fi
+}
+
+status=0
+file=$mntpoint/mountu.sh.file
+mapfile=/tmp/mountu.sh.map
 mount | grep -q "$mntpoint " && umount $mntpoint
-mdconfig -l | grep -q $mdstart &&  mdconfig -d -u $mdstart
+mdconfig -l | grep -q $mdstart && mdconfig -d -u $mdstart
 mdconfig -a -t swap -s 100m -u $mdstart
-bsdlabel -w md${mdstart} auto
-newfs $newfs_flags md${mdstart}${part} > /dev/null
-mount /dev/md${mdstart}${part} $mntpoint
+bsdlabel -w md$mdstart auto
+newfs $newfs_flags md${mdstart}$part > /dev/null
+mount /dev/md${mdstart}$part $mntpoint
 chmod 777 $mntpoint
 
-/tmp/mountu $mntpoint/file &
-
+# ufs
+exec 5>$mapfile
+/tmp/mountu UFS $file &
+pid=$!
 sleep 1
-if ! mount -u -o ro $mntpoint 2>&1 | grep -q "Device busy"; then
-	echo "UFS FAILED"
-	pstat
-fi
-wait
+map=`cat $mapfile`; rm $mapfile; exec 5>&-
+
+r=`pstat $! | awk "\\$2 == \"$map\""`
+mount -u -o ro $mntpoint 2>/dev/null || mount -fu -o ro $mntpoint
+ck UFS
+mount -u -o rw $mntpoint
+rm -f $file
+wait $pid
+s=$?
+[ $s -ne 139 ] && { echo "UFS exit status is $s"; status=1; }
 while mount | grep -q "$mntpoint "; do
 	umount $mntpoint || sleep 1
 done
-
 mdconfig -d -u $mdstart
 
+# nfs
 if ping -c 2 `echo $nfs_export | sed 's/:.*//'` > /dev/null 2>&1; then
-	mount -t nfs -o tcp -o retrycnt=3 -o intr -o soft -o rw $nfs_export \
+	mount -t nfs -o tcp -o retrycnt=3 -o intr,soft -o rw $nfs_export \
 	    $mntpoint
-	rm -f /tmp/file
-	/tmp/mountu $mntpoint/file &
+	sleep .2
+	rm -f $file
+	/tmp/mountu NFS $file &
+	pid=$!
 	sleep 1
 
-	if ! mount -u -o ro $mntpoint 2>&1 | grep -q "Device busy"; then
-		echo "NFS FAILED"
-	fi
-	wait
-	umount $mntpoint
+	r=`pstat $! | awk "\\$2 == \"$map\""`
+	mount -u -o ro $mntpoint 2>/dev/null ||
+	    mount -fu -o ro $mntpoint 2>/dev/null
+	ck NFS
+	wait $pid
+	s=$?
+	[ $s -ne 139 ] && { echo "NFS exit status is $s"; status=1; }
+
+	mount -u -o rw $mntpoint 2>/dev/null
+	sleep .2
+	[ -f $file ] && rm -f $file
+	umount $mntpoint || umount $mntpoint
 fi
 
+# msdos
 if [ -x /sbin/mount_msdosfs ]; then
 	mdconfig -a -t swap -s 100m -u $mdstart
-	bsdlabel -w md${mdstart} auto
+	bsdlabel -w md$mdstart auto
 	newfs_msdos -F 16 -b 8192 /dev/md${mdstart}$part > /dev/null 2>&1
 	mount_msdosfs -m 777 /dev/md${mdstart}$part $mntpoint
-	/tmp/mountu $mntpoint/file &
+	/tmp/mountu MSDOS $file &
+	pid=$!
 
 	sleep 1
-	if ! mount -u -o ro $mntpoint 2>&1 | grep -q "Device busy"; then
-		echo "MSDOS FAILED"
-	fi
-	wait
+	r=`pstat $! | awk "\\$2 == \"$map\""`
+	mount -u -o ro $mntpoint 2>/dev/null || mount -fu -o ro $mntpoint
+	ck MSDOS
+	wait $pid
+	s=$?
+	[ $s -ne 139 ] && { echo "MSDOS exit status is $s"; status=1; }
+	mount -u -o rw $mntpoint
+	rm -f $file
 
 	while mount | grep -q "$mntpoint "; do
 		umount $mntpoint || sleep 1
 	done
+	mdconfig -d -u $mdstart
 fi
-rm -f /tmp/mountu /tmp/file
+
+# tmpfs
+mount -t tmpfs null $mntpoint
+chmod 777 $mntpoint
+
+/tmp/mountu TMPFS $file &
+pid=$!
+
+sleep 1
+r=`pstat $! | awk "\\$2 == \"$map\""`
+mount -u -o ro $mntpoint 2>/dev/null || mount -fu -o ro $mntpoint
+ck TMPFS
+sleep 1
+mount -u -o rw $mntpoint
+rm -f $file
+wait $pid
+s=$?
+[ $s -ne 139 ] && { echo "TMPFS exit status is $s"; status=1; }
+while mount | grep -q "$mntpoint "; do
+	umount $mntpoint || sleep 1
+done
+
+rm -f /tmp/mountu
 exit 0
 EOF
-#include <sys/types.h>
+/* kib@ noted:
+   UFS/NFS/msdosfs reclaim vnode on rw->ro forced remount, and
+   change the type of the underying object to OBJT_DEAD, but leave
+   the pages on the object queue and installed in the page tables.
+   Applications can read/write already mapped pages, but cannot
+   page in new pages, cannot observe possible further modifications
+   to already mapped pages (if ro->rw remount happen later), and
+   their updates to pages are not flushed to file.
+
+   It is impossible to mimic this behaviour for tmpfs.
+ */
+#include <sys/param.h>
+#include <sys/mman.h>
+#include <sys/ucontext.h>
+
 #include <err.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <pwd.h>
-#include <sys/mman.h>
-#include <sys/param.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <errno.h>
 
 #define STARTADDR 0x0U
-#define ADRSPACE  0x0640000U
+#define ADRSPACE 0x0640000U
+
+static void
+sighandler(int signo, siginfo_t *si, void *uc1)
+{
+	ucontext_t *uc;
+
+	uc = uc1;
+	printf("SIG%s at %p, addr %p\n", sys_signame[signo], si->si_addr,
+#if defined(__i386__)
+	    (void *)uc->uc_mcontext.mc_eip);
+#else
+	    (void *)uc->uc_mcontext.mc_rip);
+#endif
+	exit(1);
+}
 
 int
 main(int argc __unused, char **argv)
 {
-	int fd, ps;
+	struct passwd *pw;
+	struct sigaction sa;
 	void *p;
 	size_t len;
-	struct passwd *pw;
-	char *c, *path;
+	int fd;
+	char *name, *path;
+	volatile char *c;
+
+	memset(&sa, 0, sizeof(sa));
+	sa.sa_sigaction = sighandler;
+	sa.sa_flags = SA_SIGINFO;
+	if (sigaction(SIGSEGV, &sa, NULL) == -1)
+		err(1, "sigaction(SIGSEGV)");
+	if (sigaction(SIGBUS, &sa, NULL) == -1)
+		err(1, "sigaction(SIGBUS)");
 
 	if ((pw = getpwnam("nobody")) == NULL)
 		err(1, "no such user: nobody");
@@ -143,7 +247,8 @@ main(int argc __unused, char **argv)
 	p = (void *)STARTADDR;
 	len = ADRSPACE;
 
-	path = argv[1];
+	name = argv[1];
+	path = argv[2];
 	if ((fd = open(path, O_CREAT | O_TRUNC | O_RDWR, 0622)) == -1)
 		err(1,"open(%s)", path);
 	if (ftruncate(fd, len) == -1)
@@ -156,15 +261,25 @@ main(int argc __unused, char **argv)
 		}
 		err(1, "mmap(1)");
 	}
+	dprintf(5, "%p\n", p);
 
-	c = p;
-	ps = getpagesize();
-	for (c = p; (void *)c < p + len; c += ps) {
+	for (c = p; (void *)c < p + len; c += PAGE_SIZE) {
 		*c = 1;
 	}
 
 	close(fd);
 	sleep(5);
+	fprintf(stderr, "%s: Late read start.\n", name);
+	for (c = p; (void *)c < p + len; c += PAGE_SIZE) {
+		*c = 1;
+	}
+	fprintf(stderr, "%s: Late read complete.\n", name);
+
+	fprintf(stderr, "%s: Late write start.\n", name);
+	for (c = p; (void *)c < p + len; c += PAGE_SIZE) {
+		*c = 1;
+	}
+	fprintf(stderr, "%s: Late write complete.\n", name);
 
 	return (0);
 }
