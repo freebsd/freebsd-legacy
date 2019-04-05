@@ -47,16 +47,20 @@ rm -f signal0.c
 cd $odir
 
 (cd ../testcases/swap; ./swap -t 5m -i 20 -h -v) > /dev/null 2>&1 &
+s=0
+# The timeout was added after r345702, due to a longer runtime for
+# an INVARIANTS kernel
+start=`date +%s`
 for i in `jot 500`; do
 	/tmp/signal0
+	[ $((`date +%s` - start)) -gt 900 ] &&
+	    { echo "Timeout @ loop $i/500"; s=1; break; }
 done
-while pkill -9 swap; do
-	:
-done
+while pkill -9 swap; do :; done
 wait
 
 rm -f /tmp/signal0
-exit
+exit $s
 
 EOF
 #include <pthread.h>
@@ -64,32 +68,35 @@ EOF
 #include <stdio.h>
 #include <stdlib.h>
 
-void signal_handler(int signum, siginfo_t *si, void *context) {
-     if (signum != SIGUSR1) {
-         printf("FAIL bad signal, signum=%d\n", signum);
-         exit(1);
-     }
+static void
+signal_handler(int signum, siginfo_t *si, void *context) {
+	if (signum != SIGUSR1) {
+		printf("FAIL bad signal, signum=%d\n", signum);
+		exit(1);
+	}
 }
 
-void *thread_func(void *arg) {
-     return arg;
+static void
+*thread_func(void *arg) {
+	return arg;
 }
 
-int main(void) {
-     struct sigaction sa = { 0 };
-     sa.sa_flags = SA_SIGINFO;
-     sa.sa_sigaction = signal_handler;
-     if (sigfillset(&sa.sa_mask) != 0) abort();
-     if (sigaction(SIGUSR1, &sa, NULL) != 0) abort();
-     for (int i = 0; i < 10000; i++) {
-         pthread_t t;
-         pthread_create(&t, NULL, thread_func, NULL);
-         pthread_kill(t, SIGUSR1);
-	/*
-	 Side note.  pthread_kill(3) call behaviour is undefined if pthread_create(3)
-	 in the line before failed.
-	 */
+int
+main(void)
+{
+	struct sigaction sa = { 0 };
 
-     }
-     return 0;
+	sa.sa_flags = SA_SIGINFO;
+	sa.sa_sigaction = signal_handler;
+	if (sigfillset(&sa.sa_mask) != 0) abort();
+	if (sigaction(SIGUSR1, &sa, NULL) != 0) abort();
+	for (int i = 0; i < 10000; i++) {
+		pthread_t t;
+
+		if (pthread_create(&t, NULL, thread_func, NULL) == 0)
+			pthread_kill(t, SIGUSR1);
+
+	}
+
+	return (0);
 }
