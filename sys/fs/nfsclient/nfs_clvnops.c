@@ -144,6 +144,7 @@ static vop_getacl_t nfs_getacl;
 static vop_setacl_t nfs_setacl;
 static vop_set_text_t nfs_set_text;
 static vop_advise_t nfs_advise;
+static vop_allocate_t nfs_allocate;
 
 /*
  * Global vfs data structures for nfs
@@ -183,6 +184,7 @@ static struct vop_vector newnfs_vnodeops_nosig = {
 	.vop_setacl =		nfs_setacl,
 	.vop_set_text =		nfs_set_text,
 	.vop_advise =		nfs_advise,
+	.vop_allocate =		nfs_allocate,
 };
 
 static int
@@ -3458,7 +3460,14 @@ nfs_advise(struct vop_advise_args *ap)
 	struct thread *td = curthread;
 	struct nfsmount *nmp;
 	uint64_t len;
+	int error;
 
+	/*
+	 * First do vop_stdadvise() to handle the buffer cache.
+	 */
+	error = vop_stdadvise(ap);
+	if (error != 0)
+		return (error);
 	if (ap->a_start < 0 || ap->a_end < 0)
 		return (0);
 	if (ap->a_end == OFF_MAX)
@@ -3468,12 +3477,56 @@ nfs_advise(struct vop_advise_args *ap)
 	else
 		len = ap->a_end - ap->a_start + 1;
 	nmp = VFSTONFS(ap->a_vp->v_mount);
-	if (NFSHASPNFS(nmp) && (nmp->nm_privflag & NFSMNTP_IOADVISETHRUMDS) ==
-	    0)
+	if (!NFSHASNFSV4(nmp) || nmp->nm_minorvers < NFSV42_MINORVERSION ||
+	    (NFSHASPNFS(nmp) && (nmp->nm_privflag & NFSMNTP_IOADVISETHRUMDS) ==
+	    0))
 		return (0);
 	nfsrpc_advise(ap->a_vp, ap->a_start, len, ap->a_advice,
 	    td->td_ucred, td);
 	return (0);
+}
+
+/*
+ * nfs allocate call
+ */
+static int
+nfs_allocate(struct vop_allocate_args *ap)
+{
+	struct vnode *vp = ap->a_vp;
+	struct thread *td = curthread;
+	struct nfsvattr nfsva;
+	struct nfsmount *nmp;
+	int attrflag, error, ret;
+
+	attrflag = 0;
+	nmp = VFSTONFS(vp->v_mount);
+	if (NFSHASNFSV4(nmp) && nmp->nm_minorvers >= NFSV42_MINORVERSION) {
+printf("at alloc\n");
+		error = nfsrpc_allocate(vp, *ap->a_offset, *ap->a_len, &nfsva,
+		    &attrflag, td->td_ucred, td, NULL);
+printf("aft alloc=%d\n", error);
+		if (error == 0) {
+			*ap->a_offset += *ap->a_len;
+			*ap->a_len = 0;
+		}
+	} else
+		error = EIO;
+	/*
+	 * If the NFS server cannot perform the Allocate operation, just call
+	 * vop_stdallocate() to perform it.
+	 */
+	if (error != 0)
+		error = vop_stdallocate(ap);
+printf("aft stdalloc=%d af=%d\n", error, attrflag);
+	if (attrflag != 0) {
+		ret = nfscl_loadattrcache(&vp, &nfsva, NULL, NULL, 0, 1);
+		if (error == 0 && ret != 0)
+			error = ret;
+	}
+	if (error != 0)
+		error = nfscl_maperr(td, error, (uid_t)0, (gid_t)0);
+printf("eo alloc=%d\n", error);
+	return (error);
 }
 
 /*

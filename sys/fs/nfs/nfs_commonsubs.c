@@ -166,7 +166,7 @@ struct nfsv4_opflag nfsv4_opflag[NFSV42_NOPS] = {
 	{ 0, 0, 0, 0, LK_EXCLUSIVE, 1, 1 },		/* Want Delegation */
 	{ 0, 0, 0, 0, LK_EXCLUSIVE, 0, 0 },		/* Destroy ClientID */
 	{ 0, 0, 0, 0, LK_EXCLUSIVE, 1, 0 },		/* Reclaim Complete */
-	{ 0, 0, 0, 0, LK_EXCLUSIVE, 1, 1 },		/* Allocate */
+	{ 0, 1, 1, 1, LK_EXCLUSIVE, 1, 0 },		/* Allocate */
 	{ 0, 0, 0, 0, LK_EXCLUSIVE, 1, 1 },		/* Copy */
 	{ 0, 0, 0, 0, LK_EXCLUSIVE, 1, 1 },		/* Copy Notify */
 	{ 0, 0, 0, 0, LK_EXCLUSIVE, 1, 1 },		/* Deallocate */
@@ -205,7 +205,7 @@ static struct nfsrv_lughash	*nfsgroupnamehash;
  */
 static int nfs_bigreply[NFSV42_NPROCS] = { 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0 };
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0 };
 
 /* local functions */
 static int nfsrv_skipace(struct nfsrv_descript *nd, int *acesizep);
@@ -281,6 +281,7 @@ static struct {
 	{ NFSV4OP_OPEN, 3, "OpenLayoutGet", 13, },
 	{ NFSV4OP_OPEN, 8, "CreateLayGet", 12, },
 	{ NFSV4OP_IOADVISE, 1, "Advise", 6, },
+	{ NFSV4OP_ALLOCATE, 2, "Allocate", 8, },
 };
 
 /*
@@ -289,7 +290,7 @@ static struct {
 static int nfs_bigrequest[NFSV42_NPROCS] = {
 	0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0
+	0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0
 };
 
 /*

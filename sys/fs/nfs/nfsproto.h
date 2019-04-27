@@ -367,11 +367,12 @@
 
 /* Additional procedures for NFSv4.2. */
 #define	NFSPROC_IOADVISE	56
+#define	NFSPROC_ALLOCATE	57
 
 /*
  * Must be defined as one higher than the last NFSv4.2 Proc# above.
  */
-#define	NFSV42_NPROCS		57
+#define	NFSV42_NPROCS		58
 
 #endif	/* NFS_V3NPROCS */
 

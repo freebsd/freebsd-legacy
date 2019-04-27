@@ -182,6 +182,8 @@ static int nfsio_adviseds(vnode_t, uint64_t, int, int, struct nfsclds *,
 static int nfsrpc_adviseds(vnode_t, uint64_t, int, int, struct nfsclds *,
     struct nfsfh *, int, int, struct ucred *, NFSPROC_T *);
 #endif
+static int nfsrpc_allocaterpc(vnode_t, off_t, off_t, nfsv4stateid_t *,
+    struct nfsvattr *, int *, struct ucred *, NFSPROC_T *, void *);
 static void nfsrv_setuplayoutget(struct nfsrv_descript *, int, uint64_t,
     uint64_t, uint64_t, nfsv4stateid_t *, int, int, int);
 static int nfsrv_parseug(struct nfsrv_descript *, int, uid_t *, gid_t *,
@@ -6838,6 +6840,118 @@ nfsio_adviseds(vnode_t vp, uint64_t offset, int cnt, int advise,
 	return (error);
 }
 #endif	/* notyet */
+
+/*
+ * Do the Allocate operation, retrying for recovery.
+ */
+APPLESTATIC int
+nfsrpc_allocate(vnode_t vp, off_t off, off_t len, struct nfsvattr *nap,
+    int *attrflagp, struct ucred *cred, NFSPROC_T *p, void *stuff)
+{
+	int error, expireret = 0, retrycnt, nostateid;
+	uint32_t clidrev = 0;
+	struct nfsmount *nmp = VFSTONFS(vnode_mount(vp));
+	struct nfsfh *nfhp = NULL;
+	nfsv4stateid_t stateid;
+	off_t tmp_off;
+	void *lckp;
+
+	if (len < 0)
+		return (EINVAL);
+	if (len == 0)
+		return (0);
+	tmp_off = off + len;
+	NFSLOCKMNT(nmp);
+	if (tmp_off > nmp->nm_maxfilesize || tmp_off < off) {
+		NFSUNLOCKMNT(nmp);
+		return (EFBIG);
+	}
+	if (nmp->nm_clp != NULL)
+		clidrev = nmp->nm_clp->nfsc_clientidrev;
+	NFSUNLOCKMNT(nmp);
+	nfhp = VTONFS(vp)->n_fhp;
+	retrycnt = 0;
+	do {
+		lckp = NULL;
+		nostateid = 0;
+		nfscl_getstateid(vp, nfhp->nfh_fh, nfhp->nfh_len,
+		    NFSV4OPEN_ACCESSWRITE, 0, cred, p, &stateid, &lckp);
+		if (stateid.other[0] == 0 && stateid.other[1] == 0 &&
+		    stateid.other[2] == 0) {
+			nostateid = 1;
+			NFSCL_DEBUG(1, "stateid0 in allocate\n");
+		}
+
+		/*
+		 * Not finding a stateid should probably never happen,
+		 * but just return an error for this case.
+		 */
+		if (nostateid != 0)
+			error = EIO;
+		else
+			error = nfsrpc_allocaterpc(vp, off, len, &stateid,
+			    nap, attrflagp, cred, p, stuff);
+		if (error == NFSERR_STALESTATEID)
+			nfscl_initiate_recovery(nmp->nm_clp);
+		if (lckp != NULL)
+			nfscl_lockderef(lckp);
+		if (error == NFSERR_GRACE || error == NFSERR_STALESTATEID ||
+		    error == NFSERR_STALEDONTRECOVER || error == NFSERR_DELAY ||
+		    error == NFSERR_OLDSTATEID || error == NFSERR_BADSESSION) {
+			(void) nfs_catnap(PZERO, error, "nfs_allocate");
+		} else if ((error == NFSERR_EXPIRED ||
+		    error == NFSERR_BADSTATEID) && clidrev != 0) {
+			expireret = nfscl_hasexpired(nmp->nm_clp, clidrev, p);
+		}
+		retrycnt++;
+	} while (error == NFSERR_GRACE || error == NFSERR_DELAY ||
+	    error == NFSERR_STALESTATEID || error == NFSERR_BADSESSION ||
+	    error == NFSERR_STALEDONTRECOVER ||
+	    (error == NFSERR_OLDSTATEID && retrycnt < 20) ||
+	    ((error == NFSERR_EXPIRED || error == NFSERR_BADSTATEID) &&
+	     expireret == 0 && clidrev != 0 && retrycnt < 4));
+	if (error != 0 && retrycnt >= 4)
+		error = EIO;
+	return (error);
+}
+
+/*
+ * The allocate RPC.
+ */
+static int
+nfsrpc_allocaterpc(vnode_t vp, off_t off, off_t len, nfsv4stateid_t *stateidp,
+    struct nfsvattr *nap, int *attrflagp, struct ucred *cred, NFSPROC_T *p,
+    void *stuff)
+{
+	uint32_t *tl;
+	int error;
+	struct nfsrv_descript nfsd;
+	struct nfsrv_descript *nd = &nfsd;
+	nfsattrbit_t attrbits;
+
+	*attrflagp = 0;
+	NFSCL_REQSTART(nd, NFSPROC_ALLOCATE, vp);
+	nfsm_stateidtom(nd, stateidp, NFSSTATEID_PUTSTATEID);
+	NFSM_BUILD(tl, uint32_t *, 2 * NFSX_HYPER + NFSX_UNSIGNED);
+	txdr_hyper(off, tl); tl += 2;
+	txdr_hyper(len, tl); tl += 2;
+	*tl = txdr_unsigned(NFSV4OP_GETATTR);
+	NFSGETATTR_ATTRBIT(&attrbits);
+	nfsrv_putattrbit(nd, &attrbits);
+	error = nfscl_request(nd, vp, p, cred, stuff);
+	if (error != 0)
+		return (error);
+	if (nd->nd_repstat == 0) {
+		NFSM_DISSECT(tl, u_int32_t *, 2 * NFSX_UNSIGNED);
+		error = nfsm_loadattr(nd, nap);
+		if (error == 0)
+			*attrflagp = NFS_LATTR_NOSHRINK;
+	} else
+		error = nd->nd_repstat;
+nfsmout:
+	mbuf_freem(nd->nd_mrep);
+	return (error);
+}
 
 /*
  * Set up the XDR arguments for the LayoutGet operation.

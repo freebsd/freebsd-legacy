@@ -543,6 +543,8 @@ int nfscl_doiods(vnode_t, struct uio *, int *, int *, uint32_t, int,
 int nfscl_findlayoutforio(struct nfscllayout *, uint64_t, uint32_t,
     struct nfsclflayout **);
 void nfscl_freenfsclds(struct nfsclds *);
+int nfsrpc_allocate(vnode_t, off_t, off_t, struct nfsvattr *, int *,
+    struct ucred *, NFSPROC_T *, void *);
 
 /* nfs_clstate.c */
 int nfscl_open(vnode_t, u_int8_t *, int, u_int32_t, int,
