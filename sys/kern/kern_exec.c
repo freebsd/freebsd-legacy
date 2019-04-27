@@ -679,25 +679,18 @@ interpret:
 		sys_cap_enter(td, NULL);
 
 	/*
-	 * Copy out strings (args and env) and initialize stack base
+	 * Copy out strings (args and env) and initialize stack base.
 	 */
-	if (p->p_sysent->sv_copyout_strings)
-		stack_base = (*p->p_sysent->sv_copyout_strings)(imgp);
-	else
-		stack_base = exec_copyout_strings(imgp);
+	stack_base = (*p->p_sysent->sv_copyout_strings)(imgp);
 
 	/*
-	 * If custom stack fixup routine present for this process
-	 * let it do the stack setup.
-	 * Else stuff argument count as first item on stack
+	 * Stack setup.
 	 */
-	if (p->p_sysent->sv_fixup != NULL)
-		error = (*p->p_sysent->sv_fixup)(&stack_base, imgp);
-	else
-		error = suword(--stack_base, imgp->args->argc) == 0 ?
-		    0 : EFAULT;
-	if (error != 0)
+	error = (*p->p_sysent->sv_fixup)(&stack_base, imgp);
+	if (error != 0) {
+		vn_lock(imgp->vp, LK_SHARED | LK_RETRY);
 		goto exec_fail_dealloc;
+	}
 
 	if (args->fdp != NULL) {
 		/* Install a brand new file descriptor table. */
@@ -878,11 +871,7 @@ interpret:
 #endif
 
 	/* Set values passed into the program in registers. */
-	if (p->p_sysent->sv_setregs)
-		(*p->p_sysent->sv_setregs)(td, imgp, 
-		    (u_long)(uintptr_t)stack_base);
-	else
-		exec_setregs(td, imgp, (u_long)(uintptr_t)stack_base);
+	(*p->p_sysent->sv_setregs)(td, imgp, (u_long)(uintptr_t)stack_base);
 
 	vfs_mark_atime(imgp->vp, td->td_ucred);
 
@@ -1098,13 +1087,18 @@ exec_new_vmspace(struct image_params *imgp, struct sysentvec *sv)
 	else
 		sv_minuser = MAX(sv->sv_minuser, PAGE_SIZE);
 	if (vmspace->vm_refcnt == 1 && vm_map_min(map) == sv_minuser &&
-	    vm_map_max(map) == sv->sv_maxuser) {
+	    vm_map_max(map) == sv->sv_maxuser &&
+	    cpu_exec_vmspace_reuse(p, map)) {
 		shmexit(vmspace);
 		pmap_remove_pages(vmspace_pmap(vmspace));
 		vm_map_remove(map, vm_map_min(map), vm_map_max(map));
-		/* An exec terminates mlockall(MCL_FUTURE). */
+		/*
+		 * An exec terminates mlockall(MCL_FUTURE), ASLR state
+		 * must be re-evaluated.
+		 */
 		vm_map_lock(map);
-		vm_map_modflags(map, 0, MAP_WIREFUTURE);
+		vm_map_modflags(map, 0, MAP_WIREFUTURE | MAP_ASLR |
+		    MAP_ASLR_IGNSTART);
 		vm_map_unlock(map);
 	} else {
 		error = vmspace_exec(p, sv_minuser, sv->sv_maxuser);
@@ -1113,6 +1107,7 @@ exec_new_vmspace(struct image_params *imgp, struct sysentvec *sv)
 		vmspace = p->p_vmspace;
 		map = &vmspace->vm_map;
 	}
+	map->flags |= imgp->map_flags;
 
 	/* Map a shared page */
 	obj = sv->sv_shared_page_obj;

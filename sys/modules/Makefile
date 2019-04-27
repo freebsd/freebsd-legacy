@@ -92,7 +92,6 @@ SUBDIR=	\
 	${_cloudabi32} \
 	${_cloudabi64} \
 	${_cmx} \
-	${_coff} \
 	${_coretemp} \
 	${_cp} \
 	${_cpsw} \
@@ -110,8 +109,6 @@ SUBDIR=	\
 	dcons_crom \
 	de \
 	${_dpms} \
-	${_drm} \
-	${_drm2} \
 	dummynet \
 	${_ed} \
 	${_efirt} \
@@ -132,7 +129,7 @@ SUBDIR=	\
 	filemon \
 	firewire \
 	firmware \
-	fuse \
+	fusefs \
 	${_fxp} \
 	gem \
 	geom \
@@ -153,7 +150,6 @@ SUBDIR=	\
 	i2c \
 	${_iavf} \
         ${_ibcore} \
-	${_ibcs2} \
 	${_ichwd} \
 	${_ida} \
 	if_bridge \
@@ -171,6 +167,7 @@ SUBDIR=	\
 	if_tun \
 	if_vlan \
 	if_vxlan \
+	iflib \
 	${_iir} \
 	imgact_binmisc \
 	${_intelspi} \
@@ -407,6 +404,7 @@ SUBDIR=	\
 	${_x86bios} \
 	${_xe} \
 	xl \
+	xz \
 	zlib
 
 .if ${MK_AUTOFS} != "no" || defined(ALL_MODULES)
@@ -476,10 +474,32 @@ SUBDIR+=	iscsi
 SUBDIR+=	iscsi_initiator
 .endif
 
+.if !empty(OPT_FDT)
+SUBDIR+=	fdt
+.endif
+
 .if ${MACHINE_CPUARCH} == "aarch64" || ${MACHINE_CPUARCH} == "amd64" || \
     ${MACHINE_CPUARCH} == "i386"
 SUBDIR+=	linprocfs
 SUBDIR+=	linsysfs
+_ena=		ena
+.if ${MK_OFED} != "no" || defined(ALL_MODULES)
+_ibcore=	ibcore
+_ipoib=		ipoib
+_iser=		iser
+.endif
+_mlx4=		mlx4
+_mlx5=		mlx5
+.if (${MK_INET_SUPPORT} != "no" && ${MK_INET6_SUPPORT} != "no") || \
+	defined(ALL_MODULES)
+_mlx4en=	mlx4en
+_mlx5en=	mlx5en
+.endif
+.if ${MK_OFED} != "no" || defined(ALL_MODULES)
+_mthca=		mthca
+_mlx4ib=	mlx4ib
+_mlx5ib=	mlx5ib
+.endif
 .endif
 
 .if ${MK_NAND} != "no" || defined(ALL_MODULES)
@@ -583,28 +603,14 @@ _cpuctl=	cpuctl
 _cpufreq=	cpufreq
 _cs=		cs
 _dpms=		dpms
-.if ${MK_MODULE_DRM} != "no"
-_drm=		drm
-.endif
-.if ${MK_MODULE_DRM2} != "no"
-_drm2=		drm2
-.endif
 _ed=		ed
 _em=		em
-_ena=		ena
 _ep=		ep
 _et=		et
 _exca=		exca
 _fe=		fe
-.if ${MK_OFED} != "no" || defined(ALL_MODULES)
-_ibcore=        ibcore
-.endif
 _if_ndis=	if_ndis
 _io=		io
-.if ${MK_OFED} != "no" || defined(ALL_MODULES)
-_ipoib=         ipoib
-_iser=		iser
-.endif
 _ix=		ix
 _ixv=		ixv
 _linux=		linux
@@ -677,18 +683,6 @@ _iwifw=		iwifw
 _iwmfw=		iwmfw
 _iwnfw=		iwnfw
 .endif
-_mlx4=		mlx4
-_mlx5=		mlx5
-.if (${MK_INET_SUPPORT} != "no" && ${MK_INET6_SUPPORT} != "no") || \
-	defined(ALL_MODULES)
-_mlx4en=	mlx4en
-_mlx5en=	mlx5en
-.endif
-.if ${MK_OFED} != "no" || defined(ALL_MODULES)
-_mthca=		mthca
-_mlx4ib=	mlx4ib
-_mlx5ib=	mlx5ib
-.endif
 _mly=		mly
 _nfe=		nfe
 _nvd=		nvd
@@ -750,13 +744,11 @@ _apm=		apm
 .if ${MK_SOURCELESS_UCODE} != "no"
 _ce=		ce
 .endif
-_coff=		coff
 .if ${MK_SOURCELESS_UCODE} != "no"
 _cp=		cp
 .endif
 _glxiic=	glxiic
 _glxsb=		glxsb
-#_ibcs2=		ibcs2
 _pcfclock=	pcfclock
 _pst=		pst
 _sbni=		sbni
@@ -779,9 +771,6 @@ _cardbus=	cardbus
 _cbb=		cbb
 _cfi=		cfi
 _cpufreq=	cpufreq
-.if ${MK_MODULE_DRM} != "no"
-_drm=		drm
-.endif
 _exca=		exca
 _ffec=		ffec
 _nvd=		nvd
@@ -791,9 +780,6 @@ _wi=		wi
 .endif
 
 .if ${MACHINE_ARCH} == "powerpc64"
-.if ${MK_MODULE_DRM2} != "no"
-_drm2=		drm2
-.endif
 _ipmi=		ipmi
 .endif
 .if ${MACHINE_ARCH} == "powerpc64" || ${MACHINE_ARCH} == "powerpc"

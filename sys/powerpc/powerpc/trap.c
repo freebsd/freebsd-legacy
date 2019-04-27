@@ -307,6 +307,12 @@ trap(struct trapframe *frame)
 			fscr = mfspr(SPR_FSCR);
 			if ((fscr & FSCR_IC_MASK) == FSCR_IC_HTM) {
 				CTR0(KTR_TRAP, "Hardware Transactional Memory subsystem disabled");
+			} else if ((fscr & FSCR_IC_MASK) == FSCR_IC_DSCR) {
+				td->td_pcb->pcb_flags |= PCB_CFSCR | PCB_CDSCR;
+				fscr &= ~FSCR_IC_MASK;
+				mtspr(SPR_FSCR, fscr | FSCR_DSCR);
+				mtspr(SPR_DSCR, 0);
+				break;
 			}
 			sig = SIGILL;
 			ucode =	ILL_ILLOPC;
@@ -363,7 +369,7 @@ trap(struct trapframe *frame)
  				sig = SIGTRAP;
 				ucode = TRAP_BRKPT;
 			} else {
-				sig = ppc_instr_emulate(frame, td->td_pcb);
+				sig = ppc_instr_emulate(frame, td);
 				if (sig == SIGILL) {
 					if (frame->srr1 & EXC_PGM_PRIV)
 						ucode = ILL_PRVOPC;
@@ -528,6 +534,7 @@ printtrap(u_int vector, struct trapframe *frame, int isfatal, int user)
 	case EXC_DSE:
 	case EXC_DSI:
 	case EXC_DTMISS:
+	case EXC_ALI:
 		printf("   virtual address = 0x%" PRIxPTR "\n", frame->dar);
 		break;
 	case EXC_ISE:
@@ -545,6 +552,7 @@ printtrap(u_int vector, struct trapframe *frame, int isfatal, int user)
 	printf("   current msr     = 0x%" PRIxPTR "\n", mfmsr());
 	printf("   lr              = 0x%" PRIxPTR " (0x%" PRIxPTR ")\n",
 	    frame->lr, frame->lr - (register_t)(__startkernel - KERNBASE));
+	printf("   frame           = %p\n", frame);
 	printf("   curthread       = %p\n", curthread);
 	if (curthread != NULL)
 		printf("          pid = %d, comm = %s\n",
@@ -622,8 +630,6 @@ cpu_fetch_syscall_args(struct thread *td)
 		}
 	}
 
- 	if (p->p_sysent->sv_mask)
-		sa->code &= p->p_sysent->sv_mask;
 	if (sa->code >= p->p_sysent->sv_size)
 		sa->callp = &p->p_sysent->sv_table[0];
 	else

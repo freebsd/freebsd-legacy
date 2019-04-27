@@ -467,11 +467,20 @@ mrsas_startio(struct mrsas_softc *sc, struct cam_sim *sim,
 		return (0);
 	}
 	ccb_h->status |= CAM_SIM_QUEUED;
+
+	if (mrsas_atomic_inc_return(&sc->fw_outstanding) > sc->max_scsi_cmds) {
+		ccb_h->status |= CAM_REQUEUE_REQ;
+		xpt_done(ccb);
+		mrsas_atomic_dec(&sc->fw_outstanding); 
+		return (0);
+	}
+
 	cmd = mrsas_get_mpt_cmd(sc);
 
 	if (!cmd) {
 		ccb_h->status |= CAM_REQUEUE_REQ;
 		xpt_done(ccb);
+		mrsas_atomic_dec(&sc->fw_outstanding); 
 		return (0);
 	}
 
@@ -638,7 +647,7 @@ mrsas_startio(struct mrsas_softc *sc, struct cam_sim *sim,
 	    mrsas_scsiio_timeout, cmd);
 #endif
 
-	if (mrsas_atomic_inc_return(&sc->fw_outstanding) > sc->io_cmds_highwater)
+	if (mrsas_atomic_read(&sc->fw_outstanding) > sc->io_cmds_highwater)
 		sc->io_cmds_highwater++;
 
 	/*
@@ -653,7 +662,6 @@ mrsas_startio(struct mrsas_softc *sc, struct cam_sim *sim,
 	 * new command
 	 */
 	if (cmd->r1_alt_dev_handle != MR_DEVHANDLE_INVALID) {
-		mrsas_atomic_inc(&sc->fw_outstanding);
 		mrsas_prepare_secondRaid1_IO(sc, cmd);
 		mrsas_fire_cmd(sc, req_desc->addr.u.low,
 			req_desc->addr.u.high);
@@ -669,6 +677,7 @@ mrsas_startio(struct mrsas_softc *sc, struct cam_sim *sim,
 
 done:
 	xpt_done(ccb);
+	mrsas_atomic_dec(&sc->fw_outstanding); 
 	return (0);
 }
 
@@ -867,7 +876,7 @@ mrsas_build_ldio_rw(struct mrsas_softc *sc, struct mrsas_mpt_cmd *cmd,
 			    "max (0x%x) allowed\n", cmd->sge_count, sc->max_num_sge);
 			return (FAIL);
 		}
-		if (sc->is_ventura)
+		if (sc->is_ventura || sc->is_aero)
 			io_request->RaidContext.raid_context_g35.numSGE = cmd->sge_count;
 		else {
 			/*
@@ -1071,7 +1080,7 @@ mrsas_setup_io(struct mrsas_softc *sc, struct mrsas_mpt_cmd *cmd,
 	cmd->request_desc->SCSIIO.MSIxIndex =
 	    sc->msix_vectors ? smp_processor_id() % sc->msix_vectors : 0;
 
-	if (sc->is_ventura) {
+	if (sc->is_ventura || sc->is_aero) {
 		if (sc->streamDetectByLD) {
 			mtx_lock(&sc->stream_lock);
 			mrsas_stream_detect(sc, cmd, &io_info);
@@ -1092,14 +1101,20 @@ mrsas_setup_io(struct mrsas_softc *sc, struct mrsas_mpt_cmd *cmd,
 				(io_info.r1_alt_dev_handle != MR_DEVHANDLE_INVALID) &&
 				(raid->level == 1) && !io_info.isRead) {
 			r1_cmd = mrsas_get_mpt_cmd(sc);
-			if (!r1_cmd) {
+			if (mrsas_atomic_inc_return(&sc->fw_outstanding) > sc->max_scsi_cmds) {
 				fp_possible = FALSE;
-				printf("Avago debug fp disable from %s %d \n",
-					__func__, __LINE__);
+				mrsas_atomic_dec(&sc->fw_outstanding); 
 			} else {
-				cmd->peer_cmd = r1_cmd;
-				r1_cmd->peer_cmd = cmd;
-			}
+				r1_cmd = mrsas_get_mpt_cmd(sc);
+				if (!r1_cmd) {
+					fp_possible = FALSE;
+					mrsas_atomic_dec(&sc->fw_outstanding); 
+				}
+				else {
+					cmd->peer_cmd = r1_cmd;
+					r1_cmd->peer_cmd = cmd;
+				}
+ 			}
 		}
 	}
 
@@ -1121,7 +1136,7 @@ mrsas_setup_io(struct mrsas_softc *sc, struct mrsas_mpt_cmd *cmd,
 			io_request->RaidContext.raid_context.regLockFlags |=
 			    (MR_RL_FLAGS_GRANT_DESTINATION_CUDA |
 			    MR_RL_FLAGS_SEQ_NUM_ENABLE);
-		} else if (sc->is_ventura) {
+		} else if (sc->is_ventura || sc->is_aero) {
 			io_request->RaidContext.raid_context_g35.Type = MPI2_TYPE_CUDA;
 			io_request->RaidContext.raid_context_g35.nseg = 0x1;
 			io_request->RaidContext.raid_context_g35.routingFlags.bits.sqn = 1;
@@ -1139,14 +1154,14 @@ mrsas_setup_io(struct mrsas_softc *sc, struct mrsas_mpt_cmd *cmd,
 			    &sc->load_balance_info[device_id], &io_info);
 			cmd->load_balance = MRSAS_LOAD_BALANCE_FLAG;
 			cmd->pd_r1_lb = io_info.pd_after_lb;
-			if (sc->is_ventura)
+			if (sc->is_ventura || sc->is_aero)
 				io_request->RaidContext.raid_context_g35.spanArm = io_info.span_arm;
 			else
 				io_request->RaidContext.raid_context.spanArm = io_info.span_arm;
 		} else
 			cmd->load_balance = 0;
 
-		if (sc->is_ventura)
+		if (sc->is_ventura || sc->is_aero)
 				cmd->r1_alt_dev_handle = io_info.r1_alt_dev_handle;
 		else
 				cmd->r1_alt_dev_handle = MR_DEVHANDLE_INVALID;
@@ -1170,7 +1185,7 @@ mrsas_setup_io(struct mrsas_softc *sc, struct mrsas_mpt_cmd *cmd,
 			    (MR_RL_FLAGS_GRANT_DESTINATION_CPU0 |
 			    MR_RL_FLAGS_SEQ_NUM_ENABLE);
 			io_request->RaidContext.raid_context.nseg = 0x1;
-		} else if (sc->is_ventura) {
+		} else if (sc->is_ventura || sc->is_aero) {
 			io_request->RaidContext.raid_context_g35.Type = MPI2_TYPE_CUDA;
 			io_request->RaidContext.raid_context_g35.routingFlags.bits.sqn = 1;
 			io_request->RaidContext.raid_context_g35.nseg = 0x1;
@@ -1229,7 +1244,7 @@ mrsas_build_ldio_nonrw(struct mrsas_softc *sc, struct mrsas_mpt_cmd *cmd,
 			    "max (0x%x) allowed\n", cmd->sge_count, sc->max_num_sge);
 			return (1);
 		}
-		if (sc->is_ventura)
+		if (sc->is_ventura || sc->is_aero)
 			io_request->RaidContext.raid_context_g35.numSGE = cmd->sge_count;
 		else {
 			/*
@@ -1294,7 +1309,7 @@ mrsas_build_syspdio(struct mrsas_softc *sc, struct mrsas_mpt_cmd *cmd,
 				device_id + 255;
 		io_request->RaidContext.raid_context.configSeqNum = pd_sync->seq[device_id].seqNum;
 		io_request->DevHandle = pd_sync->seq[device_id].devHandle;
-		if (sc->is_ventura)
+		if (sc->is_ventura || sc->is_aero)
 			io_request->RaidContext.raid_context_g35.routingFlags.bits.sqn = 1;
 		else
 			io_request->RaidContext.raid_context.regLockFlags |=
@@ -1342,7 +1357,7 @@ mrsas_build_syspdio(struct mrsas_softc *sc, struct mrsas_mpt_cmd *cmd,
 		 * Because the NON RW cmds will now go via FW Queue
 		 * and not the Exception queue
 		 */
-		if (sc->mrsas_gen3_ctrl || sc->is_ventura)
+		if (sc->mrsas_gen3_ctrl || sc->is_ventura || sc->is_aero)
 			io_request->IoFlags |= MPI25_SAS_DEVICE0_FLAGS_ENABLED_FAST_PATH;
 
 		cmd->request_desc->SCSIIO.RequestFlags =
@@ -1359,7 +1374,7 @@ mrsas_build_syspdio(struct mrsas_softc *sc, struct mrsas_mpt_cmd *cmd,
 			    "max (0x%x) allowed\n", cmd->sge_count, sc->max_num_sge);
 			return (1);
 		}
-		if (sc->is_ventura)
+		if (sc->is_ventura || sc->is_aero)
 			io_request->RaidContext.raid_context_g35.numSGE = cmd->sge_count;
 		else {
 			/*
@@ -1522,7 +1537,7 @@ static void mrsas_build_ieee_sgl(struct mrsas_mpt_cmd *cmd, bus_dma_segment_t *s
 	io_request = cmd->io_request;
 	sgl_ptr = (pMpi25IeeeSgeChain64_t)&io_request->SGL;
 
-	if (sc->mrsas_gen3_ctrl || sc->is_ventura) {
+	if (sc->mrsas_gen3_ctrl || sc->is_ventura || sc->is_aero) {
 		pMpi25IeeeSgeChain64_t sgl_ptr_end = sgl_ptr;
 
 		sgl_ptr_end += sc->max_sge_in_main_msg - 1;
@@ -1533,7 +1548,7 @@ static void mrsas_build_ieee_sgl(struct mrsas_mpt_cmd *cmd, bus_dma_segment_t *s
 			sgl_ptr->Address = segs[i].ds_addr;
 			sgl_ptr->Length = segs[i].ds_len;
 			sgl_ptr->Flags = 0;
-			if (sc->mrsas_gen3_ctrl || sc->is_ventura) {
+			if (sc->mrsas_gen3_ctrl || sc->is_ventura || sc->is_aero) {
 				if (i == nseg - 1)
 					sgl_ptr->Flags = IEEE_SGE_FLAGS_END_OF_LIST;
 			}
@@ -1543,7 +1558,7 @@ static void mrsas_build_ieee_sgl(struct mrsas_mpt_cmd *cmd, bus_dma_segment_t *s
 				(nseg > sc->max_sge_in_main_msg)) {
 				pMpi25IeeeSgeChain64_t sg_chain;
 
-				if (sc->mrsas_gen3_ctrl || sc->is_ventura) {
+				if (sc->mrsas_gen3_ctrl || sc->is_ventura || sc->is_aero) {
 					if ((cmd->io_request->IoFlags & MPI25_SAS_DEVICE0_FLAGS_ENABLED_FAST_PATH)
 						!= MPI25_SAS_DEVICE0_FLAGS_ENABLED_FAST_PATH)
 						cmd->io_request->ChainOffset = sc->chain_offset_io_request;
@@ -1552,7 +1567,7 @@ static void mrsas_build_ieee_sgl(struct mrsas_mpt_cmd *cmd, bus_dma_segment_t *s
 				} else
 					cmd->io_request->ChainOffset = sc->chain_offset_io_request;
 				sg_chain = sgl_ptr;
-				if (sc->mrsas_gen3_ctrl || sc->is_ventura)
+				if (sc->mrsas_gen3_ctrl || sc->is_ventura || sc->is_aero)
 					sg_chain->Flags = IEEE_SGE_FLAGS_CHAIN_ELEMENT;
 				else
 					sg_chain->Flags = (IEEE_SGE_FLAGS_CHAIN_ELEMENT | MPI2_IEEE_SGE_FLAGS_IOCPLBNTA_ADDR);

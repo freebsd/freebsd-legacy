@@ -34,45 +34,45 @@ __FBSDID("$FreeBSD$");
  * TIS register space as defined in
  * TCG_PC_Client_Platform_TPM_Profile_PTP_2.0_r1.03_v22
  */
-#define TPM_ACCESS			0x0
-#define TPM_INT_ENABLE		0x8
-#define TPM_INT_VECTOR		0xc
-#define TPM_INT_STS			0x10
-#define TPM_INTF_CAPS		0x14
-#define TPM_STS				0x18
-#define TPM_DATA_FIFO		0x24
-#define TPM_INTF_ID			0x30
-#define TPM_XDATA_FIFO		0x80
-#define TPM_DID_VID			0xF00
-#define TPM_RID				0xF04
+#define	TPM_ACCESS			0x0
+#define	TPM_INT_ENABLE			0x8
+#define	TPM_INT_VECTOR			0xc
+#define	TPM_INT_STS			0x10
+#define	TPM_INTF_CAPS			0x14
+#define	TPM_STS				0x18
+#define	TPM_DATA_FIFO			0x24
+#define	TPM_INTF_ID			0x30
+#define	TPM_XDATA_FIFO			0x80
+#define	TPM_DID_VID			0xF00
+#define	TPM_RID				0xF04
 
-#define TPM_ACCESS_LOC_REQ			BIT(1)
-#define TPM_ACCESS_LOC_Seize		BIT(3)
-#define TPM_ACCESS_LOC_ACTIVE		BIT(5)
-#define TPM_ACCESS_LOC_RELINQUISH	BIT(5)
-#define TPM_ACCESS_VALID			BIT(7)
+#define	TPM_ACCESS_LOC_REQ		BIT(1)
+#define	TPM_ACCESS_LOC_Seize		BIT(3)
+#define	TPM_ACCESS_LOC_ACTIVE		BIT(5)
+#define	TPM_ACCESS_LOC_RELINQUISH	BIT(5)
+#define	TPM_ACCESS_VALID		BIT(7)
 
-#define TPM_INT_ENABLE_GLOBAL_ENABLE	BIT(31)
-#define TPM_INT_ENABLE_CMD_RDY			BIT(7)
-#define TPM_INT_ENABLE_LOC_CHANGE		BIT(2)
-#define TPM_INT_ENABLE_STS_VALID		BIT(1)
-#define TPM_INT_ENABLE_DATA_AVAIL		BIT(0)
+#define	TPM_INT_ENABLE_GLOBAL_ENABLE	BIT(31)
+#define	TPM_INT_ENABLE_CMD_RDY		BIT(7)
+#define	TPM_INT_ENABLE_LOC_CHANGE	BIT(2)
+#define	TPM_INT_ENABLE_STS_VALID	BIT(1)
+#define	TPM_INT_ENABLE_DATA_AVAIL	BIT(0)
 
-#define TPM_INT_STS_CMD_RDY		BIT(7)
-#define TPM_INT_STS_LOC_CHANGE	BIT(2)
-#define TPM_INT_STS_VALID		BIT(1)
-#define TPM_INT_STS_DATA_AVAIL	BIT(0)
+#define	TPM_INT_STS_CMD_RDY		BIT(7)
+#define	TPM_INT_STS_LOC_CHANGE		BIT(2)
+#define	TPM_INT_STS_VALID		BIT(1)
+#define	TPM_INT_STS_DATA_AVAIL		BIT(0)
 
-#define TPM_INTF_CAPS_VERSION	0x70000000
-#define TPM_INTF_CAPS_TPM20		0x30000000
+#define	TPM_INTF_CAPS_VERSION		0x70000000
+#define	TPM_INTF_CAPS_TPM20		0x30000000
 
-#define TPM_STS_VALID			BIT(7)
-#define TPM_STS_CMD_RDY			BIT(6)
-#define TPM_STS_CMD_START		BIT(5)
-#define TPM_STS_DATA_AVAIL		BIT(4)
-#define TPM_STS_DATA_EXPECTED	BIT(3)
-#define TPM_STS_BURST_MASK		0xFFFF00
-#define TPM_STS_BURST_OFFSET	0x8
+#define	TPM_STS_VALID			BIT(7)
+#define	TPM_STS_CMD_RDY			BIT(6)
+#define	TPM_STS_CMD_START		BIT(5)
+#define	TPM_STS_DATA_AVAIL		BIT(4)
+#define	TPM_STS_DATA_EXPECTED		BIT(3)
+#define	TPM_STS_BURST_MASK		0xFFFF00
+#define	TPM_STS_BURST_OFFSET		0x8
 
 static int tpmtis_transmit(struct tpm_sc *sc, size_t length);
 
@@ -93,6 +93,7 @@ static bool tpmtis_go_ready(struct tpm_sc *sc);
 
 static bool tpm_wait_for_u32(struct tpm_sc *sc, bus_size_t off,
     uint32_t mask, uint32_t val, int32_t timeout);
+
 static uint16_t tpmtis_wait_for_burst(struct tpm_sc *sc);
 
 char *tpmtis_ids[] = {"MSFT0101", NULL};
@@ -100,26 +101,21 @@ char *tpmtis_ids[] = {"MSFT0101", NULL};
 static int
 tpmtis_acpi_probe(device_t dev)
 {
-	struct resource *res;
-	int err, rid = 0;
-	uint32_t caps;
+	int err;
+	ACPI_TABLE_TPM23 *tbl;
+	ACPI_STATUS status;
 
 	err = ACPI_ID_PROBE(device_get_parent(dev), dev, tpmtis_ids, NULL);
 	if (err > 0)
 		return (err);
-
-	/* Check if device is in TPM 2.0 TIS mode */
-	res = bus_alloc_resource_any(dev, SYS_RES_MEMORY, &rid, RF_ACTIVE);
-	if (res == NULL)
-		return (ENXIO);
-
-	caps = bus_read_4(res, TPM_INTF_CAPS);
-	bus_release_resource(dev, SYS_RES_MEMORY, rid, res);
-	if ((caps & TPM_INTF_CAPS_VERSION) != TPM_INTF_CAPS_TPM20)
-		return (ENXIO);
+	/*Find TPM2 Header*/
+	status = AcpiGetTable(ACPI_SIG_TPM2, 1, (ACPI_TABLE_HEADER **) &tbl);
+	if(ACPI_FAILURE(status) ||
+	   tbl->StartMethod != TPM2_START_METHOD_TIS)
+	    err = ENXIO;
 
 	device_set_desc(dev, "Trusted Platform Module 2.0, FIFO mode");
-	return (BUS_PROBE_DEFAULT);
+	return (err);
 }
 
 static int
@@ -167,6 +163,7 @@ tpmtis_detach(device_t dev)
 	struct tpm_sc *sc;
 
 	sc = device_get_softc(dev);
+	tpm20_release(sc);
 
 	if (sc->intr_cookie != NULL)
 		bus_teardown_intr(dev, sc->irq_res, sc->intr_cookie);
@@ -179,7 +176,6 @@ tpmtis_detach(device_t dev)
 		bus_release_resource(dev, SYS_RES_MEMORY,
 		    sc->mem_rid, sc->mem_res);
 
-	tpm20_release(sc);
 	return (0);
 }
 

@@ -130,7 +130,8 @@ typedef enum {
 	DA_Q_NO_UNMAP		= 0x20,
 	DA_Q_RETRY_BUSY		= 0x40,
 	DA_Q_SMR_DM		= 0x80,
-	DA_Q_STRICT_UNMAP	= 0x100
+	DA_Q_STRICT_UNMAP	= 0x100,
+	DA_Q_128KB		= 0x200
 } da_quirks;
 
 #define DA_Q_BIT_STRING		\
@@ -143,7 +144,8 @@ typedef enum {
 	"\006NO_UNMAP"		\
 	"\007RETRY_BUSY"	\
 	"\010SMR_DM"		\
-	"\011STRICT_UNMAP"
+	"\011STRICT_UNMAP"	\
+	"\012128KB"
 
 typedef enum {
 	DA_CCB_PROBE_RC		= 0x01,
@@ -342,6 +344,7 @@ struct da_softc {
 	da_delete_func_t	*delete_func;
 	int			unmappedio;
 	int			rotating;
+	int			p_type;
 	struct	 disk_params params;
 	struct	 disk *disk;
 	union	 ccb saved_ccb;
@@ -861,7 +864,21 @@ static struct da_quirk_entry da_quirk_table[] =
 		{T_DIRECT, SIP_MEDIA_REMOVABLE, "I-O DATA", "USB Flash Disk*",
 		 "*"}, /*quirks*/ DA_Q_NO_RC16
 	},
+	{
+		/*
+		 * SLC CHIPFANCIER USB drives
+		 * PR: usb/234503 (RC10 right, RC16 wrong)
+		 * 16GB, 32GB and 128GB confirmed to have same issue
+		 */
+		{T_DIRECT, SIP_MEDIA_REMOVABLE, "*SLC", "CHIPFANCIER",
+		 "*"}, /*quirks*/ DA_Q_NO_RC16
+       },
 	/* ATA/SATA devices over SAS/USB/... */
+	{
+		/* Sandisk X400 */
+		{ T_DIRECT, SIP_MEDIA_FIXED, "ATA", "SanDisk SD8SB8U1*", "*" },
+		/*quirks*/DA_Q_128KB
+	},
 	{
 		/* Hitachi Advanced Format (4k) drives */
 		{ T_DIRECT, SIP_MEDIA_FIXED, "Hitachi", "H??????????E3*", "*" },
@@ -1084,9 +1101,41 @@ static struct da_quirk_entry da_quirk_table[] =
 	},
 	{
 		/*
+		 * Olympus digital cameras (C-3040ZOOM, C-2040ZOOM, C-1)
+		 * PR: usb/97472
+		 */
+		{ T_DIRECT, SIP_MEDIA_REMOVABLE, "OLYMPUS", "C*", "*"},
+		/*quirks*/ DA_Q_NO_6_BYTE | DA_Q_NO_SYNC_CACHE
+	},
+	{
+		/*
+		 * Olympus digital cameras (D-370)
+		 * PR: usb/97472
+		 */
+		{ T_DIRECT, SIP_MEDIA_REMOVABLE, "OLYMPUS", "D*", "*"},
+		/*quirks*/ DA_Q_NO_6_BYTE
+	},
+	{
+		/*
+		 * Olympus digital cameras (E-100RS, E-10).
+		 * PR: usb/97472
+		 */
+		{ T_DIRECT, SIP_MEDIA_REMOVABLE, "OLYMPUS", "E*", "*"},
+		/*quirks*/ DA_Q_NO_6_BYTE | DA_Q_NO_SYNC_CACHE
+	},
+	{
+		/*
 		 * Olympus FE-210 camera
 		 */
 		{T_DIRECT, SIP_MEDIA_REMOVABLE, "OLYMPUS", "FE210*",
+		"*"}, /*quirks*/ DA_Q_NO_SYNC_CACHE
+	},
+	{
+		/*
+		* Pentax Digital Camera
+		* PR: usb/93389
+		*/
+		{T_DIRECT, SIP_MEDIA_REMOVABLE, "PENTAX", "DIGITAL CAMERA",
 		"*"}, /*quirks*/ DA_Q_NO_SYNC_CACHE
 	},
 	{
@@ -1469,6 +1518,7 @@ static int da_retry_count = DA_DEFAULT_RETRY;
 static int da_default_timeout = DA_DEFAULT_TIMEOUT;
 static sbintime_t da_default_softtimeout = DA_DEFAULT_SOFTTIMEOUT;
 static int da_send_ordered = DA_DEFAULT_SEND_ORDERED;
+static int da_disable_wp_detection = 0;
 
 static SYSCTL_NODE(_kern_cam, OID_AUTO, da, CTLFLAG_RD, 0,
             "CAM Direct Access Disk driver");
@@ -1480,6 +1530,9 @@ SYSCTL_INT(_kern_cam_da, OID_AUTO, default_timeout, CTLFLAG_RWTUN,
            &da_default_timeout, 0, "Normal I/O timeout (in seconds)");
 SYSCTL_INT(_kern_cam_da, OID_AUTO, send_ordered, CTLFLAG_RWTUN,
            &da_send_ordered, 0, "Send Ordered Tags");
+SYSCTL_INT(_kern_cam_da, OID_AUTO, disable_wp_detection, CTLFLAG_RWTUN,
+           &da_disable_wp_detection, 0,
+	   "Disable detection of write-protected disks");
 
 SYSCTL_PROC(_kern_cam_da, OID_AUTO, default_softtimeout,
     CTLTYPE_UINT | CTLFLAG_RW, NULL, 0, dasysctlsofttimeout, "I",
@@ -2240,7 +2293,7 @@ dasysctlinit(void *context, int pending)
 		       CTLFLAG_RD,
 		       &softc->unmappedio,
 		       0,
-		       "Unmapped I/O leaf");
+		       "Unmapped I/O support");
 
 	SYSCTL_ADD_INT(&softc->sysctl_ctx,
 		       SYSCTL_CHILDREN(softc->sysctl_tree),
@@ -2250,6 +2303,15 @@ dasysctlinit(void *context, int pending)
 		       &softc->rotating,
 		       0,
 		       "Rotating media");
+
+	SYSCTL_ADD_INT(&softc->sysctl_ctx,
+		       SYSCTL_CHILDREN(softc->sysctl_tree),
+		       OID_AUTO,
+		       "p_type",
+		       CTLFLAG_RD,
+		       &softc->p_type,
+		       0,
+		       "DIF protection type");
 
 #ifdef CAM_TEST_FAILURE
 	SYSCTL_ADD_PROC(&softc->sysctl_ctx, SYSCTL_CHILDREN(softc->sysctl_tree),
@@ -2781,6 +2843,8 @@ daregister(struct cam_periph *periph, void *arg)
 		softc->maxio = MAXPHYS;		/* for safety */
 	else
 		softc->maxio = cpi.maxio;
+	if (softc->quirks & DA_Q_128KB)
+		softc->maxio = min(softc->maxio, 128 * 1024);
 	softc->disk->d_maxsize = softc->maxio;
 	softc->disk->d_unit = periph->unit_number;
 	softc->disk->d_flags = DISKFLAG_DIRECT_COMPLETION | DISKFLAG_CANZONE;
@@ -3270,14 +3334,12 @@ more:
 			/*
 			 * BIO_FLUSH doesn't currently communicate
 			 * range data, so we synchronize the cache
-			 * over the whole disk.  We also force
-			 * ordered tag semantics the flush applies
-			 * to all previously queued I/O.
+			 * over the whole disk.
 			 */
 			scsi_synchronize_cache(&start_ccb->csio,
 					       /*retries*/1,
 					       /*cbfcnp*/dadone,
-					       MSG_ORDERED_Q_TAG,
+					       /*tag_action*/tag_code,
 					       /*begin_lba*/0,
 					       /*lb_count*/0,
 					       SSD_FULL_SIZE,
@@ -3336,12 +3398,22 @@ out:
 		void  *mode_buf;
 		int    mode_buf_len;
 
+		if (da_disable_wp_detection) {
+			if ((softc->flags & DA_FLAG_CAN_RC16) != 0)
+				softc->state = DA_STATE_PROBE_RC16;
+			else
+				softc->state = DA_STATE_PROBE_RC;
+			goto skipstate;
+		}
 		mode_buf_len = 192;
 		mode_buf = malloc(mode_buf_len, M_SCSIDA, M_NOWAIT);
 		if (mode_buf == NULL) {
 			xpt_print(periph->path, "Unable to send mode sense - "
 			    "malloc failure\n");
-			softc->state = DA_STATE_PROBE_RC;
+			if ((softc->flags & DA_FLAG_CAN_RC16) != 0)
+				softc->state = DA_STATE_PROBE_RC16;
+			else
+				softc->state = DA_STATE_PROBE_RC;
 			goto skipstate;
 		}
 		scsi_mode_sense_len(&start_ccb->csio,
@@ -4587,7 +4659,7 @@ dadone_proberc(struct cam_periph *periph, union ccb *done_ccb)
 	da_ccb_state state;
 	char *announce_buf;
 	u_int32_t  priority;
-	int lbp;
+	int lbp, n;
 
 	CAM_DEBUG(periph->path, CAM_DEBUG_TRACE, ("dadone_proberc\n"));
 
@@ -4669,11 +4741,17 @@ dadone_proberc(struct cam_periph *periph, union ccb *done_ccb)
 				  rcaplong, sizeof(*rcaplong));
 			lbp = (lalba & SRC16_LBPME_A);
 			dp = &softc->params;
-			snprintf(announce_buf, DA_ANNOUNCETMP_SZ,
-			    "%juMB (%ju %u byte sectors)",
+			n = snprintf(announce_buf, DA_ANNOUNCETMP_SZ,
+			    "%juMB (%ju %u byte sectors",
 			    ((uintmax_t)dp->secsize * dp->sectors) /
 			     (1024 * 1024),
 			    (uintmax_t)dp->sectors, dp->secsize);
+			if (softc->p_type != 0) {
+				n += snprintf(announce_buf + n,
+				    DA_ANNOUNCETMP_SZ - n,
+				    ", DIF type %d", softc->p_type);
+			}
+			snprintf(announce_buf + n, DA_ANNOUNCETMP_SZ - n, ")");
 		}
 	} else {
 		int error;
@@ -5921,9 +5999,15 @@ dasetgeom(struct cam_periph *periph, uint32_t block_len, uint64_t maxsector,
 		lbppbe = rcaplong->prot_lbppbe & SRC16_LBPPBE;
 		lalba = scsi_2btoul(rcaplong->lalba_lbp);
 		lalba &= SRC16_LALBA_A;
+		if (rcaplong->prot & SRC16_PROT_EN)
+			softc->p_type = ((rcaplong->prot & SRC16_P_TYPE) >>
+			    SRC16_P_TYPE_SHIFT) + 1;
+		else
+			softc->p_type = 0;
 	} else {
 		lbppbe = 0;
 		lalba = 0;
+		softc->p_type = 0;
 	}
 
 	if (lbppbe > 0) {

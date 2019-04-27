@@ -1209,7 +1209,7 @@
 		    u_int namelen,
 		    _Out_writes_bytes_opt_(*oldlenp) void *old,
 		    _Inout_opt_ size_t *oldlenp,
-		    _In_reads_bytes_opt_(newlen) void *new,
+		    _In_reads_bytes_opt_(newlen) const void *new,
 		    size_t newlen
 		);
 	} __sysctl sysctl_args int
@@ -2716,7 +2716,7 @@
 		);
 	}
 500	AUE_READLINKAT	STD {
-		int readlinkat(
+		ssize_t readlinkat(
 		    int fd,
 		    _In_z_ const char *path,
 		    _Out_writes_bytes_(bufsize) char *buf,
@@ -3165,6 +3165,14 @@
 		    _In_ struct fhandle *fhp,
 		    _Out_writes_(bufsize) char *buf,
 		    size_t bufsize
+		);
+	}
+568	AUE_UNLINKAT	STD {
+		int funlinkat(
+		    int dfd,
+		    _In_z_ const char *path,
+		    int fd,
+		    int flag
 		);
 	}
 

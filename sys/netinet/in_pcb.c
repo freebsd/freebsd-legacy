@@ -510,6 +510,9 @@ in_pcballoc(struct socket *so, struct inpcbinfo *pcbinfo)
 	if (inp == NULL)
 		return (ENOBUFS);
 	bzero(&inp->inp_start_zero, inp_zero_size);
+#ifdef NUMA
+	inp->inp_numa_domain = M_NODOM;
+#endif
 	inp->inp_pcbinfo = pcbinfo;
 	inp->inp_socket = so;
 	inp->inp_cred = crhold(so->so_cred);
@@ -1012,6 +1015,7 @@ in_pcbladdr(struct inpcb *inp, struct in_addr *faddr, struct in_addr *laddr,
 	struct sockaddr *sa;
 	struct sockaddr_in *sin;
 	struct route sro;
+	struct epoch_tracker et;
 	int error;
 
 	KASSERT(laddr != NULL, ("%s: laddr NULL", __func__));
@@ -1047,7 +1051,7 @@ in_pcbladdr(struct inpcb *inp, struct in_addr *faddr, struct in_addr *laddr,
 	 * network and try to find a corresponding interface to take
 	 * the source address from.
 	 */
-	NET_EPOCH_ENTER();
+	NET_EPOCH_ENTER(et);
 	if (sro.ro_rt == NULL || sro.ro_rt->rt_ifp == NULL) {
 		struct in_ifaddr *ia;
 		struct ifnet *ifp;
@@ -1211,7 +1215,7 @@ in_pcbladdr(struct inpcb *inp, struct in_addr *faddr, struct in_addr *laddr,
 	}
 
 done:
-	NET_EPOCH_EXIT();
+	NET_EPOCH_EXIT(et);
 	if (sro.ro_rt != NULL)
 		RTFREE(sro.ro_rt);
 	return (error);
@@ -1564,6 +1568,7 @@ in_pcbfree_deferred(epoch_context_t ctx)
 	inp = __containerof(ctx, struct inpcb, inp_epoch_ctx);
 
 	INP_WLOCK(inp);
+	CURVNET_SET(inp->inp_vnet);
 #ifdef INET
 	struct ip_moptions *imo = inp->inp_moptions;
 	inp->inp_moptions = NULL;
@@ -1596,6 +1601,7 @@ in_pcbfree_deferred(epoch_context_t ctx)
 #ifdef INET
 	inp_freemoptions(imo);
 #endif	
+	CURVNET_RESTORE();
 }
 
 /*
@@ -3394,14 +3400,9 @@ in_pcboutput_txrtlmt(struct inpcb *inp, struct ifnet *ifp, struct mbuf *mb)
 void
 in_pcboutput_eagain(struct inpcb *inp)
 {
-	struct socket *socket;
 	bool did_upgrade;
 
 	if (inp == NULL)
-		return;
-
-	socket = inp->inp_socket;
-	if (socket == NULL)
 		return;
 
 	if (inp->inp_snd_tag == NULL)

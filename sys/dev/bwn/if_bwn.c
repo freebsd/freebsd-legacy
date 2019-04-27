@@ -2001,14 +2001,6 @@ bwn_set_channel(struct ieee80211com *ic)
 	bwn_mac_enable(mac);
 
 fail:
-	/*
-	 * Setup radio tap channel freq and flags
-	 */
-	sc->sc_tx_th.wt_chan_freq = sc->sc_rx_th.wr_chan_freq =
-		htole16(ic->ic_curchan->ic_freq);
-	sc->sc_tx_th.wt_chan_flags = sc->sc_rx_th.wr_chan_flags =
-		htole16(ic->ic_curchan->ic_flags & 0xffff);
-
 	BWN_UNLOCK(sc);
 }
 
@@ -6211,20 +6203,15 @@ bwn_pio_handle_txeof(struct bwn_mac *mac,
 	tq->tq_used -= roundup(tp->tp_m->m_pkthdr.len + BWN_HDRSIZE(mac), 4);
 	tq->tq_free++;
 
-	/* XXX ieee80211_tx_complete()? */
 	if (tp->tp_ni != NULL) {
 		/*
 		 * Do any tx complete callback.  Note this must
 		 * be done before releasing the node reference.
 		 */
-
 		bwn_ratectl_tx_complete(tp->tp_ni, status);
-		if (tp->tp_m->m_flags & M_TXCB)
-			ieee80211_process_callback(tp->tp_ni, tp->tp_m, 0);
-		ieee80211_free_node(tp->tp_ni);
-		tp->tp_ni = NULL;
 	}
-	m_freem(tp->tp_m);
+	ieee80211_tx_complete(tp->tp_ni, tp->tp_m, 0);
+	tp->tp_ni = NULL;
 	tp->tp_m = NULL;
 	TAILQ_INSERT_TAIL(&tq->tq_pktlist, tp, tp_list);
 

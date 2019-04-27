@@ -2481,9 +2481,8 @@ mps_intr_locked(void *data)
 			} else {
 				cm = &sc->commands[
 				    le16toh(desc->AddressReply.SMID)];
-				KASSERT(cm->cm_state == MPS_CM_STATE_INQUEUE,
-				    ("command not inqueue\n"));
-				cm->cm_state = MPS_CM_STATE_BUSY;
+				if (cm->cm_state != MPS_CM_STATE_TIMEDOUT)
+					cm->cm_state = MPS_CM_STATE_BUSY;
 				cm->cm_reply = reply;
 				cm->cm_reply_data = le32toh(
 				    desc->AddressReply.ReplyFrameAddress);
@@ -3103,12 +3102,15 @@ mps_wait_command(struct mps_softc *sc, struct mps_command **cmp, int timeout,
 	}
 
 	if (error == EWOULDBLOCK) {
-		mps_dprint(sc, MPS_FAULT, "Calling Reinit from %s, timeout=%d,"
-		    " elapsed=%jd\n", __func__, timeout,
-		    (intmax_t)cur_time.tv_sec);
-		rc = mps_reinit(sc);
-		mps_dprint(sc, MPS_FAULT, "Reinit %s\n", (rc == 0) ? "success" :
-		    "failed");
+		if (cm->cm_timeout_handler == NULL) {
+			mps_dprint(sc, MPS_FAULT, "Calling Reinit from %s, timeout=%d,"
+			    " elapsed=%jd\n", __func__, timeout,
+			    (intmax_t)cur_time.tv_sec);
+			rc = mps_reinit(sc);
+			mps_dprint(sc, MPS_FAULT, "Reinit %s\n", (rc == 0) ? "success" :
+			    "failed");
+		} else
+			cm->cm_timeout_handler(sc, cm);
 		if (sc->mps_flags & MPS_FLAGS_REALLOCATED) {
 			/*
 			 * Tell the caller that we freed the command in a

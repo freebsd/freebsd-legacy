@@ -6,7 +6,7 @@
  */
 
 const char *freebsd32_syscallnames[] = {
-#if !defined(PAD64_REQUIRED) && (defined(__powerpc__) || defined(__mips__))
+#if !defined(PAD64_REQUIRED) && !defined(__amd64__)
 #define PAD64_REQUIRED
 #endif
 	"syscall",			/* 0 = syscall */
@@ -604,4 +604,5 @@ const char *freebsd32_syscallnames[] = {
 	"fhlink",			/* 565 = fhlink */
 	"fhlinkat",			/* 566 = fhlinkat */
 	"fhreadlink",			/* 567 = fhreadlink */
+	"funlinkat",			/* 568 = funlinkat */
 };

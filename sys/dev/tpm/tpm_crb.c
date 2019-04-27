@@ -34,46 +34,47 @@ __FBSDID("$FreeBSD$");
  * CRB register space as defined in
  * TCG_PC_Client_Platform_TPM_Profile_PTP_2.0_r1.03_v22
  */
-#define TPM_LOC_STATE			0x0
-#define TPM_LOC_CTRL			0x8
-#define TPM_LOC_STS				0xC
-#define TPM_CRB_INTF_ID			0x30
-#define TPM_CRB_CTRL_EXT		0x38
-#define TPM_CRB_CTRL_REQ		0x40
-#define TPM_CRB_CTRL_STS		0x44
-#define TPM_CRB_CTRL_CANCEL 	0x48
-#define TPM_CRB_CTRL_START		0x4C
-#define TPM_CRB_INT_ENABLE		0x50
-#define TPM_CRB_INT_STS			0x54
-#define TPM_CRB_CTRL_CMD_SIZE	0x58
-#define TPM_CRB_CTRL_CMD_LADDR	0x5C
-#define TPM_CRB_CTRL_CMD_HADDR	0x60
-#define TPM_CRB_CTRL_RSP_SIZE	0x64
-#define TPM_CRB_CTRL_RSP_ADDR	0x68
-#define TPM_CRB_DATA_BUFFER		0x80
+#define	TPM_LOC_STATE			0x0
+#define	TPM_LOC_CTRL			0x8
+#define	TPM_LOC_STS			0xC
+#define	TPM_CRB_INTF_ID			0x30
+#define	TPM_CRB_CTRL_EXT		0x38
+#define	TPM_CRB_CTRL_REQ		0x40
+#define	TPM_CRB_CTRL_STS		0x44
+#define	TPM_CRB_CTRL_CANCEL		0x48
+#define	TPM_CRB_CTRL_START		0x4C
+#define	TPM_CRB_INT_ENABLE		0x50
+#define	TPM_CRB_INT_STS			0x54
+#define	TPM_CRB_CTRL_CMD_SIZE		0x58
+#define	TPM_CRB_CTRL_CMD_LADDR		0x5C
+#define	TPM_CRB_CTRL_CMD_HADDR		0x60
+#define	TPM_CRB_CTRL_RSP_SIZE		0x64
+#define	TPM_CRB_CTRL_RSP_ADDR		0x68
+#define	TPM_CRB_CTRL_RSP_HADDR		0x6c
+#define	TPM_CRB_DATA_BUFFER		0x80
 
-#define TPM_LOC_STATE_ESTB			BIT(0)
-#define TPM_LOC_STATE_ASSIGNED		BIT(1)
-#define TPM_LOC_STATE_ACTIVE_MASK	0x9C
-#define TPM_LOC_STATE_VALID			BIT(7)
+#define	TPM_LOC_STATE_ESTB		BIT(0)
+#define	TPM_LOC_STATE_ASSIGNED		BIT(1)
+#define	TPM_LOC_STATE_ACTIVE_MASK	0x9C
+#define	TPM_LOC_STATE_VALID		BIT(7)
 
-#define TPM_CRB_INTF_ID_TYPE_CRB	0x1
-#define TPM_CRB_INTF_ID_TYPE		0x7
+#define	TPM_CRB_INTF_ID_TYPE_CRB	0x1
+#define	TPM_CRB_INTF_ID_TYPE		0x7
 
-#define TPM_LOC_CTRL_REQUEST		BIT(0)
-#define TPM_LOC_CTRL_RELINQUISH		BIT(1)
+#define	TPM_LOC_CTRL_REQUEST		BIT(0)
+#define	TPM_LOC_CTRL_RELINQUISH		BIT(1)
 
-#define TPM_CRB_CTRL_REQ_GO_READY	BIT(0)
-#define TPM_CRB_CTRL_REQ_GO_IDLE	BIT(1)
+#define	TPM_CRB_CTRL_REQ_GO_READY	BIT(0)
+#define	TPM_CRB_CTRL_REQ_GO_IDLE	BIT(1)
 
-#define TPM_CRB_CTRL_STS_ERR_BIT	BIT(0)
-#define TPM_CRB_CTRL_STS_IDLE_BIT	BIT(1)
+#define	TPM_CRB_CTRL_STS_ERR_BIT	BIT(0)
+#define	TPM_CRB_CTRL_STS_IDLE_BIT	BIT(1)
 
-#define TPM_CRB_CTRL_CANCEL_CMD		BIT(0)
+#define	TPM_CRB_CTRL_CANCEL_CMD		BIT(0)
 
-#define TPM_CRB_CTRL_START_CMD		BIT(0)
+#define	TPM_CRB_CTRL_START_CMD		BIT(0)
 
-#define TPM_CRB_INT_ENABLE_BIT		BIT(31)
+#define	TPM_CRB_INT_ENABLE_BIT		BIT(31)
 
 struct tpmcrb_sc {
 	struct tpm_sc	base;
@@ -103,27 +104,20 @@ char *tpmcrb_ids[] = {"MSFT0101", NULL};
 static int
 tpmcrb_acpi_probe(device_t dev)
 {
-	struct resource *res;
-	int err, rid = 0;
-	uint32_t caps;
-
+	int err;
+	ACPI_TABLE_TPM23 *tbl;
+	ACPI_STATUS status;
 	err = ACPI_ID_PROBE(device_get_parent(dev), dev, tpmcrb_ids, NULL);
 	if (err > 0)
 		return (err);
-
-	/* Check if device is in CRB mode */
-	res = bus_alloc_resource_any(dev, SYS_RES_MEMORY, &rid, RF_ACTIVE);
-	if (res == NULL)
-		return (ENXIO);
-
-	caps = bus_read_4(res, TPM_CRB_INTF_ID);
-	bus_release_resource(dev, SYS_RES_MEMORY, rid, res);
-
-	if ((caps & TPM_CRB_INTF_ID_TYPE) != TPM_CRB_INTF_ID_TYPE_CRB)
-		return (ENXIO);
+	/*Find TPM2 Header*/
+	status = AcpiGetTable(ACPI_SIG_TPM2, 1, (ACPI_TABLE_HEADER **) &tbl);
+	if(ACPI_FAILURE(status) ||
+	   tbl->StartMethod != TPM2_START_METHOD_CRB)
+		err = ENXIO;
 
 	device_set_desc(dev, "Trusted Platform Module 2.0, CRB mode");
-	return (BUS_PROBE_DEFAULT);
+	return (err);
 }
 
 static ACPI_STATUS
@@ -171,7 +165,8 @@ tpmcrb_attach(device_t dev)
 		return (ENXIO);
 
 	if(!tpmcrb_request_locality(sc, 0)) {
-		tpmcrb_detach(dev);
+		bus_release_resource(dev, SYS_RES_MEMORY,
+		    sc->mem_rid, sc->mem_res);
 		return (ENXIO);
 	}
 
@@ -188,7 +183,12 @@ tpmcrb_attach(device_t dev)
 	 * addr is stored in two 4 byte neighboring registers, whereas RSP is
 	 * stored in a single 8 byte one.
 	 */
+#ifdef __amd64__
 	crb_sc->rsp_off = RD8(sc, TPM_CRB_CTRL_RSP_ADDR);
+#else
+	crb_sc->rsp_off = RD4(sc, TPM_CRB_CTRL_RSP_ADDR);
+	crb_sc->rsp_off |= ((uint64_t) RD4(sc, TPM_CRB_CTRL_RSP_HADDR) << 32);
+#endif
 	crb_sc->cmd_off = RD4(sc, TPM_CRB_CTRL_CMD_LADDR);
 	crb_sc->cmd_off |= ((uint64_t) RD4(sc, TPM_CRB_CTRL_CMD_HADDR) << 32);
 	crb_sc->cmd_buf_size = RD4(sc, TPM_CRB_CTRL_CMD_SIZE);
@@ -232,12 +232,12 @@ tpmcrb_detach(device_t dev)
 	struct tpm_sc *sc;
 
 	sc = device_get_softc(dev);
+	tpm20_release(sc);
 
 	if (sc->mem_res != NULL)
 		bus_release_resource(dev, SYS_RES_MEMORY,
 		    sc->mem_rid, sc->mem_res);
 
-	tpm20_release(sc);
 	return (0);
 }
 

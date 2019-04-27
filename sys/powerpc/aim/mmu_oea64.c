@@ -146,8 +146,9 @@ extern void *slbtrap, *slbtrapend;
  */
 static struct	mem_region *regions;
 static struct	mem_region *pregions;
+static struct	numa_mem_region *numa_pregions;
 static u_int	phys_avail_count;
-static int	regions_sz, pregions_sz;
+static int	regions_sz, pregions_sz, numapregions_sz;
 
 extern void bs_remap_earlyboot(void);
 
@@ -1048,6 +1049,8 @@ moea64_late_bootstrap(mmu_t mmup, vm_offset_t kernelstart, vm_offset_t kernelend
 			PMAP_UNLOCK(kernel_pmap);
 		}
 	}
+
+	numa_mem_regions(&numa_pregions, &numapregions_sz);
 }
 
 static void
@@ -2807,7 +2810,7 @@ moea64_sync_icache(mmu_t mmu, pmap_t pm, vm_offset_t va, vm_size_t sz)
 
 	PMAP_LOCK(pm);
 	while (sz > 0) {
-		lim = round_page(va);
+		lim = round_page(va+1);
 		len = MIN(lim - va, sz);
 		pvo = moea64_pvo_find_va(pm, va & ~ADDR_POFF);
 		if (pvo != NULL && !(pvo->pvo_pte.pa & LPTE_I)) {

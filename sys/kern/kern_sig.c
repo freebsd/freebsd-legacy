@@ -1996,7 +1996,6 @@ trapsignal(struct thread *td, ksiginfo_t *ksi)
 			ps->ps_sigact[_SIG_IDX(sig)] = SIG_DFL;
 		}
 		mtx_unlock(&ps->ps_mtx);
-		p->p_code = code;	/* XXX for core dump/debugger */
 		p->p_sig = sig;		/* XXX to verify code */
 		tdsendsignal(p, td, sig, ksi);
 	}
@@ -3062,7 +3061,6 @@ postsig(int sig)
 			returnmask = td->td_sigmask;
 
 		if (p->p_sig == sig) {
-			p->p_code = 0;
 			p->p_sig = 0;
 		}
 		(*p->p_sysent->sv_sendsig)(action, &ksi, &returnmask);
@@ -3098,8 +3096,9 @@ killproc(struct proc *p, char *why)
 	PROC_LOCK_ASSERT(p, MA_OWNED);
 	CTR3(KTR_PROC, "killproc: proc %p (pid %d, %s)", p, p->p_pid,
 	    p->p_comm);
-	log(LOG_ERR, "pid %d (%s), uid %d, was killed: %s\n", p->p_pid,
-	    p->p_comm, p->p_ucred ? p->p_ucred->cr_uid : -1, why);
+	log(LOG_ERR, "pid %d (%s), jid %d, uid %d, was killed: %s\n",
+	    p->p_pid, p->p_comm, p->p_ucred->cr_prison->pr_id,
+	    p->p_ucred->cr_uid, why);
 	proc_wkilled(p);
 	kern_psignal(p, SIGKILL);
 }
@@ -3142,9 +3141,10 @@ sigexit(struct thread *td, int sig)
 			sig |= WCOREFLAG;
 		if (kern_logsigexit)
 			log(LOG_INFO,
-			    "pid %d (%s), uid %d: exited on signal %d%s\n",
-			    p->p_pid, p->p_comm,
-			    td->td_ucred ? td->td_ucred->cr_uid : -1,
+			    "pid %d (%s), jid %d, uid %d: exited on "
+			    "signal %d%s\n", p->p_pid, p->p_comm,
+			    p->p_ucred->cr_prison->pr_id,
+			    td->td_ucred->cr_uid,
 			    sig &~ WCOREFLAG,
 			    sig & WCOREFLAG ? " (core dumped)" : "");
 	} else

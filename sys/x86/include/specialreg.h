@@ -77,6 +77,7 @@
 #define	CR4_XSAVE 0x00040000	/* XSETBV/XGETBV */
 #define	CR4_SMEP 0x00100000	/* Supervisor-Mode Execution Prevention */
 #define	CR4_SMAP 0x00200000	/* Supervisor-Mode Access Prevention */
+#define	CR4_PKE	0x00400000	/* Protection Keys Enable */
 
 /*
  * Bits in AMD64 special registers.  EFER is 64 bits wide.
@@ -374,6 +375,17 @@
 #define	AMDFEID_CLZERO		0x00000001
 #define	AMDFEID_IRPERF		0x00000002
 #define	AMDFEID_XSAVEERPTR	0x00000004
+#define	AMDFEID_IBPB		0x00001000
+#define	AMDFEID_IBRS		0x00004000
+#define	AMDFEID_STIBP		0x00008000
+/* The below are only defined if the corresponding base feature above exists. */
+#define	AMDFEID_IBRS_ALWAYSON	0x00010000
+#define	AMDFEID_STIBP_ALWAYSON	0x00020000
+#define	AMDFEID_PREFER_IBRS	0x00040000
+#define	AMDFEID_SSBD		0x01000000
+/* SSBD via MSRC001_011F instead of MSR 0x48: */
+#define	AMDFEID_VIRT_SSBD	0x02000000
+#define	AMDFEID_SSB_NO		0x04000000
 
 /*
  * AMD extended function 8000_0008h ecx info
@@ -425,16 +437,23 @@
 #define	CPUID_STDEXT2_UMIP	0x00000004
 #define	CPUID_STDEXT2_PKU	0x00000008
 #define	CPUID_STDEXT2_OSPKE	0x00000010
+#define	CPUID_STDEXT2_WAITPKG	0x00000020
+#define	CPUID_STDEXT2_GFNI	0x00000100
 #define	CPUID_STDEXT2_RDPID	0x00400000
+#define	CPUID_STDEXT2_CLDEMOTE	0x02000000
+#define	CPUID_STDEXT2_MOVDIRI	0x08000000
+#define	CPUID_STDEXT2_MOVDIRI64B	0x10000000
 #define	CPUID_STDEXT2_SGXLC	0x40000000
 
 /*
  * CPUID instruction 7 Structured Extended Features, leaf 0 edx info
  */
+#define	CPUID_STDEXT3_TSXFA	0x00002000
 #define	CPUID_STDEXT3_IBPB	0x04000000
 #define	CPUID_STDEXT3_STIBP	0x08000000
 #define	CPUID_STDEXT3_L1D_FLUSH	0x10000000
 #define	CPUID_STDEXT3_ARCH_CAP	0x20000000
+#define	CPUID_STDEXT3_CORE_CAP	0x40000000
 #define	CPUID_STDEXT3_SSBD	0x80000000
 
 /* MSR IA32_ARCH_CAP(ABILITIES) bits */
@@ -488,6 +507,7 @@
 #define	MSR_MTRRcap		0x0fe
 #define	MSR_IA32_ARCH_CAP	0x10a
 #define	MSR_IA32_FLUSH_CMD	0x10b
+#define	MSR_TSX_FORCE_ABORT	0x10f
 #define	MSR_BBL_CR_ADDR		0x116
 #define	MSR_BBL_CR_DECC		0x118
 #define	MSR_BBL_CR_CTL		0x119
@@ -719,6 +739,10 @@
 /*
  * IA32_SPEC_CTRL and IA32_PRED_CMD MSRs are described in the Intel'
  * document 336996-001 Speculative Execution Side Channel Mitigations.
+ *
+ * AMD uses the same MSRs and bit definitions, as described in 111006-B
+ * "Indirect Branch Control Extension" and 124441 "Speculative Store Bypass
+ * Disable."
  */
 /* MSR IA32_SPEC_CTRL */
 #define	IA32_SPEC_CTRL_IBRS	0x00000001
@@ -1020,6 +1044,7 @@
 #define	MSR_FSBASE	0xc0000100	/* base address of the %fs "segment" */
 #define	MSR_GSBASE	0xc0000101	/* base address of the %gs "segment" */
 #define	MSR_KGSBASE	0xc0000102	/* base address of the kernel %gs */
+#define	MSR_TSC_AUX	0xc0000103
 #define	MSR_PERFEVSEL0	0xc0010000
 #define	MSR_PERFEVSEL1	0xc0010001
 #define	MSR_PERFEVSEL2	0xc0010002
