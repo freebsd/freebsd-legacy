@@ -1159,6 +1159,11 @@ struct nfsv3_sattr {
 	NFSATTRBM_SUPPATTREXCLCREAT)
 
 /*
+ * NFSATTRBIT_NFSV42 - Attributes only supported by NFSv4.2.
+ */
+#define	NFSATTRBIT_NFSV42_2	0
+
+/*
  * Set of attributes that the getattr vnode op needs.
  * OR of the following bits.
  * NFSATTRBIT_GETATTR0 - bits 0<->31
