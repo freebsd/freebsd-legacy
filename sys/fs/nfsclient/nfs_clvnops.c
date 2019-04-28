@@ -3501,10 +3501,8 @@ nfs_allocate(struct vop_allocate_args *ap)
 	attrflag = 0;
 	nmp = VFSTONFS(vp->v_mount);
 	if (NFSHASNFSV4(nmp) && nmp->nm_minorvers >= NFSV42_MINORVERSION) {
-printf("at alloc\n");
 		error = nfsrpc_allocate(vp, *ap->a_offset, *ap->a_len, &nfsva,
 		    &attrflag, td->td_ucred, td, NULL);
-printf("aft alloc=%d\n", error);
 		if (error == 0) {
 			*ap->a_offset += *ap->a_len;
 			*ap->a_len = 0;
@@ -3517,7 +3515,6 @@ printf("aft alloc=%d\n", error);
 	 */
 	if (error != 0)
 		error = vop_stdallocate(ap);
-printf("aft stdalloc=%d af=%d\n", error, attrflag);
 	if (attrflag != 0) {
 		ret = nfscl_loadattrcache(&vp, &nfsva, NULL, NULL, 0, 1);
 		if (error == 0 && ret != 0)
@@ -3525,7 +3522,6 @@ printf("aft stdalloc=%d af=%d\n", error, attrflag);
 	}
 	if (error != 0)
 		error = nfscl_maperr(td, error, (uid_t)0, (gid_t)0);
-printf("eo alloc=%d\n", error);
 	return (error);
 }
 
