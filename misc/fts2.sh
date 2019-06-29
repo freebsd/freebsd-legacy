@@ -175,7 +175,7 @@ tmkdir(void)
 		for (i = 0; i < 1000; i++) {
 			snprintf(name, sizeof(name), "dir.%d.%06d", pid, i);
 			if (mkdir(name, 0644) == -1)
-				err(1, "mkfifo(%s)", name);
+				err(1, "mkdir(%s)", name);
 		}
 		for (i = 0; i < 1000; i++) {
 			snprintf(name, sizeof(name), "dir.%d.%06d", pid, i);
