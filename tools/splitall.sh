@@ -33,6 +33,7 @@
 
 # Split the test list up in n parts and test one of them.
 
+[ `id -u ` -ne 0 ] && echo "Must be root!" && exit 1
 [ $# -ne 2 ] && echo "Usage $0 <part number> <parts>" && exit 1
 
 pno=$1
@@ -55,6 +56,6 @@ n=`echo $lst | wc -w`
 part=`printf "/tmp/str%02d" $((pno - 1))`
 plist=`cat $part | tr '\n' ' '`
 rm -f /tmp/str0?
-echo "./all.sh -on $plist"
+echo "./all.sh -onc $plist"
 sleep 10
-./all.sh -on $plist
+./all.sh -onc $plist
