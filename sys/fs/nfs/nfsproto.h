@@ -215,6 +215,18 @@
 #define	NFSERR_RETURNCONFLICT	10086
 #define	NFSERR_DELEGREVOKED	10087
 
+/* NFSv4.2 specific errors. */
+#define	NFSERR_PARTNERNOTSUPP	10088
+#define	NFSERR_PARTNERNOAUTH	10089
+#define	NFSERR_UNIONNOTSUPP	10090
+#define	NFSERR_OFFLOADDENIED	10091
+#define	NFSERR_WRONGLFS		10092
+#define	NFSERR_BADLABEL		10093
+#define	NFSERR_OFFLOADNOREQS	10094
+
+/* Maximum value of all the NFS error values. */
+#define	NFSERR_MAXERRVAL	NFSERR_OFFLOADNOREQS
+
 #define	NFSERR_STALEWRITEVERF	30001	/* Fake return for nfs_commit() */
 #define	NFSERR_DONTREPLY	30003	/* Don't process request */
 #define	NFSERR_RETVOID		30004	/* Return void, not error */
@@ -368,11 +380,12 @@
 /* Additional procedures for NFSv4.2. */
 #define	NFSPROC_IOADVISE	56
 #define	NFSPROC_ALLOCATE	57
+#define	NFSPROC_COPY		58
 
 /*
  * Must be defined as one higher than the last NFSv4.2 Proc# above.
  */
-#define	NFSV42_NPROCS		58
+#define	NFSV42_NPROCS		59
 
 #endif	/* NFS_V3NPROCS */
 

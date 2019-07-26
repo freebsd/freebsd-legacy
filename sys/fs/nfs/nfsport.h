@@ -396,11 +396,12 @@
 /* Additional procedures for NFSv4.2. */
 #define	NFSPROC_IOADVISE	56
 #define	NFSPROC_ALLOCATE	57
+#define	NFSPROC_COPY		58
 
 /*
  * Must be defined as one higher than the last NFSv4.2 Proc# above.
  */
-#define	NFSV42_NPROCS		58
+#define	NFSV42_NPROCS		59
 
 #endif	/* NFS_V3NPROCS */
 
@@ -429,7 +430,7 @@ struct nfsstatsv1 {
 	uint64_t	readlink_bios;
 	uint64_t	biocache_readdirs;
 	uint64_t	readdir_bios;
-	uint64_t	rpccnt[NFSV42_NPROCS + 11];
+	uint64_t	rpccnt[NFSV42_NPROCS + 10];
 	uint64_t	rpcretries;
 	uint64_t	srvrpccnt[NFSV42_NOPS + NFSV4OP_FAKENOPS];
 	uint64_t	srvrpc_errs;

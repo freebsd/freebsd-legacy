@@ -48,6 +48,7 @@ __FBSDID("$FreeBSD$");
 #include "opt_inet6.h"
 
 #include <fs/nfs/nfsport.h>
+#include <fs/nfsclient/nfs.h>
 #include <sys/sysctl.h>
 #include <sys/taskqueue.h>
 
@@ -212,6 +213,9 @@ static int nfsrpc_layoutget(struct nfsmount *, uint8_t *, int, int, uint64_t,
 static int nfsrpc_layoutgetres(struct nfsmount *, vnode_t, uint8_t *,
     int, nfsv4stateid_t *, int, uint32_t *, struct nfscllayout **,
     struct nfsclflayouthead *, int, int, int *, struct ucred *, NFSPROC_T *);
+static int nfsrpc_copyrpc(vnode_t, off_t, vnode_t, off_t, size_t *,
+    nfsv4stateid_t *, nfsv4stateid_t *, struct nfsvattr *, int *,
+    struct nfsvattr *, int *, bool, int *, struct ucred *, NFSPROC_T *);
 
 int nfs_pnfsio(task_fn_t *, void *);
 
@@ -7946,5 +7950,194 @@ out:
 			*islockedp = 1;
 	}
 	return (laystat);
+}
+
+/*
+ * nfs copy_file_range operation.
+ */
+APPLESTATIC int
+nfsrpc_copy_file_range(vnode_t invp, off_t *inoffp, vnode_t outvp,
+    off_t *outoffp, size_t *lenp, unsigned int flags, int *inattrflagp,
+    struct nfsvattr *innap, int *outattrflagp, struct nfsvattr *outnap,
+    struct ucred *cred, bool consecutive, bool *must_commitp)
+{
+	int commit, error, expireret = 0, retrycnt;
+	u_int32_t clidrev = 0;
+	struct nfsmount *nmp = VFSTONFS(vnode_mount(invp));
+	struct nfsfh *innfhp = NULL, *outnfhp = NULL;
+	nfsv4stateid_t instateid, outstateid;
+	void *inlckp, *outlckp;
+
+	if (nmp->nm_clp != NULL)
+		clidrev = nmp->nm_clp->nfsc_clientidrev;
+	innfhp = VTONFS(invp)->n_fhp;
+	outnfhp = VTONFS(outvp)->n_fhp;
+	retrycnt = 0;
+	do {
+		/* Get both stateids. */
+		inlckp = NULL;
+		nfscl_getstateid(invp, innfhp->nfh_fh, innfhp->nfh_len,
+		    NFSV4OPEN_ACCESSREAD, 0, NULL, curthread, &instateid,
+		    &inlckp);
+		outlckp = NULL;
+		nfscl_getstateid(outvp, outnfhp->nfh_fh, outnfhp->nfh_len,
+		    NFSV4OPEN_ACCESSWRITE, 0, NULL, curthread, &outstateid,
+		    &outlckp);
+
+		error = nfsrpc_copyrpc(invp, *inoffp, outvp, *outoffp, lenp,
+		    &instateid, &outstateid, innap, inattrflagp, outnap,
+		    outattrflagp, consecutive, &commit, cred, curthread);
+		if (error == 0) {
+			if (commit != NFSWRITE_FILESYNC)
+				*must_commitp = true;
+			*inoffp += *lenp;
+			*outoffp += *lenp;
+		} else if (error == NFSERR_STALESTATEID)
+			nfscl_initiate_recovery(nmp->nm_clp);
+		if (inlckp != NULL)
+			nfscl_lockderef(inlckp);
+		if (outlckp != NULL)
+			nfscl_lockderef(outlckp);
+		if (error == NFSERR_GRACE || error == NFSERR_STALESTATEID ||
+		    error == NFSERR_STALEDONTRECOVER || error == NFSERR_DELAY ||
+		    error == NFSERR_OLDSTATEID || error == NFSERR_BADSESSION) {
+			(void) nfs_catnap(PZERO, error, "nfs_cfr");
+		} else if ((error == NFSERR_EXPIRED ||
+		    error == NFSERR_BADSTATEID) && clidrev != 0) {
+			expireret = nfscl_hasexpired(nmp->nm_clp, clidrev,
+			    curthread);
+		}
+		retrycnt++;
+	} while (error == NFSERR_GRACE || error == NFSERR_DELAY ||
+	    error == NFSERR_STALESTATEID || error == NFSERR_BADSESSION ||
+	      error == NFSERR_STALEDONTRECOVER ||
+	    (error == NFSERR_OLDSTATEID && retrycnt < 20) ||
+	    ((error == NFSERR_EXPIRED || error == NFSERR_BADSTATEID) &&
+	     expireret == 0 && clidrev != 0 && retrycnt < 4));
+	if (error != 0 && (retrycnt >= 4 ||
+	    error == NFSERR_STALESTATEID || error == NFSERR_BADSESSION ||
+	      error == NFSERR_STALEDONTRECOVER))
+		error = EIO;
+	return (error);
+}
+
+/*
+ * The copy RPC.
+ */
+static int
+nfsrpc_copyrpc(vnode_t invp, off_t inoff, vnode_t outvp, off_t outoff,
+    size_t *lenp, nfsv4stateid_t *instateidp, nfsv4stateid_t *outstateidp,
+    struct nfsvattr *innap, int *inattrflagp, struct nfsvattr *outnap,
+    int *outattrflagp, bool consecutive, int *commitp, struct ucred *cred,
+    NFSPROC_T *p)
+{
+	uint32_t *tl;
+	int error;
+	struct nfsrv_descript nfsd;
+	struct nfsrv_descript *nd = &nfsd;
+	struct nfsmount *nmp;
+	nfsattrbit_t attrbits;
+	uint64_t len;
+
+	nmp = VFSTONFS(outvp->v_mount);
+	*inattrflagp = *outattrflagp = 0;
+	*commitp = NFSWRITE_UNSTABLE;
+	len = *lenp;
+	*lenp = 0;
+	NFSCL_REQSTART(nd, NFSPROC_COPY, invp);
+	NFSM_BUILD(tl, uint32_t *, NFSX_UNSIGNED);
+	*tl = txdr_unsigned(NFSV4OP_GETATTR);
+	NFSGETATTR_ATTRBIT(&attrbits);
+	nfsrv_putattrbit(nd, &attrbits);
+	NFSM_BUILD(tl, uint32_t *, NFSX_UNSIGNED);
+	*tl = txdr_unsigned(NFSV4OP_PUTFH);
+	nfsm_fhtom(nd, VTONFS(outvp)->n_fhp->nfh_fh,
+	    VTONFS(outvp)->n_fhp->nfh_len, 0);
+	NFSM_BUILD(tl, uint32_t *, NFSX_UNSIGNED);
+	*tl = txdr_unsigned(NFSV4OP_COPY);
+	nfsm_stateidtom(nd, instateidp, NFSSTATEID_PUTSTATEID);
+	nfsm_stateidtom(nd, outstateidp, NFSSTATEID_PUTSTATEID);
+	NFSM_BUILD(tl, uint32_t *, 3 * NFSX_HYPER + 4 * NFSX_UNSIGNED);
+	txdr_hyper(inoff, tl); tl += 2;
+	txdr_hyper(outoff, tl); tl += 2;
+	txdr_hyper(len, tl); tl += 2;
+	if (consecutive)
+		*tl++ = newnfs_true;
+	else
+		*tl++ = newnfs_false;
+	*tl++ = newnfs_true;
+	*tl++ = 0;
+	*tl = txdr_unsigned(NFSV4OP_GETATTR);
+	NFSWRITEGETATTR_ATTRBIT(&attrbits);
+	nfsrv_putattrbit(nd, &attrbits);
+	error = nfscl_request(nd, invp, p, cred, NULL);
+	if (error != 0)
+		return (error);
+	if ((nd->nd_flag & ND_NOMOREDATA) == 0) {
+		/* Get the input file's attributes. */
+		NFSM_DISSECT(tl, uint32_t *, 2 * NFSX_UNSIGNED);
+		if (*(tl + 1) == 0) {
+			error = nfsm_loadattr(nd, innap);
+			if (error != 0)
+				goto nfsmout;
+			*inattrflagp = 1;
+		} else
+			nd->nd_flag |= ND_NOMOREDATA;
+	}
+	/* Skip over return stat for PutFH. */
+	if ((nd->nd_flag & ND_NOMOREDATA) == 0) {
+		NFSM_DISSECT(tl, uint32_t *, 2 * NFSX_UNSIGNED);
+		if (*++tl != 0)
+			nd->nd_flag |= ND_NOMOREDATA;
+	}
+	/* Skip over return stat for Copy. */
+	if ((nd->nd_flag & ND_NOMOREDATA) == 0)
+		NFSM_DISSECT(tl, uint32_t *, 2 * NFSX_UNSIGNED);
+	if (nd->nd_repstat == 0) {
+		NFSM_DISSECT(tl, uint32_t *, NFSX_UNSIGNED);
+		if (*tl != 0) {
+			/* There should be no callback ids. */
+			error = NFSERR_BADXDR;
+			goto nfsmout;
+		}
+		NFSM_DISSECT(tl, uint32_t *, NFSX_HYPER + 3 * NFSX_UNSIGNED +
+		    NFSX_VERF);
+		len = fxdr_hyper(tl); tl += 2;
+		*commitp = fxdr_unsigned(int, *tl++);
+		NFSLOCKMNT(nmp);
+		if (!NFSHASWRITEVERF(nmp)) {
+			NFSBCOPY(tl, nmp->nm_verf, NFSX_VERF);
+			NFSSETWRITEVERF(nmp);
+		}
+		NFSUNLOCKMNT(nmp);
+		tl += (NFSX_VERF / NFSX_UNSIGNED);
+		if (nd->nd_repstat == 0 && *++tl != newnfs_true)
+			/* Must be a synchronous copy. */
+			nd->nd_repstat = NFSERR_NOTSUPP;
+		NFSM_DISSECT(tl, uint32_t *, 2 * NFSX_UNSIGNED);
+		error = nfsm_loadattr(nd, outnap);
+		if (error == 0)
+			*outattrflagp = NFS_LATTR_NOSHRINK;
+		if (nd->nd_repstat == 0)
+			*lenp = len;
+	} else if (nd->nd_repstat == NFSERR_OFFLOADNOREQS) {
+		/*
+		 * For the case where consecutive is not supported, but
+		 * synchronous is supported, we can try consecutive == false
+		 * by returning this error.  Otherwise, return NFSERR_NOTSUPP,
+		 * since Copy cannot be done.
+		 */
+		if ((nd->nd_flag & ND_NOMOREDATA) == 0) {
+			NFSM_DISSECT(tl, uint32_t *, 2 * NFSX_UNSIGNED);
+			if (!consecutive || *++tl == newnfs_false)
+				nd->nd_repstat = NFSERR_NOTSUPP;
+		} else
+			nd->nd_repstat = NFSERR_BADXDR;
+	}
+	if (error == 0)
+		error = nd->nd_repstat;
+nfsmout:
+	mbuf_freem(nd->nd_mrep);
+	return (error);
 }
 

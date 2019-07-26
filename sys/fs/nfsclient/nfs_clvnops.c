@@ -144,6 +144,7 @@ static vop_getacl_t nfs_getacl;
 static vop_setacl_t nfs_setacl;
 static vop_advise_t nfs_advise;
 static vop_allocate_t nfs_allocate;
+static vop_copy_file_range_t nfs_copy_file_range;
 
 /*
  * Global vfs data structures for nfs
@@ -183,6 +184,7 @@ static struct vop_vector newnfs_vnodeops_nosig = {
 	.vop_setacl =		nfs_setacl,
 	.vop_advise =		nfs_advise,
 	.vop_allocate =		nfs_allocate,
+	.vop_copy_file_range =	nfs_copy_file_range,
 };
 
 static int
@@ -3509,6 +3511,162 @@ nfs_allocate(struct vop_allocate_args *ap)
 	}
 	if (error != 0)
 		error = nfscl_maperr(td, error, (uid_t)0, (gid_t)0);
+	return (error);
+}
+
+/*
+ * nfs copy_file_range call
+ */
+static int
+nfs_copy_file_range(struct vop_copy_file_range_args *ap)
+{
+	struct vnode *invp = ap->a_invp;
+	struct vnode *outvp = ap->a_outvp;
+	struct mount *mp;
+	struct nfsvattr innfsva, outnfsva;
+	struct uio io;
+	struct nfsmount *nmp;
+	size_t len, len2;
+	int error, inattrflag, outattrflag, ret;
+	off_t inoff, outoff;
+	bool consecutive, must_commit, tryoutcred;
+
+	nmp = VFSTONFS(invp->v_mount);
+	mtx_lock(&nmp->nm_mtx);
+	if (!NFSHASNFSV4(nmp) || nmp->nm_minorvers < NFSV42_MINORVERSION ||
+	    (nmp->nm_privflag & NFSMNTP_NOCOPY) != 0) {
+		mtx_unlock(&nmp->nm_mtx);
+		error = vn_generic_copy_file_range(ap->a_invp, ap->a_inoffp,
+		    ap->a_outvp, ap->a_outoffp, ap->a_lenp, ap->a_flags,
+		    ap->a_incred, ap->a_outcred, ap->a_fsizetd);
+		return (error);
+	}
+	mtx_unlock(&nmp->nm_mtx);
+
+	/* Lock both vnodes, avoiding risk of deadlock. */
+	do {
+		mp = NULL;
+		error = vn_start_write(outvp, &mp, V_WAIT);
+		if (error == 0) {
+			error = vn_lock(outvp, LK_EXCLUSIVE);
+			if (error == 0) {
+				error = vn_lock(invp, LK_SHARED | LK_NOWAIT);
+				if (error == 0)
+					break;
+				VOP_UNLOCK(outvp, 0);
+				if (mp != NULL)
+					vn_finished_write(mp);
+				mp = NULL;
+				error = vn_lock(invp, LK_SHARED);
+				if (error == 0)
+					VOP_UNLOCK(invp, 0);
+			}
+		}
+		if (mp != NULL)
+			vn_finished_write(mp);
+	} while (error == 0);
+	if (error != 0)
+		return (error);
+
+	/*
+	 * Do the vn_rlimit_fsize() check.  Should this be above the VOP layer?
+	 */
+	io.uio_offset = *ap->a_outoffp;
+	io.uio_resid = *ap->a_lenp;
+	error = vn_rlimit_fsize(outvp, &io, ap->a_fsizetd);
+	/* Do the actual NFSv4.2 RPC. */
+	len = *ap->a_lenp;
+	mtx_lock(&nmp->nm_mtx);
+	if ((nmp->nm_privflag & NFSMNTP_NOCONSECUTIVE) == 0)
+		consecutive = true;
+	else
+		consecutive = false;
+	mtx_unlock(&nmp->nm_mtx);
+	inoff = *ap->a_inoffp;
+	outoff = *ap->a_outoffp;
+	tryoutcred = true;
+	while (len > 0 && error == 0) {
+		inattrflag = outattrflag = 0;
+		must_commit = false;
+		len2 = len;
+		if (tryoutcred)
+			error = nfsrpc_copy_file_range(invp, ap->a_inoffp,
+			    outvp, ap->a_outoffp, &len2, ap->a_flags,
+			    &inattrflag, &innfsva, &outattrflag, &outnfsva,
+			    ap->a_outcred, consecutive, &must_commit);
+		else
+			error = nfsrpc_copy_file_range(invp, ap->a_inoffp,
+			    outvp, ap->a_outoffp, &len2, ap->a_flags,
+			    &inattrflag, &innfsva, &outattrflag, &outnfsva,
+			    ap->a_incred, consecutive, &must_commit);
+		if (inattrflag != 0) {
+			ret = nfscl_loadattrcache(&invp, &innfsva, NULL, NULL,
+			    0, 1);
+			if (error == 0 && ret != 0)
+				error = ret;
+		}
+		if (outattrflag != 0) {
+			ret = nfscl_loadattrcache(&outvp, &outnfsva, NULL, NULL,
+			    1, 1);
+			if (error == 0 && ret != 0)
+				error = ret;
+		}
+		if (error == 0) {
+			if (consecutive == false) {
+				if (len2 == len) {
+					mtx_lock(&nmp->nm_mtx);
+					nmp->nm_privflag |=
+					    NFSMNTP_NOCONSECUTIVE;
+					mtx_unlock(&nmp->nm_mtx);
+				} else
+					error = NFSERR_OFFLOADNOREQS;
+			}
+			len -= len2;
+		} else if (error == NFSERR_OFFLOADNOREQS && consecutive) {
+			/*
+			 * Try consecutive == false, which is ok only if all
+			 * bytes are copied.
+			 */
+			consecutive = false;
+			error = 0;
+		} else if (error == NFSERR_ACCES && tryoutcred) {
+			/* Try again with incred. */
+			tryoutcred = false;
+			error = 0;
+		}
+	}
+	if (must_commit && error == 0)
+		error = ncl_commit(outvp, outoff, *ap->a_lenp, ap->a_outcred,
+		    curthread);
+	VOP_UNLOCK(invp, 0);
+	VOP_UNLOCK(outvp, 0);
+	if (mp != NULL)
+		vn_finished_write(mp);
+	if (error == NFSERR_NOTSUPP || error == NFSERR_OFFLOADNOREQS ||
+	    error == NFSERR_ACCES) {
+		/*
+		 * Unlike the NFSv4.2 Copy, vn_generic_copy_file_range() can
+		 * use a_incred for the read and a_outcred for the write, so
+		 * try this for NFSERR_ACCES failures for the Copy.
+		 * For NFSERR_NOTSUPP and NFSERR_OFFLOADNOREQS, the Copy can
+		 * never succeed, so disable it.
+		 */
+		if (error != NFSERR_ACCES) {
+			/* Can never do Copy on this mount. */
+			mtx_lock(&nmp->nm_mtx);
+			nmp->nm_privflag |= NFSMNTP_NOCOPY;
+			mtx_unlock(&nmp->nm_mtx);
+		}
+		*ap->a_inoffp = inoff;
+		*ap->a_outoffp = outoff;
+		error = vn_generic_copy_file_range(ap->a_invp, ap->a_inoffp,
+		    ap->a_outvp, ap->a_outoffp, ap->a_lenp, ap->a_flags,
+		    ap->a_incred, ap->a_outcred, ap->a_fsizetd);
+	} else if (error != 0)
+		*ap->a_lenp = 0;
+
+	if (error != 0)
+		error = nfscl_maperr(curthread, error, (uid_t)0, (gid_t)0);
 	return (error);
 }
 

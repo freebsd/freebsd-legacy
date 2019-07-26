@@ -74,6 +74,9 @@ SYSCTL_INT(_vfs_nfsd, OID_AUTO, async, CTLFLAG_RW, &nfs_async, 0,
 extern int	nfsrv_doflexfile;
 SYSCTL_INT(_vfs_nfsd, OID_AUTO, default_flexfile, CTLFLAG_RW,
     &nfsrv_doflexfile, 0, "Make Flex File Layout the default for pNFS");
+static int	nfsrv_maxcopyrange = 10 * 1024 * 1024;
+SYSCTL_INT(_vfs_nfsd, OID_AUTO, maxcopyrange, CTLFLAG_RW,
+    &nfsrv_maxcopyrange, 0, "Max size of a Copy so RPC times reasonable");
 
 /*
  * This list defines the GSS mechanisms supported.
@@ -5179,6 +5182,214 @@ nfsrvd_allocate(struct nfsrv_descript *nd, __unused int isdgram,
 	return (0);
 nfsmout:
 	vput(vp);
+	NFSEXITCODE2(error, nd);
+	return (error);
+}
+
+/*
+ * nfs copy service
+ */
+APPLESTATIC int
+nfsrvd_copy_file_range(struct nfsrv_descript *nd, int isdgram,
+    vnode_t vp, vnode_t tovp, struct nfsexstuff *exp, struct nfsexstuff *toexp)
+{
+	uint32_t *tl;
+	struct nfsvattr at;
+	int cnt, error = 0, ret;
+	off_t inoff, outoff;
+	uint64_t len;
+	size_t xfer;
+	struct nfsstate inst, outst, *instp = &inst, *outstp = &outst;
+	struct nfslock inlo, outlo, *inlop = &inlo, *outlop = &outlo;
+	nfsquad_t clientid;
+	nfsv4stateid_t stateid;
+	nfsattrbit_t attrbits;
+	void *rl_rcookie, *rl_wcookie;
+
+	rl_rcookie = rl_wcookie = NULL;
+	if (nfs_rootfhset == 0 || nfsd_checkrootexp(nd) != 0) {
+		nd->nd_repstat = NFSERR_WRONGSEC;
+		goto nfsmout;
+	}
+	NFSM_DISSECT(tl, uint32_t *, 2 * NFSX_STATEID + 3 * NFSX_HYPER +
+	    3 * NFSX_UNSIGNED);
+	instp->ls_flags = (NFSLCK_CHECK | NFSLCK_READACCESS);
+	inlop->lo_flags = NFSLCK_READ;
+	instp->ls_ownerlen = 0;
+	instp->ls_op = NULL;
+	instp->ls_uid = nd->nd_cred->cr_uid;
+	instp->ls_stateid.seqid = fxdr_unsigned(u_int32_t, *tl++);
+	clientid.lval[0] = instp->ls_stateid.other[0] = *tl++;
+	clientid.lval[1] = instp->ls_stateid.other[1] = *tl++;
+	if ((nd->nd_flag & ND_IMPLIEDCLID) != 0)
+		clientid.qval = nd->nd_clientid.qval;
+	instp->ls_stateid.other[2] = *tl++;
+	outstp->ls_flags = (NFSLCK_CHECK | NFSLCK_WRITEACCESS);
+	outlop->lo_flags = NFSLCK_WRITE;
+	outstp->ls_ownerlen = 0;
+	outstp->ls_op = NULL;
+	outstp->ls_uid = nd->nd_cred->cr_uid;
+	outstp->ls_stateid.seqid = fxdr_unsigned(u_int32_t, *tl++);
+	outstp->ls_stateid.other[0] = *tl++;
+	outstp->ls_stateid.other[1] = *tl++;
+	outstp->ls_stateid.other[2] = *tl++;
+	inoff = fxdr_hyper(tl); tl += 2;
+	inlop->lo_first = inoff;
+	outoff = fxdr_hyper(tl); tl += 2;
+	outlop->lo_first = outoff;
+	len = fxdr_hyper(tl); tl += 2;
+	if (len == 0) {
+		/* len == 0 means to EOF. */
+		inlop->lo_end = OFF_MAX;
+		outlop->lo_end = OFF_MAX;
+	} else {
+		inlop->lo_end = inlop->lo_first + len;
+		outlop->lo_end = outlop->lo_first + len;
+	}
+
+	/* Only supports synchronous Copy. */
+	if (*++tl != newnfs_true) {
+		nd->nd_repstat = NFSERR_OFFLOADNOREQS;
+		NFSM_BUILD(tl, uint32_t *, 2 * NFSX_UNSIGNED);
+		*tl++ = newnfs_true;
+		*tl = newnfs_true;
+		goto nfsmout;
+	}
+	cnt = fxdr_unsigned(int, *++tl);
+	if ((nd->nd_flag & ND_DSSERVER) != 0 || cnt != 0)
+		nd->nd_repstat = NFSERR_NOTSUPP;
+	if (nd->nd_repstat == 0 && (inoff > OFF_MAX || outoff > OFF_MAX ||
+	    inlop->lo_end > OFF_MAX || outlop->lo_end > OFF_MAX ||
+	    inlop->lo_end < inlop->lo_first || outlop->lo_end <
+	    outlop->lo_first))
+		nd->nd_repstat = NFSERR_INVAL;
+
+	if (nd->nd_repstat == 0 && vnode_vtype(vp) != VREG)
+		nd->nd_repstat = NFSERR_WRONGTYPE;
+
+	/* Check permissions for the input file. */
+	NFSZERO_ATTRBIT(&attrbits);
+	NFSSETBIT_ATTRBIT(&attrbits, NFSATTRBIT_OWNER);
+	ret = nfsvno_getattr(vp, &at, nd, curthread, 1, &attrbits);
+	if (nd->nd_repstat == 0)
+		nd->nd_repstat = ret;
+	if (nd->nd_repstat == 0 && (at.na_uid != nd->nd_cred->cr_uid ||
+	     NFSVNO_EXSTRICTACCESS(exp)))
+		nd->nd_repstat = nfsvno_accchk(vp, VREAD, nd->nd_cred, exp,
+		    curthread, NFSACCCHK_ALLOWOWNER, NFSACCCHK_VPISLOCKED,
+		    NULL);
+	if (nd->nd_repstat == 0)
+		nd->nd_repstat = nfsrv_lockctrl(vp, &instp, &inlop, NULL,
+		    clientid, &stateid, exp, nd, curthread);
+	NFSVOPUNLOCK(vp, 0);
+	if (nd->nd_repstat != 0)
+		goto out;
+
+	error = NFSVOPLOCK(tovp, LK_SHARED);
+	if (error != 0)
+		goto out;
+	if (vnode_vtype(tovp) != VREG)
+		nd->nd_repstat = NFSERR_WRONGTYPE;
+
+	/* For the output file, we only need the Owner attribute. */
+	ret = nfsvno_getattr(tovp, &at, nd, curthread, 1, &attrbits);
+	if (nd->nd_repstat == 0)
+		nd->nd_repstat = ret;
+	if (nd->nd_repstat == 0 && (at.na_uid != nd->nd_cred->cr_uid ||
+	     NFSVNO_EXSTRICTACCESS(exp)))
+		nd->nd_repstat = nfsvno_accchk(tovp, VWRITE, nd->nd_cred, toexp,
+		    curthread, NFSACCCHK_ALLOWOWNER, NFSACCCHK_VPISLOCKED,
+		    NULL);
+	if (nd->nd_repstat == 0)
+		nd->nd_repstat = nfsrv_lockctrl(tovp, &outstp, &outlop, NULL,
+		    clientid, &stateid, toexp, nd, curthread);
+	NFSVOPUNLOCK(tovp, 0);
+
+	/* Range lock the byte ranges for both invp and outvp. */
+	if (nd->nd_repstat == 0) {
+		for (;;) {
+			if (len == 0) {
+				rl_wcookie = vn_rangelock_wlock(tovp, outoff,
+				    OFF_MAX);
+				rl_rcookie = vn_rangelock_tryrlock(vp, inoff,
+				    OFF_MAX);
+			} else {
+				rl_wcookie = vn_rangelock_wlock(tovp, outoff,
+				    outoff + len);
+				rl_rcookie = vn_rangelock_tryrlock(vp, inoff,
+				    inoff + len);
+			}
+			if (rl_rcookie != NULL)
+				break;
+			vn_rangelock_unlock(tovp, rl_wcookie);
+			if (len == 0)
+				rl_rcookie = vn_rangelock_rlock(vp, inoff,
+				    OFF_MAX);
+			else
+				rl_rcookie = vn_rangelock_rlock(vp, inoff,
+				    inoff + len);
+			vn_rangelock_unlock(vp, rl_rcookie);
+		}
+
+		/*
+		 * If len == 0, set it based on invp's size.  Since it is range
+		 * locked, it should not change in size.
+		 */
+		if (len == 0) {
+			error = NFSVOPLOCK(vp, LK_SHARED);
+			if (error == 0) {
+				ret = nfsvno_getattr(vp, &at, nd, curthread, 1,
+				    NULL);
+				/* If offset past EOF, just leave len == 0. */
+				if (ret == 0 && at.na_size > inoff)
+					len = at.na_size - inoff;
+				NFSVOPUNLOCK(vp, 0);
+				if (ret != 0 && nd->nd_repstat == 0)
+					nd->nd_repstat = ret;
+			} else if (nd->nd_repstat == 0)
+				nd->nd_repstat = error;
+		}
+	}
+
+	/*
+	 * Do the actual copy to an upper limit of vfs.nfsd.maxcopyrange.
+	 * This limit is applied to ensure that the RPC replies in a
+	 * reasonable time.
+	 */
+	if (len > nfsrv_maxcopyrange)
+		xfer = nfsrv_maxcopyrange;
+	else
+		xfer = len;
+	nd->nd_repstat = vn_copy_file_range(vp, &inoff, tovp, &outoff, &xfer, 0,
+	    nd->nd_cred, nd->nd_cred, NULL);
+	if (nd->nd_repstat == 0)
+		len = xfer;
+
+	/* Unlock the ranges. */
+	if (rl_rcookie != NULL)
+		vn_rangelock_unlock(vp, rl_rcookie);
+	if (rl_wcookie != NULL)
+		vn_rangelock_unlock(tovp, rl_wcookie);
+
+	if (nd->nd_repstat == 0) {
+		NFSM_BUILD(tl, uint32_t *, 4 * NFSX_UNSIGNED + NFSX_HYPER +
+		    NFSX_VERF);
+		*tl++ = txdr_unsigned(0);	/* No callback ids. */
+		txdr_hyper(len, tl); tl += 2;
+		*tl++ = txdr_unsigned(NFSWRITE_UNSTABLE);
+		*tl++ = txdr_unsigned(nfsboottime.tv_sec);
+		*tl++ = txdr_unsigned(nfsboottime.tv_usec);
+		*tl++ = newnfs_true;
+		*tl = newnfs_true;
+	}
+out:
+	vrele(vp);
+	vrele(tovp);
+	NFSEXITCODE2(error, nd);
+	return (error);
+nfsmout:
+	vput(vp);
+	vrele(tovp);
 	NFSEXITCODE2(error, nd);
 	return (error);
 }

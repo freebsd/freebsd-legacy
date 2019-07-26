@@ -1544,7 +1544,7 @@ nfsrv_isannfserr(u_int32_t errval)
 
 	if (errval == NFSERR_OK)
 		return (errval);
-	if (errval >= NFSERR_BADHANDLE && errval <= NFSERR_DELEGREVOKED)
+	if (errval >= NFSERR_BADHANDLE && errval <= NFSERR_MAXERRVAL)
 		return (errval);
 	if (errval > 0 && errval <= NFSERR_REMOTE)
 		return (nfsrv_v2errmap[errval - 1]);
