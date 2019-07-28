@@ -5211,6 +5211,14 @@ nfsrvd_copy_file_range(struct nfsrv_descript *nd, int isdgram,
 		nd->nd_repstat = NFSERR_WRONGSEC;
 		goto nfsmout;
 	}
+	if (nfsrv_devidcnt > 0) {
+		/*
+		 * For a pNFS server, reply NFSERR_NOTSUPP so that the client
+		 * will do the copy via I/O on the DS(s).
+		 */
+		nd->nd_repstat = NFSERR_NOTSUPP;
+		goto nfsmout;
+	}
 	NFSM_DISSECT(tl, uint32_t *, 2 * NFSX_STATEID + 3 * NFSX_HYPER +
 	    3 * NFSX_UNSIGNED);
 	instp->ls_flags = (NFSLCK_CHECK | NFSLCK_READACCESS);
