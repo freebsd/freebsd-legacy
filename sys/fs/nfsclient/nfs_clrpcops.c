@@ -8108,6 +8108,9 @@ nfsrpc_copyrpc(vnode_t invp, off_t inoff, vnode_t outvp, off_t outoff,
 		if (!NFSHASWRITEVERF(nmp)) {
 			NFSBCOPY(tl, nmp->nm_verf, NFSX_VERF);
 			NFSSETWRITEVERF(nmp);
+	    	} else if (NFSBCMP(tl, nmp->nm_verf, NFSX_VERF)) {
+			NFSBCOPY(tl, nmp->nm_verf, NFSX_VERF);
+			nd->nd_repstat = NFSERR_STALEWRITEVERF;
 		}
 		NFSUNLOCKMNT(nmp);
 		tl += (NFSX_VERF / NFSX_UNSIGNED);

@@ -3574,6 +3574,7 @@ nfs_copy_file_range(struct vop_copy_file_range_args *ap)
 	io.uio_offset = *ap->a_outoffp;
 	io.uio_resid = *ap->a_lenp;
 	error = vn_rlimit_fsize(outvp, &io, ap->a_fsizetd);
+
 	/* Do the actual NFSv4.2 RPC. */
 	len = *ap->a_lenp;
 	mtx_lock(&nmp->nm_mtx);
@@ -3585,9 +3586,9 @@ nfs_copy_file_range(struct vop_copy_file_range_args *ap)
 	inoff = *ap->a_inoffp;
 	outoff = *ap->a_outoffp;
 	tryoutcred = true;
+	must_commit = false;
 	while (len > 0 && error == 0) {
 		inattrflag = outattrflag = 0;
-		must_commit = false;
 		len2 = len;
 		if (tryoutcred)
 			error = nfsrpc_copy_file_range(invp, ap->a_inoffp,
@@ -3622,6 +3623,9 @@ nfs_copy_file_range(struct vop_copy_file_range_args *ap)
 					error = NFSERR_OFFLOADNOREQS;
 			}
 			len -= len2;
+			if (len == 0 && must_commit && error == 0)
+				error = ncl_commit(outvp, outoff, *ap->a_lenp,
+				    ap->a_outcred, curthread);
 		} else if (error == NFSERR_OFFLOADNOREQS && consecutive) {
 			/*
 			 * Try consecutive == false, which is ok only if all
@@ -3634,10 +3638,17 @@ nfs_copy_file_range(struct vop_copy_file_range_args *ap)
 			tryoutcred = false;
 			error = 0;
 		}
+		if (error == NFSERR_STALEWRITEVERF) {
+			/*
+			 * Server rebooted, so do it all again.
+			 */
+			*ap->a_inoffp = inoff;
+			*ap->a_outoffp = outoff;
+			len = *ap->a_lenp;
+			must_commit = false;
+			error = 0;
+		}
 	}
-	if (must_commit && error == 0)
-		error = ncl_commit(outvp, outoff, *ap->a_lenp, ap->a_outcred,
-		    curthread);
 	VOP_UNLOCK(invp, 0);
 	VOP_UNLOCK(outvp, 0);
 	if (mp != NULL)
