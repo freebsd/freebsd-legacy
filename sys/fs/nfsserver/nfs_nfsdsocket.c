@@ -206,7 +206,7 @@ int (*nfsrv4_ops0[NFSV42_NOPS])(struct nfsrv_descript *,
 	nfsrvd_notsupp,
 	nfsrvd_notsupp,
 	nfsrvd_notsupp,
-	nfsrvd_notsupp,
+	nfsrvd_seek,
 	nfsrvd_notsupp,
 	nfsrvd_notsupp,
 };

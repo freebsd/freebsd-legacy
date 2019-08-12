@@ -216,6 +216,8 @@ static int nfsrpc_layoutgetres(struct nfsmount *, vnode_t, uint8_t *,
 static int nfsrpc_copyrpc(vnode_t, off_t, vnode_t, off_t, size_t *,
     nfsv4stateid_t *, nfsv4stateid_t *, struct nfsvattr *, int *,
     struct nfsvattr *, int *, bool, int *, struct ucred *, NFSPROC_T *);
+static int nfsrpc_seekrpc(vnode_t, off_t *, nfsv4stateid_t *, bool *,
+    int, struct nfsvattr *, int *, struct ucred *);
 
 int nfs_pnfsio(task_fn_t *, void *);
 
@@ -8139,6 +8141,100 @@ nfsrpc_copyrpc(vnode_t invp, off_t inoff, vnode_t outvp, off_t outoff,
 	}
 	if (error == 0)
 		error = nd->nd_repstat;
+nfsmout:
+	mbuf_freem(nd->nd_mrep);
+	return (error);
+}
+
+/*
+ * Seek operation.
+ */
+APPLESTATIC int
+nfsrpc_seek(vnode_t vp, off_t *offp, bool *eofp, int content,
+    struct ucred *cred, struct nfsvattr *nap, int *attrflagp)
+{
+	int error, expireret = 0, retrycnt;
+	u_int32_t clidrev = 0;
+	struct nfsmount *nmp = VFSTONFS(vnode_mount(vp));
+	struct nfsnode *np = VTONFS(vp);
+	struct nfsfh *nfhp = NULL;
+	nfsv4stateid_t stateid;
+	void *lckp;
+
+	if (nmp->nm_clp != NULL)
+		clidrev = nmp->nm_clp->nfsc_clientidrev;
+	nfhp = np->n_fhp;
+	retrycnt = 0;
+	do {
+		lckp = NULL;
+		nfscl_getstateid(vp, nfhp->nfh_fh, nfhp->nfh_len,
+		    NFSV4OPEN_ACCESSREAD, 0, cred, curthread, &stateid, &lckp);
+		error = nfsrpc_seekrpc(vp, offp, &stateid, eofp, content,
+		    nap, attrflagp, cred);
+		if (error == NFSERR_STALESTATEID)
+			nfscl_initiate_recovery(nmp->nm_clp);
+		if (lckp != NULL)
+			nfscl_lockderef(lckp);
+		if (error == NFSERR_GRACE || error == NFSERR_STALESTATEID ||
+		    error == NFSERR_STALEDONTRECOVER || error == NFSERR_DELAY ||
+		    error == NFSERR_OLDSTATEID || error == NFSERR_BADSESSION) {
+			(void) nfs_catnap(PZERO, error, "nfs_seek");
+		} else if ((error == NFSERR_EXPIRED ||
+		    error == NFSERR_BADSTATEID) && clidrev != 0) {
+			expireret = nfscl_hasexpired(nmp->nm_clp, clidrev,
+			    curthread);
+		}
+		retrycnt++;
+	} while (error == NFSERR_GRACE || error == NFSERR_STALESTATEID ||
+	    error == NFSERR_STALEDONTRECOVER || error == NFSERR_DELAY ||
+	    error == NFSERR_BADSESSION ||
+	    (error == NFSERR_OLDSTATEID && retrycnt < 20) ||
+	    ((error == NFSERR_EXPIRED || error == NFSERR_BADSTATEID) &&
+	     expireret == 0 && clidrev != 0 && retrycnt < 4) ||
+	    (error == NFSERR_OPENMODE && retrycnt < 4));
+	if (error && retrycnt >= 4)
+		error = EIO;
+	return (error);
+}
+
+/*
+ * The seek RPC.
+ */
+static int
+nfsrpc_seekrpc(vnode_t vp, off_t *offp, nfsv4stateid_t *stateidp, bool *eofp,
+    int content, struct nfsvattr *nap, int *attrflagp, struct ucred *cred)
+{
+	uint32_t *tl;
+	int error;
+	struct nfsrv_descript nfsd;
+	struct nfsrv_descript *nd = &nfsd;
+	nfsattrbit_t attrbits;
+
+	*attrflagp = 0;
+	NFSCL_REQSTART(nd, NFSPROC_SEEK, vp);
+	nfsm_stateidtom(nd, stateidp, NFSSTATEID_PUTSTATEID);
+	NFSM_BUILD(tl, uint32_t *, NFSX_HYPER + 2 * NFSX_UNSIGNED);
+	txdr_hyper(*offp, tl); tl += 2;
+	*tl++ = txdr_unsigned(content);
+	*tl = txdr_unsigned(NFSV4OP_GETATTR);
+	NFSGETATTR_ATTRBIT(&attrbits);
+	nfsrv_putattrbit(nd, &attrbits);
+	error = nfscl_request(nd, vp, curthread, cred, NULL);
+	if (error != 0)
+		return (error);
+	if (nd->nd_repstat == 0) {
+		NFSM_DISSECT(tl, uint32_t *, 3 * NFSX_UNSIGNED + NFSX_HYPER);
+		if (*tl++ == newnfs_true)
+			*eofp = true;
+		else
+			*eofp = false;
+		*offp = fxdr_hyper(tl);
+		/* Just skip over Getattr op status. */
+		error = nfsm_loadattr(nd, nap);
+		if (error == 0)
+			*attrflagp = 1;
+	}
+	error = nd->nd_repstat;
 nfsmout:
 	mbuf_freem(nd->nd_mrep);
 	return (error);

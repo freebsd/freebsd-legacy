@@ -381,11 +381,12 @@
 #define	NFSPROC_IOADVISE	56
 #define	NFSPROC_ALLOCATE	57
 #define	NFSPROC_COPY		58
+#define	NFSPROC_SEEK		59
 
 /*
  * Must be defined as one higher than the last NFSv4.2 Proc# above.
  */
-#define	NFSV42_NPROCS		59
+#define	NFSV42_NPROCS		60
 
 #endif	/* NFS_V3NPROCS */
 
@@ -1477,5 +1478,9 @@ typedef struct nfsv4stateid nfsv4stateid_t;
 #define	NFSV4LAYOUTRET_FILE	1
 #define	NFSV4LAYOUTRET_FSID	2
 #define	NFSV4LAYOUTRET_ALL	3
+
+/* Seek Contents. */
+#define	NFSV4CONTENT_DATA	0
+#define	NFSV4CONTENT_HOLE	1
 
 #endif	/* _NFS_NFSPROTO_H_ */

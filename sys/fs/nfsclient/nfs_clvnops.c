@@ -51,6 +51,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/mount.h>
 #include <sys/bio.h>
 #include <sys/buf.h>
+#include <sys/filio.h>
 #include <sys/jail.h>
 #include <sys/malloc.h>
 #include <sys/mbuf.h>
@@ -145,6 +146,7 @@ static vop_setacl_t nfs_setacl;
 static vop_advise_t nfs_advise;
 static vop_allocate_t nfs_allocate;
 static vop_copy_file_range_t nfs_copy_file_range;
+static vop_ioctl_t nfs_ioctl;
 
 /*
  * Global vfs data structures for nfs
@@ -185,6 +187,7 @@ static struct vop_vector newnfs_vnodeops_nosig = {
 	.vop_advise =		nfs_advise,
 	.vop_allocate =		nfs_allocate,
 	.vop_copy_file_range =	nfs_copy_file_range,
+	.vop_ioctl =		nfs_ioctl,
 };
 
 static int
@@ -3678,6 +3681,67 @@ nfs_copy_file_range(struct vop_copy_file_range_args *ap)
 
 	if (error != 0)
 		error = nfscl_maperr(curthread, error, (uid_t)0, (gid_t)0);
+	return (error);
+}
+
+/*
+ * nfs ioctl call
+ */
+static int
+nfs_ioctl(struct vop_ioctl_args *ap)
+{
+	struct vnode *vp = ap->a_vp;
+	struct nfsvattr nfsva;
+	struct nfsmount *nmp;
+	int attrflag, content, error, ret;
+	bool eof;
+
+	if (vp->v_type != VREG)
+		return (ENOTTY);
+	nmp = VFSTONFS(vp->v_mount);
+	if (!NFSHASNFSV4(nmp) || nmp->nm_minorvers < NFSV42_MINORVERSION) {
+#ifdef notyet
+		error = vop_stdioctl(ap);
+#else
+		error = ENOTTY;
+#endif
+		return (error);
+	}
+
+	error = vn_lock(vp, LK_SHARED);
+	if (error != 0)
+		return (EBADF);
+
+	/* Do the actual NFSv4.2 RPC. */
+	switch (ap->a_command) {
+	case FIOSEEKDATA:
+		content = NFSV4CONTENT_DATA;
+		break;
+	case FIOSEEKHOLE:
+		content = NFSV4CONTENT_HOLE;
+		break;
+	default:
+		return (ENOTTY);
+	}
+	attrflag = 0;
+	if (*((off_t *)ap->a_data) >= VTONFS(vp)->n_size)
+		error = ENXIO;
+	else {
+		error = nfsrpc_seek(vp, (off_t *)ap->a_data, &eof, content,
+		    ap->a_cred, &nfsva, &attrflag);
+		/* If at eof for FIOSEEKDATA, return ENXIO. */
+		if (eof && error == 0 && content == NFSV4CONTENT_DATA)
+			error = ENXIO;
+	}
+	if (attrflag != 0) {
+		ret = nfscl_loadattrcache(&vp, &nfsva, NULL, NULL, 0, 1);
+		if (error == 0 && ret != 0)
+			error = ret;
+	}
+	NFSVOPUNLOCK(vp, 0);
+
+	if (error != 0)
+		error = ENXIO;
 	return (error);
 }
 

@@ -50,6 +50,7 @@ __FBSDID("$FreeBSD$");
 
 #ifndef APPLEKEXT
 #include <fs/nfs/nfsport.h>
+#include <sys/filio.h>
 
 /* Global vars */
 extern u_int32_t newnfs_false, newnfs_true;
@@ -5190,7 +5191,7 @@ nfsmout:
  * nfs copy service
  */
 APPLESTATIC int
-nfsrvd_copy_file_range(struct nfsrv_descript *nd, int isdgram,
+nfsrvd_copy_file_range(struct nfsrv_descript *nd, __unused int isdgram,
     vnode_t vp, vnode_t tovp, struct nfsexstuff *exp, struct nfsexstuff *toexp)
 {
 	uint32_t *tl;
@@ -5226,7 +5227,7 @@ nfsrvd_copy_file_range(struct nfsrv_descript *nd, int isdgram,
 	instp->ls_ownerlen = 0;
 	instp->ls_op = NULL;
 	instp->ls_uid = nd->nd_cred->cr_uid;
-	instp->ls_stateid.seqid = fxdr_unsigned(u_int32_t, *tl++);
+	instp->ls_stateid.seqid = fxdr_unsigned(uint32_t, *tl++);
 	clientid.lval[0] = instp->ls_stateid.other[0] = *tl++;
 	clientid.lval[1] = instp->ls_stateid.other[1] = *tl++;
 	if ((nd->nd_flag & ND_IMPLIEDCLID) != 0)
@@ -5237,7 +5238,7 @@ nfsrvd_copy_file_range(struct nfsrv_descript *nd, int isdgram,
 	outstp->ls_ownerlen = 0;
 	outstp->ls_op = NULL;
 	outstp->ls_uid = nd->nd_cred->cr_uid;
-	outstp->ls_stateid.seqid = fxdr_unsigned(u_int32_t, *tl++);
+	outstp->ls_stateid.seqid = fxdr_unsigned(uint32_t, *tl++);
 	outstp->ls_stateid.other[0] = *tl++;
 	outstp->ls_stateid.other[1] = *tl++;
 	outstp->ls_stateid.other[2] = *tl++;
@@ -5398,6 +5399,98 @@ out:
 nfsmout:
 	vput(vp);
 	vrele(tovp);
+	NFSEXITCODE2(error, nd);
+	return (error);
+}
+
+/*
+ * nfs seek service
+ */
+APPLESTATIC int
+nfsrvd_seek(struct nfsrv_descript *nd, __unused int isdgram,
+    vnode_t vp, struct nfsexstuff *exp)
+{
+	uint32_t *tl;
+	struct nfsvattr at;
+	int content, error = 0;
+	off_t off;
+	u_long cmd;
+	nfsattrbit_t attrbits;
+
+	if (nfs_rootfhset == 0 || nfsd_checkrootexp(nd) != 0) {
+		nd->nd_repstat = NFSERR_WRONGSEC;
+		goto nfsmout;
+	}
+	if (nfsrv_devidcnt > 0) {
+		nd->nd_repstat = NFSERR_NOTSUPP;
+		goto nfsmout;
+	}
+	NFSM_DISSECT(tl, uint32_t *, NFSX_STATEID + NFSX_HYPER + NFSX_UNSIGNED);
+	/* Ignore the stateid for now. */
+	tl += (NFSX_STATEID / NFSX_UNSIGNED);
+	off = fxdr_hyper(tl); tl += 2;
+	content = fxdr_unsigned(int, *tl);
+	if (content == NFSV4CONTENT_DATA)
+		cmd = FIOSEEKDATA;
+	else if (content == NFSV4CONTENT_HOLE)
+		cmd = FIOSEEKHOLE;
+	else
+		nd->nd_repstat = NFSERR_BADXDR;
+	if (nd->nd_repstat == 0 && (nd->nd_flag & ND_DSSERVER) != 0)
+		nd->nd_repstat = NFSERR_NOTSUPP;
+	if (nd->nd_repstat == 0 && vnode_vtype(vp) == VDIR)
+		nd->nd_repstat = NFSERR_ISDIR;
+	if (nd->nd_repstat == 0 && vnode_vtype(vp) != VREG)
+		nd->nd_repstat = NFSERR_WRONGTYPE;
+	if (nd->nd_repstat == 0 && off < 0)
+		nd->nd_repstat = NFSERR_NXIO;
+	if (nd->nd_repstat == 0) {
+		/* Check permissions for the input file. */
+		NFSZERO_ATTRBIT(&attrbits);
+		NFSSETBIT_ATTRBIT(&attrbits, NFSATTRBIT_OWNER);
+		NFSSETBIT_ATTRBIT(&attrbits, NFSATTRBIT_SIZE);
+		nd->nd_repstat = nfsvno_getattr(vp, &at, nd, curthread, 1,
+		    &attrbits);
+	}
+	if (nd->nd_repstat == 0 && off > at.na_size)
+		nd->nd_repstat = NFSERR_NXIO;
+	if (nd->nd_repstat == 0 && (at.na_uid != nd->nd_cred->cr_uid ||
+	     NFSVNO_EXSTRICTACCESS(exp)))
+		nd->nd_repstat = nfsvno_accchk(vp, VREAD, nd->nd_cred, exp,
+		    curthread, NFSACCCHK_ALLOWOWNER, NFSACCCHK_VPISLOCKED,
+		    NULL);
+	if (nd->nd_repstat != 0)
+		goto nfsmout;
+
+	if (off < at.na_size) {
+		NFSVOPUNLOCK(vp, 0);
+		nd->nd_repstat = VOP_IOCTL(vp, cmd, &off, 0, nd->nd_cred,
+		    curthread);
+		vrele(vp);
+		if (nd->nd_repstat == ENOTTY || nd->nd_repstat == ENXIO) {
+			/*
+			 * For FIOSEEKHOLE, find the "virtual hole" at EOF.
+			 * For FIOSEEKDATA, just return the offset in the
+			 * request unless the error is ENXIO.
+			 */
+			if (cmd == FIOSEEKHOLE || error == ENXIO)
+				off = at.na_size;
+			nd->nd_repstat = 0;
+		}
+	} else
+		vput(vp);
+	if (nd->nd_repstat == 0) {
+		NFSM_BUILD(tl, uint32_t *, NFSX_UNSIGNED + NFSX_HYPER);
+		if (off == at.na_size)
+			*tl++ = newnfs_true;
+		else
+			*tl++ = newnfs_false;
+		txdr_hyper(off, tl);
+	}
+	NFSEXITCODE2(error, nd);
+	return (error);
+nfsmout:
+	vput(vp);
 	NFSEXITCODE2(error, nd);
 	return (error);
 }
