@@ -382,11 +382,12 @@
 #define	NFSPROC_ALLOCATE	57
 #define	NFSPROC_COPY		58
 #define	NFSPROC_SEEK		59
+#define	NFSPROC_SEEKDS		60
 
 /*
  * Must be defined as one higher than the last NFSv4.2 Proc# above.
  */
-#define	NFSV42_NPROCS		60
+#define	NFSV42_NPROCS		61
 
 #endif	/* NFS_V3NPROCS */
 

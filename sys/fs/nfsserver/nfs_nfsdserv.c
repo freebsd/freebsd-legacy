@@ -5416,13 +5416,10 @@ nfsrvd_seek(struct nfsrv_descript *nd, __unused int isdgram,
 	off_t off;
 	u_long cmd;
 	nfsattrbit_t attrbits;
+	bool eof;
 
 	if (nfs_rootfhset == 0 || nfsd_checkrootexp(nd) != 0) {
 		nd->nd_repstat = NFSERR_WRONGSEC;
-		goto nfsmout;
-	}
-	if (nfsrv_devidcnt > 0) {
-		nd->nd_repstat = NFSERR_NOTSUPP;
 		goto nfsmout;
 	}
 	NFSM_DISSECT(tl, uint32_t *, NFSX_STATEID + NFSX_HYPER + NFSX_UNSIGNED);
@@ -5448,12 +5445,9 @@ nfsrvd_seek(struct nfsrv_descript *nd, __unused int isdgram,
 		/* Check permissions for the input file. */
 		NFSZERO_ATTRBIT(&attrbits);
 		NFSSETBIT_ATTRBIT(&attrbits, NFSATTRBIT_OWNER);
-		NFSSETBIT_ATTRBIT(&attrbits, NFSATTRBIT_SIZE);
 		nd->nd_repstat = nfsvno_getattr(vp, &at, nd, curthread, 1,
 		    &attrbits);
 	}
-	if (nd->nd_repstat == 0 && off > at.na_size)
-		nd->nd_repstat = NFSERR_NXIO;
 	if (nd->nd_repstat == 0 && (at.na_uid != nd->nd_cred->cr_uid ||
 	     NFSVNO_EXSTRICTACCESS(exp)))
 		nd->nd_repstat = nfsvno_accchk(vp, VREAD, nd->nd_cred, exp,
@@ -5462,26 +5456,13 @@ nfsrvd_seek(struct nfsrv_descript *nd, __unused int isdgram,
 	if (nd->nd_repstat != 0)
 		goto nfsmout;
 
-	if (off < at.na_size) {
-		NFSVOPUNLOCK(vp, 0);
-		nd->nd_repstat = VOP_IOCTL(vp, cmd, &off, 0, nd->nd_cred,
-		    curthread);
-		vrele(vp);
-		if (nd->nd_repstat == ENOTTY || nd->nd_repstat == ENXIO) {
-			/*
-			 * For FIOSEEKHOLE, find the "virtual hole" at EOF.
-			 * For FIOSEEKDATA, just return the offset in the
-			 * request unless the error is ENXIO.
-			 */
-			if (cmd == FIOSEEKHOLE || error == ENXIO)
-				off = at.na_size;
-			nd->nd_repstat = 0;
-		}
-	} else
-		vput(vp);
+	NFSVOPUNLOCK(vp, 0);
+	nd->nd_repstat = nfsvno_seek(vp, cmd, &off, content, &eof, nd->nd_cred,
+	    curthread);
+	vrele(vp);
 	if (nd->nd_repstat == 0) {
 		NFSM_BUILD(tl, uint32_t *, NFSX_UNSIGNED + NFSX_HYPER);
-		if (off == at.na_size)
+		if (eof)
 			*tl++ = newnfs_true;
 		else
 			*tl++ = newnfs_false;

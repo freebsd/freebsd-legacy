@@ -46,6 +46,7 @@ __FBSDID("$FreeBSD$");
  */
 
 #include <fs/nfs/nfsport.h>
+#include <sys/filio.h>
 #include <sys/hash.h>
 #include <sys/sysctl.h>
 #include <nlm/nlm_prot.h>
@@ -112,7 +113,7 @@ static void nfsrv_pnfsremove(struct vnode **, int, char *, fhandle_t *,
     NFSPROC_T *);
 static int nfsrv_proxyds(struct nfsrv_descript *, struct vnode *, off_t, int,
     struct ucred *, struct thread *, int, struct mbuf **, char *,
-    struct mbuf **, struct nfsvattr *, struct acl *);
+    struct mbuf **, struct nfsvattr *, struct acl *, off_t *, int, bool *);
 static int nfsrv_setextattr(struct vnode *, struct nfsvattr *, NFSPROC_T *);
 static int nfsrv_readdsrpc(fhandle_t *, off_t, int, struct ucred *,
     NFSPROC_T *, struct nfsmount *, struct mbuf **, struct mbuf **);
@@ -125,6 +126,8 @@ static int nfsrv_setattrdsrpc(fhandle_t *, struct ucred *, NFSPROC_T *,
     struct vnode *, struct nfsmount **, int, struct nfsvattr *, int *);
 static int nfsrv_getattrdsrpc(fhandle_t *, struct ucred *, NFSPROC_T *,
     struct vnode *, struct nfsmount *, struct nfsvattr *);
+static int nfsrv_seekdsrpc(fhandle_t *, off_t *, int, bool *, struct ucred *,
+    NFSPROC_T *, struct nfsmount *);
 static int nfsrv_putfhname(fhandle_t *, char *);
 static int nfsrv_pnfslookupds(struct vnode *, struct vnode *,
     struct pnfsdsfile *, struct vnode **, NFSPROC_T *);
@@ -294,7 +297,8 @@ nfsvno_getattr(struct vnode *vp, struct nfsvattr *nvap,
 	    NFSISSET_ATTRBIT(attrbitp, NFSATTRBIT_TIMEACCESS) ||
 	    NFSISSET_ATTRBIT(attrbitp, NFSATTRBIT_TIMEMODIFY))) {
 		error = nfsrv_proxyds(nd, vp, 0, 0, nd->nd_cred, p,
-		    NFSPROC_GETATTR, NULL, NULL, NULL, &na, NULL);
+		    NFSPROC_GETATTR, NULL, NULL, NULL, &na, NULL, NULL, 0,
+		    NULL);
 		if (error == 0)
 			gotattr = 1;
 	}
@@ -477,7 +481,7 @@ nfsvno_setattr(struct vnode *vp, struct nfsvattr *nvap, struct ucred *cred,
 	    nvap->na_vattr.va_mtime.tv_sec != VNOVAL)) {
 		/* For a pNFS server, set the attributes on the DS file. */
 		error = nfsrv_proxyds(NULL, vp, 0, 0, cred, p, NFSPROC_SETATTR,
-		    NULL, NULL, NULL, nvap, NULL);
+		    NULL, NULL, NULL, nvap, NULL, NULL, 0, NULL);
 		if (error == ENOENT)
 			error = 0;
 	}
@@ -796,7 +800,7 @@ nfsvno_read(struct vnode *vp, off_t off, int cnt, struct ucred *cred,
 	 * there is no DS file to read.
 	 */
 	error = nfsrv_proxyds(NULL, vp, off, cnt, cred, p, NFSPROC_READDS, mpp,
-	    NULL, mpendp, NULL, NULL);
+	    NULL, mpendp, NULL, NULL, NULL, 0, NULL);
 	if (error != ENOENT)
 		return (error);
 
@@ -892,7 +896,7 @@ nfsvno_write(struct vnode *vp, off_t off, int retlen, int cnt, int *stable,
 	 * there is no DS file to write.
 	 */
 	error = nfsrv_proxyds(NULL, vp, off, retlen, cred, p, NFSPROC_WRITEDS,
-	    &mp, cp, NULL, NULL, NULL);
+	    &mp, cp, NULL, NULL, NULL, NULL, 0, NULL);
 	if (error != ENOENT) {
 		*stable = NFSWRITE_FILESYNC;
 		return (error);
@@ -4378,7 +4382,7 @@ nfsrv_updatemdsattr(struct vnode *vp, struct nfsvattr *nap, NFSPROC_T *p)
 	/* Do this as root so that it won't fail with EACCES. */
 	tcred = newnfs_getcred();
 	error = nfsrv_proxyds(NULL, vp, 0, 0, tcred, p, NFSPROC_LAYOUTRETURN,
-	    NULL, NULL, NULL, nap, NULL);
+	    NULL, NULL, NULL, nap, NULL, NULL, 0, NULL);
 	NFSFREECRED(tcred);
 	return (error);
 }
@@ -4393,14 +4397,15 @@ nfsrv_dssetacl(struct vnode *vp, struct acl *aclp, struct ucred *cred,
 	int error;
 
 	error = nfsrv_proxyds(NULL, vp, 0, 0, cred, p, NFSPROC_SETACL,
-	    NULL, NULL, NULL, NULL, aclp);
+	    NULL, NULL, NULL, NULL, aclp, NULL, 0, NULL);
 	return (error);
 }
 
 static int
 nfsrv_proxyds(struct nfsrv_descript *nd, struct vnode *vp, off_t off, int cnt,
     struct ucred *cred, struct thread *p, int ioproc, struct mbuf **mpp,
-    char *cp, struct mbuf **mpp2, struct nfsvattr *nap, struct acl *aclp)
+    char *cp, struct mbuf **mpp2, struct nfsvattr *nap, struct acl *aclp,
+    off_t *offp, int content, bool *eofp)
 {
 	struct nfsmount *nmp[NFSDEV_MAXMIRRORS], *failnmp;
 	fhandle_t fh[NFSDEV_MAXMIRRORS];
@@ -4487,7 +4492,7 @@ tryagain:
 			origmircnt = mirrorcnt;
 		/*
 		 * If failpos is set to a mirror#, then that mirror has
-		 * failed and will be disabled. For Read and Getattr, the
+		 * failed and will be disabled. For Read, Getattr and Seek, the
 		 * function only tries one mirror, so if that mirror has
 		 * failed, it will need to be retried. As such, increment
 		 * tryitagain for these cases.
@@ -4520,7 +4525,20 @@ tryagain:
 		else if (ioproc == NFSPROC_SETACL)
 			error = nfsrv_setacldsrpc(fh, cred, p, vp, &nmp[0],
 			    mirrorcnt, aclp, &failpos);
-		else {
+		else if (ioproc == NFSPROC_SEEKDS) {
+			error = nfsrv_seekdsrpc(fh, offp, content, eofp, cred,
+			    p, nmp[0]);
+			if (nfsds_failerr(error) && mirrorcnt > 1) {
+				/*
+				 * Setting failpos will cause the mirror
+				 * to be disabled and then a retry of this
+				 * read is required.
+				 */
+				failpos = 0;
+				error = 0;
+				trycnt++;
+			}
+		} else {
 			error = nfsrv_getattrdsrpc(&fh[mirrorcnt - 1], cred, p,
 			    vp, nmp[mirrorcnt - 1], nap);
 			if (nfsds_failerr(error) && mirrorcnt > 1) {
@@ -5528,6 +5546,59 @@ nfsrv_getattrdsrpc(fhandle_t *fhp, struct ucred *cred, NFSPROC_T *p,
 }
 
 /*
+ * Seek call to a DS.
+ */
+static int
+nfsrv_seekdsrpc(fhandle_t *fhp, off_t *offp, int content, bool *eofp,
+    struct ucred *cred, NFSPROC_T *p, struct nfsmount *nmp)
+{
+	uint32_t *tl;
+	struct nfsrv_descript *nd;
+	nfsv4stateid_t st;
+	int error;
+	
+	NFSD_DEBUG(4, "in nfsrv_seekdsrpc\n");
+	/*
+	 * Use a stateid where other is an alternating 01010 pattern and
+	 * seqid is 0xffffffff.  This value is not defined as special by
+	 * the RFC and is used by the FreeBSD NFS server to indicate an
+	 * MDS->DS proxy operation.
+	 */
+	st.other[0] = 0x55555555;
+	st.other[1] = 0x55555555;
+	st.other[2] = 0x55555555;
+	st.seqid = 0xffffffff;
+	nd = malloc(sizeof(*nd), M_TEMP, M_WAITOK | M_ZERO);
+	nfscl_reqstart(nd, NFSPROC_SEEKDS, nmp, (u_int8_t *)fhp,
+	    sizeof(fhandle_t), NULL, NULL, 0, 0);
+	nfsm_stateidtom(nd, &st, NFSSTATEID_PUTSTATEID);
+	NFSM_BUILD(tl, uint32_t *, NFSX_HYPER + NFSX_UNSIGNED);
+	txdr_hyper(*offp, tl); tl += 2;
+	*tl = txdr_unsigned(content);
+	error = newnfs_request(nd, nmp, NULL, &nmp->nm_sockreq, NULL, p, cred,
+	    NFS_PROG, NFS_VER4, NULL, 1, NULL, NULL);
+	if (error != 0) {
+		free(nd, M_TEMP);
+		return (error);
+	}
+	NFSD_DEBUG(4, "nfsrv_seekdsrpc: aft seekrpc=%d\n", nd->nd_repstat);
+	if (nd->nd_repstat == 0) {
+		NFSM_DISSECT(tl, uint32_t *, NFSX_UNSIGNED + NFSX_HYPER);
+		if (*tl++ == newnfs_true)
+			*eofp = true;
+		else
+			*eofp = false;
+		*offp = fxdr_hyper(tl);
+	} else
+		error = nd->nd_repstat;
+nfsmout:
+	m_freem(nd->nd_mrep);
+	free(nd, M_TEMP);
+	NFSD_DEBUG(4, "nfsrv_seekdsrpc error=%d\n", error);
+	return (error);
+}
+
+/*
  * Get the device id and file handle for a DS file.
  */
 int
@@ -5750,6 +5821,50 @@ nfsrv_setacl(struct vnode *vp, NFSACL_T *aclp, struct ucred *cred, NFSPROC_T *p)
 	}
 
 out:
+	NFSEXITCODE(error);
+	return (error);
+}
+
+/*
+ * Seek vnode op call (actually it is a VOP_IOCTL()).
+ */
+int
+nfsvno_seek(struct vnode *vp, u_long cmd, off_t *offp, int content, bool *eofp,
+    struct ucred *cred, NFSPROC_T *p)
+{
+	struct vattr va;
+	int error, ret;
+
+	ASSERT_VOP_UNLOCKED(vp, "nfsvno_seek vp");
+	/*
+	 * Attempt to seek on a DS file. A return of ENOENT implies
+	 * there is no DS file to seek on.
+	 */
+	error = nfsrv_proxyds(NULL, vp, 0, 0, cred, p, NFSPROC_SEEKDS, NULL,
+	    NULL, NULL, NULL, NULL, offp, content, eofp);
+	if (error != ENOENT)
+		return (error);
+
+	/*
+	 * Do the VOP_IOCTL() call.  For the case where *offp == file_size,
+	 * VOP_IOCTL() will return ENXIO.  However, the correct reply for
+	 * NFSv4.2 is *eofp == true and no error return.
+	 * *eofp only needs to be set if returning error == 0.
+	 */
+	error = VOP_IOCTL(vp, cmd, offp, 0, cred, p);
+	if (error == 0)
+		*eofp = false;
+	else if (error == ENXIO) {
+		ret = vn_lock(vp, LK_SHARED);
+		if (ret == 0) {
+			ret = VOP_GETATTR(vp, &va, cred);
+			VOP_UNLOCK(vp, 0);
+		}
+		if (ret == 0 && *offp == va.va_size) {
+			*eofp = true;
+			error = 0;
+		}
+	}
 	NFSEXITCODE(error);
 	return (error);
 }
