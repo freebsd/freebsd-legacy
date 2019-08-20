@@ -725,8 +725,8 @@ int nfsrv_dscreate(struct vnode *, struct vattr *, struct vattr *,
 int nfsrv_updatemdsattr(struct vnode *, struct nfsvattr *, NFSPROC_T *);
 void nfsrv_killrpcs(struct nfsmount *);
 int nfsrv_setacl(struct vnode *, NFSACL_T *, struct ucred *, NFSPROC_T *);
-int nfsvno_seek(struct vnode *, u_long, off_t *, int, bool *, struct ucred *,
-    NFSPROC_T *);
+int nfsvno_seek(struct nfsrv_descript *, struct vnode *, u_long, off_t *, int,
+    bool *, struct ucred *, NFSPROC_T *);
 
 /* nfs_commonkrpc.c */
 int newnfs_nmcancelreqs(struct nfsmount *);

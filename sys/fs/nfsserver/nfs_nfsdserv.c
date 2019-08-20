@@ -5457,8 +5457,8 @@ nfsrvd_seek(struct nfsrv_descript *nd, __unused int isdgram,
 		goto nfsmout;
 
 	NFSVOPUNLOCK(vp, 0);
-	nd->nd_repstat = nfsvno_seek(vp, cmd, &off, content, &eof, nd->nd_cred,
-	    curthread);
+	nd->nd_repstat = nfsvno_seek(nd, vp, cmd, &off, content, &eof,
+	    nd->nd_cred, curthread);
 	vrele(vp);
 	if (nd->nd_repstat == 0) {
 		NFSM_BUILD(tl, uint32_t *, NFSX_UNSIGNED + NFSX_HYPER);

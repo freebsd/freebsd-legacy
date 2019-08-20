@@ -5829,10 +5829,10 @@ out:
  * Seek vnode op call (actually it is a VOP_IOCTL()).
  */
 int
-nfsvno_seek(struct vnode *vp, u_long cmd, off_t *offp, int content, bool *eofp,
-    struct ucred *cred, NFSPROC_T *p)
+nfsvno_seek(struct nfsrv_descript *nd, struct vnode *vp, u_long cmd,
+    off_t *offp, int content, bool *eofp, struct ucred *cred, NFSPROC_T *p)
 {
-	struct vattr va;
+	struct nfsvattr at;
 	int error, ret;
 
 	ASSERT_VOP_UNLOCKED(vp, "nfsvno_seek vp");
@@ -5848,22 +5848,19 @@ nfsvno_seek(struct vnode *vp, u_long cmd, off_t *offp, int content, bool *eofp,
 	/*
 	 * Do the VOP_IOCTL() call.  For the case where *offp == file_size,
 	 * VOP_IOCTL() will return ENXIO.  However, the correct reply for
-	 * NFSv4.2 is *eofp == true and no error return.
-	 * *eofp only needs to be set if returning error == 0.
+	 * NFSv4.2 is *eofp == true and error == 0 for this case.
 	 */
 	error = VOP_IOCTL(vp, cmd, offp, 0, cred, p);
-	if (error == 0)
-		*eofp = false;
-	else if (error == ENXIO) {
-		ret = vn_lock(vp, LK_SHARED);
-		if (ret == 0) {
-			ret = VOP_GETATTR(vp, &va, cred);
-			VOP_UNLOCK(vp, 0);
-		}
-		if (ret == 0 && *offp == va.va_size) {
+	*eofp = false;
+	if (error == ENXIO || (error == 0 && cmd == FIOSEEKHOLE)) {
+		/* Handle the cases where we might be at EOF. */
+		ret = nfsvno_getattr(vp, &at, nd, p, 0, NULL);
+		if (ret == 0 && *offp == at.na_size) {
 			*eofp = true;
 			error = 0;
 		}
+		if (ret != 0 && error == 0)
+			error = ret;
 	}
 	NFSEXITCODE(error);
 	return (error);
