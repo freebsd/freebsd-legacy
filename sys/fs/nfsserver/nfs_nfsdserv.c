@@ -5433,8 +5433,6 @@ nfsrvd_seek(struct nfsrv_descript *nd, __unused int isdgram,
 		cmd = FIOSEEKHOLE;
 	else
 		nd->nd_repstat = NFSERR_BADXDR;
-	if (nd->nd_repstat == 0 && (nd->nd_flag & ND_DSSERVER) != 0)
-		nd->nd_repstat = NFSERR_NOTSUPP;
 	if (nd->nd_repstat == 0 && vnode_vtype(vp) == VDIR)
 		nd->nd_repstat = NFSERR_ISDIR;
 	if (nd->nd_repstat == 0 && vnode_vtype(vp) != VREG)
