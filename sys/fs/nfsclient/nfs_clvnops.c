@@ -3754,7 +3754,10 @@ nfs_pathconf(struct vop_pathconf_args *ap)
 	struct nfsv3_pathconf pc;
 	struct nfsvattr nfsva;
 	struct vnode *vp = ap->a_vp;
+	struct nfsmount *nmp;
 	struct thread *td = curthread;
+	off_t off;
+	bool eof;
 	int attrflag, error;
 
 	if ((NFS_ISV34(vp) && (ap->a_name == _PC_LINK_MAX ||
@@ -3852,6 +3855,40 @@ nfs_pathconf(struct vop_pathconf_args *ap)
 		break;
 	case _PC_SYMLINK_MAX:
 		*ap->a_retval = NFS_MAXPATHLEN;
+		break;
+	case _PC_MIN_HOLE_SIZE:
+		/* Only some NFSv4.2 servers support Seek for Holes. */
+		*ap->a_retval = 0;
+		nmp = VFSTONFS(vp->v_mount);
+		if (NFS_ISV4(vp) && nmp->nm_minorvers == NFSV42_MINORVERSION) {
+			/*
+			 * NFSv4.2 doesn't have an attribute for hole size,
+			 * so all we can do is see if the Seek operation is
+			 * supported and then use f_iosize as a "best guess".
+			 */
+			mtx_lock(&nmp->nm_mtx);
+			if ((nmp->nm_privflag & NFSMNTP_SEEKTESTED) == 0) {
+				mtx_unlock(&nmp->nm_mtx);
+				off = 0;
+				attrflag = 0;
+				error = nfsrpc_seek(vp, &off, &eof,
+				    NFSV4CONTENT_HOLE, td->td_ucred, &nfsva,
+				    &attrflag);
+				if (attrflag != 0)
+					nfscl_loadattrcache(&vp, &nfsva,
+					    NULL, NULL, 0, 1);
+				mtx_lock(&nmp->nm_mtx);
+				if (error == NFSERR_NOTSUPP)
+					nmp->nm_privflag |= NFSMNTP_SEEKTESTED;
+				else
+					nmp->nm_privflag |= NFSMNTP_SEEKTESTED |
+					    NFSMNTP_SEEK;
+				error = 0;
+			}
+			if ((nmp->nm_privflag & NFSMNTP_SEEK) != 0)
+				*ap->a_retval = vp->v_mount->mnt_stat.f_iosize;
+			mtx_unlock(&nmp->nm_mtx);
+		}
 		break;
 
 	default:
