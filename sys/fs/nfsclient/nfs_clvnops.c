@@ -51,6 +51,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/mount.h>
 #include <sys/bio.h>
 #include <sys/buf.h>
+#include <sys/extattr.h>
 #include <sys/filio.h>
 #include <sys/jail.h>
 #include <sys/malloc.h>
@@ -147,6 +148,7 @@ static vop_advise_t nfs_advise;
 static vop_allocate_t nfs_allocate;
 static vop_copy_file_range_t nfs_copy_file_range;
 static vop_ioctl_t nfs_ioctl;
+static vop_getextattr_t nfs_getextattr;
 
 /*
  * Global vfs data structures for nfs
@@ -188,6 +190,7 @@ static struct vop_vector newnfs_vnodeops_nosig = {
 	.vop_allocate =		nfs_allocate,
 	.vop_copy_file_range =	nfs_copy_file_range,
 	.vop_ioctl =		nfs_ioctl,
+	.vop_getextattr =	nfs_getextattr,
 };
 
 static int
@@ -3742,6 +3745,65 @@ nfs_ioctl(struct vop_ioctl_args *ap)
 
 	if (error != 0)
 		error = ENXIO;
+	return (error);
+}
+
+/*
+ * nfs getextattr call
+ */
+static int
+nfs_getextattr(struct vop_getextattr_args *ap)
+{
+	struct vnode *vp = ap->a_vp;
+	struct nfsmount *nmp;
+	struct ucred *cred;
+	struct thread *td = ap->a_td;
+	struct nfsvattr nfsva;
+	ssize_t len;
+	int attrflag, error, ret;
+
+	nmp = VFSTONFS(vp->v_mount);
+	mtx_lock(&nmp->nm_mtx);
+	if (!NFSHASNFSV4(nmp) || nmp->nm_minorvers < NFSV42_MINORVERSION ||
+	    (nmp->nm_privflag & NFSMNTP_NOXATTR) != 0 ||
+	    ap->a_attrnamespace != EXTATTR_NAMESPACE_USER) {
+		mtx_unlock(&nmp->nm_mtx);
+		return (EOPNOTSUPP);
+	}
+	mtx_unlock(&nmp->nm_mtx);
+
+	cred = ap->a_cred;
+	if (cred == NULL)
+		cred = td->td_ucred;
+	/* Do the actual NFSv4.2 Optional Extended Attribute (RFC-8276) RPC. */
+	attrflag = 0;
+	error = nfsrpc_getextattr(vp, ap->a_name, ap->a_uio, &len, &nfsva,
+	    &attrflag, cred, td);
+	if (attrflag != 0) {
+		ret = nfscl_loadattrcache(&vp, &nfsva, NULL, NULL, 0, 1);
+		if (error == 0 && ret != 0)
+			error = ret;
+	}
+	if (error == 0 && ap->a_size != NULL)
+		*ap->a_size = len;
+
+	switch (error) {
+	case NFSERR_NOTSUPP:
+	case NFSERR_OPILLEGAL:
+	case NFSERR_MINORVERMISMATCH:
+		mtx_lock(&nmp->nm_mtx);
+		nmp->nm_privflag |= NFSMNTP_NOXATTR;
+		mtx_unlock(&nmp->nm_mtx);
+		error = EOPNOTSUPP;
+		break;
+	case NFSERR_NOXATTR:
+	case NFSERR_XATTR2BIG:
+		error = ENOATTR;
+		break;
+	default:
+		error = nfscl_maperr(td, error, 0, 0);
+		break;
+	}
 	return (error);
 }
 

@@ -46,6 +46,7 @@ __FBSDID("$FreeBSD$");
  */
 
 #include <fs/nfs/nfsport.h>
+#include <security/mac/mac_framework.h>
 #include <sys/filio.h>
 #include <sys/hash.h>
 #include <sys/sysctl.h>
@@ -5862,6 +5863,86 @@ nfsvno_seek(struct nfsrv_descript *nd, struct vnode *vp, u_long cmd,
 		if (ret != 0 && error == 0)
 			error = ret;
 	}
+	NFSEXITCODE(error);
+	return (error);
+}
+
+/*
+ * Get Extended Atribute vnode op into an mbuf list.
+ */
+int
+nfsvno_getxattr(struct vnode *vp, char *name, struct ucred *cred,
+    struct thread *p, struct mbuf **mpp, struct mbuf **mpendp, int *lenp)
+{
+	struct iovec *ivp, *ivp2;
+	struct uio io, *uiop = &io;
+	struct mbuf *mp, *mp2 = NULL, *mp3 = NULL;
+	int alen, error, i, len, maxiov, tlen;
+	size_t siz;
+
+	maxiov = (NFS_SRVMAXIO + MCLBYTES - 1) / MCLBYTES;
+	if (maxiov < 1)
+		maxiov = 1;
+	ivp2 = ivp = mallocarray(maxiov, sizeof(*ivp), M_TEMP, M_WAITOK);
+	len = 0;
+	i = 0;
+	while (i < maxiov) {
+		NFSMGET(mp);
+		MCLGET(mp, M_WAITOK);
+		mp->m_len = M_SIZE(mp);
+		if (len == 0) {
+			mp3 = mp2 = mp;
+		} else {
+			mp2->m_next = mp;
+			mp2 = mp;
+		}
+		len += mp->m_len;
+		ivp->iov_base = mtod(mp, caddr_t);
+		ivp->iov_len = mp->m_len;
+		i++;
+		ivp++;
+	}
+	uiop->uio_iov = ivp2;
+	uiop->uio_iovcnt = i;
+	uiop->uio_offset = 0;
+	uiop->uio_resid = len;
+	uiop->uio_rw = UIO_READ;
+	uiop->uio_segflg = UIO_SYSSPACE;
+	uiop->uio_td = p;
+#ifdef MAC
+	error = mac_vnode_check_getextattr(cred, vp, EXTATTR_NAMESPACE_USER,
+	    name);
+	if (error != 0)
+		goto out;
+#endif
+
+	error = VOP_GETEXTATTR(vp, EXTATTR_NAMESPACE_USER, name, uiop, NULL,
+	    cred, p);
+	if (error != 0)
+		goto out;
+	if (uiop->uio_resid > 0) {
+		alen = len;
+		len -= uiop->uio_resid;
+		tlen = NFSM_RNDUP(len);
+		nfsrv_adj(mp3, alen - tlen, tlen - len);
+	} else {
+		error = VOP_GETEXTATTR(vp, EXTATTR_NAMESPACE_USER, name, NULL,
+		    &siz, cred, p);
+		if (error == 0 && len < siz)
+			error = NFSERR_XATTR2BIG;
+	}
+	if (error == 0) {
+		*lenp = len;
+		*mpp = mp3;
+		*mpendp = mp;
+	}
+
+out:
+	if (error != 0) {
+		m_freem(mp3);
+		*lenp = 0;
+	}
+	free(ivp2, M_TEMP);
 	NFSEXITCODE(error);
 	return (error);
 }

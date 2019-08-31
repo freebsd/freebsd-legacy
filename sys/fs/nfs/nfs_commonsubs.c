@@ -107,7 +107,7 @@ SYSCTL_INT(_vfs_nfs, OID_AUTO, pnfsmirror, CTLFLAG_RD,
  * non-idempotent Ops.
  * Define it here, since it is used by both the client and server.
  */
-struct nfsv4_opflag nfsv4_opflag[NFSV4N_NOPS] = {
+struct nfsv4_opflag nfsv4_opflag[NFSV42_NOPS] = {
 	{ 0, 0, 0, 0, LK_EXCLUSIVE, 1, 1 },		/* undef */
 	{ 0, 0, 0, 0, LK_EXCLUSIVE, 1, 1 },		/* undef */
 	{ 0, 0, 0, 0, LK_EXCLUSIVE, 1, 1 },		/* undef */

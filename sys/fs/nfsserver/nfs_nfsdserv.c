@@ -50,6 +50,7 @@ __FBSDID("$FreeBSD$");
 
 #ifndef APPLEKEXT
 #include <fs/nfs/nfsport.h>
+#include <sys/extattr.h>
 #include <sys/filio.h>
 
 /* Global vars */
@@ -5472,6 +5473,60 @@ nfsmout:
 	vput(vp);
 	NFSEXITCODE2(error, nd);
 	return (error);
+}
+
+/*
+ * nfs get extended attribute service
+ */
+APPLESTATIC int
+nfsrvd_getxattr(struct nfsrv_descript *nd, __unused int isdgram,
+    vnode_t vp, __unused struct nfsexstuff *exp)
+{
+	uint32_t *tl;
+	mbuf_t mp = NULL, mpend = NULL;
+	int error, len;
+	char *name;
+	struct thread *p = curthread;
+
+	error = 0;
+	if (nfs_rootfhset == 0 || nfsd_checkrootexp(nd) != 0) {
+		nd->nd_repstat = NFSERR_WRONGSEC;
+		goto nfsmout;
+	}
+	NFSM_DISSECT(tl, uint32_t *, NFSX_UNSIGNED);
+	len = fxdr_unsigned(int, *tl);
+	if (len <= 0) {
+		nd->nd_repstat = NFSERR_BADXDR;
+		goto nfsmout;
+	}
+	if (len > EXTATTR_MAXNAMELEN) {
+		nd->nd_repstat = NFSERR_NOXATTR;
+		goto nfsmout;
+	}
+	name = malloc(len + 1, M_TEMP, M_WAITOK);
+	nd->nd_repstat = nfsrv_mtostr(nd, name, len);
+	if (nd->nd_repstat == 0)
+		nd->nd_repstat = nfsvno_getxattr(vp, name, nd->nd_cred, p,
+		    &mp, &mpend, &len);
+	if (nd->nd_repstat == ENOATTR)
+		nd->nd_repstat = NFSERR_NOXATTR;
+	else if (nd->nd_repstat == EOPNOTSUPP)
+		nd->nd_repstat = NFSERR_NOTSUPP;
+	if (nd->nd_repstat == 0) {
+		NFSM_BUILD(tl, uint32_t *, NFSX_UNSIGNED);
+		*tl = txdr_unsigned(len);
+		mbuf_setnext(nd->nd_mb, mp);
+		nd->nd_mb = mpend;
+		nd->nd_bpos = NFSMTOD(mpend, caddr_t) + mbuf_len(mpend);
+	}
+	free(name, M_TEMP);
+
+nfsmout:
+	if (nd->nd_repstat == 0)
+		nd->nd_repstat = error;
+	vput(vp);
+	NFSEXITCODE2(0, nd);
+	return (0);
 }
 
 /*

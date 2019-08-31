@@ -277,11 +277,6 @@
 #define	NFSV4OP_WRITESAME	70
 #define	NFSV4OP_CLONE		71
 
-/*
- * Must be one more than the last NFSv4.2 op#.
- */
-#define	NFSV42_NOPS		72
-
 /* and the optional Extended attribute operations (RFC-8276). */
 #define	NFSV4OP_GETXATTR	72
 #define	NFSV4OP_SETXATTR	73
@@ -289,9 +284,9 @@
 #define	NFSV4OP_REMOVEXATTR	75
 
 /*
- * Must be one more that the last op#.
+ * Must be one more than the last NFSv4.2 op#.
  */
-#define	NFSV4N_NOPS		76
+#define	NFSV42_NOPS		76
 
 /* Quirky case if the illegal op code */
 #define	NFSV4OP_OPILLEGAL	10044

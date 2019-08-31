@@ -8240,3 +8240,73 @@ nfsmout:
 	return (error);
 }
 
+/*
+ * The getextattr RPC.
+ */
+APPLESTATIC int
+nfsrpc_getextattr(vnode_t vp, const char *name, struct uio *uiop, ssize_t *lenp,
+    struct nfsvattr *nap, int *attrflagp, struct ucred *cred, NFSPROC_T *p)
+{
+	uint32_t *tl;
+	int error;
+	struct nfsrv_descript nfsd;
+	struct nfsrv_descript *nd = &nfsd;
+	nfsattrbit_t attrbits;
+	uint32_t len, len2;
+
+	*attrflagp = 0;
+	NFSCL_REQSTART(nd, NFSPROC_GETEXTATTR, vp);
+	nfsm_strtom(nd, name, strlen(name));
+	NFSM_BUILD(tl, uint32_t *, NFSX_UNSIGNED);
+	*tl = txdr_unsigned(NFSV4OP_GETATTR);
+	NFSGETATTR_ATTRBIT(&attrbits);
+	nfsrv_putattrbit(nd, &attrbits);
+	error = nfscl_request(nd, vp, p, cred, NULL);
+	if (error != 0)
+		return (error);
+	if (nd->nd_repstat == 0) {
+		NFSM_DISSECT(tl, uint32_t *, NFSX_UNSIGNED);
+		len = fxdr_unsigned(uint32_t, *tl);
+		/* Sanity check lengths. */
+		if (uiop != NULL && len > 0 && len <= IOSIZE_MAX &&
+		    uiop->uio_resid <= UINT32_MAX) {
+			len2 = uiop->uio_resid;
+			if (len2 >= len)
+				error = nfsm_mbufuio(nd, uiop, len);
+			else {
+				error = nfsm_mbufuio(nd, uiop, len2);
+				if (error == 0) {
+					/*
+					 * nfsm_mbufuio() advances to a multiple
+					 * of 4, so advance len2 as well.  Then
+					 * we need to advance over the rest of
+					 * the data.
+					 */
+					len2 = NFSM_RNDUP(len2);
+					len2 = NFSM_RNDUP(len - len2);
+					if (len2 > 0)
+						error = nfsm_advance(nd, len2,
+						    -1);
+				}
+			}
+		} else if (uiop == NULL && len > 0) {
+			/* Just wants the length and not the data. */
+			error = nfsm_advance(nd, len, -1);
+		} else
+			error = ENOATTR;
+		if (error != 0)
+			goto nfsmout;
+		*lenp = len;
+		/* Just skip over Getattr op status. */
+		NFSM_DISSECT(tl, uint32_t *, 2 * NFSX_UNSIGNED);
+		error = nfsm_loadattr(nd, nap);
+		if (error == 0)
+			*attrflagp = 1;
+	}
+	if (error == 0)
+		error = nd->nd_repstat;
+nfsmout:
+	mbuf_freem(nd->nd_mrep);
+	return (error);
+}
+
