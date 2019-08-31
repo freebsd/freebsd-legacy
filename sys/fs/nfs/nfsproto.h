@@ -224,8 +224,12 @@
 #define	NFSERR_BADLABEL		10093
 #define	NFSERR_OFFLOADNOREQS	10094
 
+/* NFSv4.2 Extended Attribute errors. */
+#define	NFSERR_NOXATTR		10095
+#define	NFSERR_XATTR2BIG	10096
+
 /* Maximum value of all the NFS error values. */
-#define	NFSERR_MAXERRVAL	NFSERR_OFFLOADNOREQS
+#define	NFSERR_MAXERRVAL	NFSERR_XATTR2BIG
 
 #define	NFSERR_STALEWRITEVERF	30001	/* Fake return for nfs_commit() */
 #define	NFSERR_DONTREPLY	30003	/* Don't process request */
@@ -384,10 +388,13 @@
 #define	NFSPROC_SEEK		59
 #define	NFSPROC_SEEKDS		60
 
+/* and the ones for the optional Extended attribute support (RFC-8276). */
+#define	NFSPROC_GETEXTATTR	61
+
 /*
  * Must be defined as one higher than the last NFSv4.2 Proc# above.
  */
-#define	NFSV42_NPROCS		61
+#define	NFSV42_NPROCS		62
 
 #endif	/* NFS_V3NPROCS */
 
@@ -400,10 +407,10 @@
 
 /*
  * NFSPROC_NOOP is a fake op# that can't be the same as any V2/3/4 Procedure
- * or Operation#. Since the NFS V4 Op #s go higher, use NFSV42_NOPS, which
+ * or Operation#. Since the NFS V4 Op #s go higher, use NFSV4N_NOPS, which
  * is one greater than the highest Op#.
  */
-#define	NFSPROC_NOOP		NFSV42_NOPS
+#define	NFSPROC_NOOP		NFSV4N_NOPS
 
 /* Actual Version 2 procedure numbers */
 #define	NFSV2PROC_NULL		0

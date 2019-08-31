@@ -278,9 +278,20 @@
 #define	NFSV4OP_CLONE		71
 
 /*
- * Must be one more than the last op#.
+ * Must be one more than the last NFSv4.2 op#.
  */
 #define	NFSV42_NOPS		72
+
+/* and the optional Extended attribute operations (RFC-8276). */
+#define	NFSV4OP_GETXATTR	72
+#define	NFSV4OP_SETXATTR	73
+#define	NFSV4OP_LISTXATTRS	74
+#define	NFSV4OP_REMOVEXATTR	75
+
+/*
+ * Must be one more that the last op#.
+ */
+#define	NFSV4N_NOPS		76
 
 /* Quirky case if the illegal op code */
 #define	NFSV4OP_OPILLEGAL	10044
@@ -400,10 +411,13 @@
 #define	NFSPROC_SEEK		59
 #define	NFSPROC_SEEKDS		60
 
+/* and the ones for the optional Extended attribute support (RFC-8276). */
+#define	NFSPROC_GETEXTATTR	61
+
 /*
  * Must be defined as one higher than the last NFSv4.2 Proc# above.
  */
-#define	NFSV42_NPROCS		61
+#define	NFSV42_NPROCS		62
 
 #endif	/* NFS_V3NPROCS */
 
@@ -432,7 +446,7 @@ struct nfsstatsv1 {
 	uint64_t	readlink_bios;
 	uint64_t	biocache_readdirs;
 	uint64_t	readdir_bios;
-	uint64_t	rpccnt[NFSV42_NPROCS + 8];
+	uint64_t	rpccnt[NFSV42_NPROCS + 7];
 	uint64_t	rpcretries;
 	uint64_t	srvrpccnt[NFSV42_NOPS + NFSV4OP_FAKENOPS];
 	uint64_t	srvrpc_errs;

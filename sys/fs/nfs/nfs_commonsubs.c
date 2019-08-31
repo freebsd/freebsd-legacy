@@ -107,7 +107,7 @@ SYSCTL_INT(_vfs_nfs, OID_AUTO, pnfsmirror, CTLFLAG_RD,
  * non-idempotent Ops.
  * Define it here, since it is used by both the client and server.
  */
-struct nfsv4_opflag nfsv4_opflag[NFSV42_NOPS] = {
+struct nfsv4_opflag nfsv4_opflag[NFSV4N_NOPS] = {
 	{ 0, 0, 0, 0, LK_EXCLUSIVE, 1, 1 },		/* undef */
 	{ 0, 0, 0, 0, LK_EXCLUSIVE, 1, 1 },		/* undef */
 	{ 0, 0, 0, 0, LK_EXCLUSIVE, 1, 1 },		/* undef */
@@ -180,6 +180,10 @@ struct nfsv4_opflag nfsv4_opflag[NFSV42_NOPS] = {
 	{ 0, 1, 0, 0, LK_SHARED, 1, 0 },		/* Seek */
 	{ 0, 0, 0, 0, LK_EXCLUSIVE, 1, 1 },		/* Write Same */
 	{ 0, 0, 0, 0, LK_EXCLUSIVE, 1, 1 },		/* Clone */
+	{ 0, 1, 0, 0, LK_SHARED, 1, 1 },		/* Getxattr */
+	{ 0, 0, 0, 0, LK_EXCLUSIVE, 1, 1 },		/* Setxattr */
+	{ 0, 0, 0, 0, LK_EXCLUSIVE, 1, 1 },		/* Listxattrs */
+	{ 0, 0, 0, 0, LK_EXCLUSIVE, 1, 1 },		/* Removexattr */
 };
 #endif	/* !APPLEKEXT */
 
@@ -206,7 +210,8 @@ static struct nfsrv_lughash	*nfsgroupnamehash;
  */
 static int nfs_bigreply[NFSV42_NPROCS] = { 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0 };
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
+    0 };
 
 /* local functions */
 static int nfsrv_skipace(struct nfsrv_descript *nd, int *acesizep);
@@ -285,6 +290,7 @@ static struct {
 	{ NFSV4OP_SAVEFH, 5, "Copy", 4, },
 	{ NFSV4OP_SEEK, 2, "Seek", 4, },
 	{ NFSV4OP_SEEK, 1, "SeekDS", 6, },
+	{ NFSV4OP_GETXATTR, 2, "Getxattr", 8, },
 };
 
 /*
@@ -293,7 +299,7 @@ static struct {
 static int nfs_bigrequest[NFSV42_NPROCS] = {
 	0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0
+	0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 };
 
 /*
