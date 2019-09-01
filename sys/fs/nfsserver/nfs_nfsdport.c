@@ -5947,6 +5947,31 @@ out:
 	return (error);
 }
 
+/*
+ * Set Extended attribute vnode op from an mbuf list.
+ */
+int
+nfsvno_setxattr(struct vnode *vp, char *name, struct uio *uiop,
+    struct ucred *cred, struct thread *p)
+{
+	int error;
+
+	error = 0;
+#ifdef MAC
+	error = mac_vnode_check_setextattr(cred, vp, EXTATTR_NAMESPACE_USER,
+	    name);
+#endif
+
+	if (error == 0)
+		error = VOP_SETEXTATTR(vp, EXTATTR_NAMESPACE_USER, name, uiop,
+		    cred, p);
+	if (error == 0 && uiop->uio_resid > 0)
+		error = NFSERR_XATTR2BIG;
+
+	NFSEXITCODE(error);
+	return (error);
+}
+
 extern int (*nfsd_call_nfsd)(struct thread *, struct nfssvc_args *);
 
 /*

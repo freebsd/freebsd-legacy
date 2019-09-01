@@ -285,6 +285,8 @@ int nfsrvd_seek(struct nfsrv_descript *, int,
     vnode_t, struct nfsexstuff *);
 int nfsrvd_getxattr(struct nfsrv_descript *, int,
     vnode_t, struct nfsexstuff *);
+int nfsrvd_setxattr(struct nfsrv_descript *, int,
+    vnode_t, struct nfsexstuff *);
 int nfsrvd_notsupp(struct nfsrv_descript *, int,
     vnode_t, struct nfsexstuff *);
 
@@ -548,6 +550,8 @@ int nfsrpc_seek(vnode_t, off_t *, bool *, int, struct ucred *,
     struct nfsvattr *, int *);
 int nfsrpc_getextattr(vnode_t, const char *, struct uio *, ssize_t *,
     struct nfsvattr *, int *, struct ucred *, NFSPROC_T *);
+int nfsrpc_setextattr(vnode_t, const char *, struct uio *, struct nfsvattr *,
+    int *, struct ucred *, NFSPROC_T *);
 
 /* nfs_clstate.c */
 int nfscl_open(vnode_t, u_int8_t *, int, u_int32_t, int,
@@ -733,6 +737,8 @@ int nfsvno_seek(struct nfsrv_descript *, struct vnode *, u_long, off_t *, int,
     bool *, struct ucred *, NFSPROC_T *);
 int nfsvno_getxattr(struct vnode *, char *, struct ucred *, struct thread *,
     struct mbuf **, struct mbuf **, int *);
+int nfsvno_setxattr(struct vnode *, char *, struct uio *, struct ucred *,
+    struct thread *);
 
 /* nfs_commonkrpc.c */
 int newnfs_nmcancelreqs(struct nfsmount *);

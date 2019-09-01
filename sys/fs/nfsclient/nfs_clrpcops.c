@@ -8278,9 +8278,10 @@ nfsrpc_getextattr(vnode_t vp, const char *name, struct uio *uiop, ssize_t *lenp,
 				if (error == 0) {
 					/*
 					 * nfsm_mbufuio() advances to a multiple
-					 * of 4, so advance len2 as well.  Then
+					 * of 4, so round up len2 as well.  Then
 					 * we need to advance over the rest of
-					 * the data.
+					 * the data, rounding up the remaining
+					 * length.
 					 */
 					len2 = NFSM_RNDUP(len2);
 					len2 = NFSM_RNDUP(len - len2);
@@ -8291,7 +8292,7 @@ nfsrpc_getextattr(vnode_t vp, const char *name, struct uio *uiop, ssize_t *lenp,
 			}
 		} else if (uiop == NULL && len > 0) {
 			/* Just wants the length and not the data. */
-			error = nfsm_advance(nd, len, -1);
+			error = nfsm_advance(nd, NFSM_RNDUP(len), -1);
 		} else
 			error = ENOATTR;
 		if (error != 0)
@@ -8299,6 +8300,49 @@ nfsrpc_getextattr(vnode_t vp, const char *name, struct uio *uiop, ssize_t *lenp,
 		*lenp = len;
 		/* Just skip over Getattr op status. */
 		NFSM_DISSECT(tl, uint32_t *, 2 * NFSX_UNSIGNED);
+		error = nfsm_loadattr(nd, nap);
+		if (error == 0)
+			*attrflagp = 1;
+	}
+	if (error == 0)
+		error = nd->nd_repstat;
+nfsmout:
+	mbuf_freem(nd->nd_mrep);
+	return (error);
+}
+
+/*
+ * The setextattr RPC.
+ */
+APPLESTATIC int
+nfsrpc_setextattr(vnode_t vp, const char *name, struct uio *uiop,
+    struct nfsvattr *nap, int *attrflagp, struct ucred *cred, NFSPROC_T *p)
+{
+	uint32_t *tl;
+	int error;
+	struct nfsrv_descript nfsd;
+	struct nfsrv_descript *nd = &nfsd;
+	nfsattrbit_t attrbits;
+
+	*attrflagp = 0;
+	NFSCL_REQSTART(nd, NFSPROC_SETEXTATTR, vp);
+	NFSM_BUILD(tl, uint32_t *, NFSX_UNSIGNED);
+	*tl = txdr_unsigned(NFSV4SXATTR_EITHER);
+	nfsm_strtom(nd, name, strlen(name));
+	NFSM_BUILD(tl, uint32_t *, NFSX_UNSIGNED);
+	*tl = txdr_unsigned(uiop->uio_resid);
+	nfsm_uiombuf(nd, uiop, uiop->uio_resid);
+	NFSM_BUILD(tl, uint32_t *, NFSX_UNSIGNED);
+	*tl = txdr_unsigned(NFSV4OP_GETATTR);
+	NFSGETATTR_ATTRBIT(&attrbits);
+	nfsrv_putattrbit(nd, &attrbits);
+	error = nfscl_request(nd, vp, p, cred, NULL);
+	if (error != 0)
+		return (error);
+	if (nd->nd_repstat == 0) {
+		/* Just skip over the reply and Getattr op status. */
+		NFSM_DISSECT(tl, uint32_t *, 2 * NFSX_HYPER + 3 *
+		    NFSX_UNSIGNED);
 		error = nfsm_loadattr(nd, nap);
 		if (error == 0)
 			*attrflagp = 1;

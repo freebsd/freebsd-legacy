@@ -5530,6 +5530,153 @@ nfsmout:
 }
 
 /*
+ * nfs set extended attribute service
+ */
+APPLESTATIC int
+nfsrvd_setxattr(struct nfsrv_descript *nd, __unused int isdgram,
+    vnode_t vp, __unused struct nfsexstuff *exp)
+{
+	uint32_t *tl;
+	mbuf_t mp = NULL, mpend = NULL;
+	struct iovec *ivp, *iv;
+	struct uio io, *uiop = &io;
+	struct nfsvattr ova, nva;
+	nfsattrbit_t attrbits;
+	int cnt, error, i, len, opt, rem, retlen;
+	char *name;
+	struct thread *p = curthread;
+
+	error = 0;
+	name = NULL;
+	if (nfs_rootfhset == 0 || nfsd_checkrootexp(nd) != 0) {
+		nd->nd_repstat = NFSERR_WRONGSEC;
+		goto nfsmout;
+	}
+	NFSM_DISSECT(tl, uint32_t *, 2 * NFSX_UNSIGNED);
+	opt = fxdr_unsigned(int, *tl++);
+	len = fxdr_unsigned(int, *tl);
+	if (len <= 0) {
+		nd->nd_repstat = NFSERR_BADXDR;
+		goto nfsmout;
+	}
+	if (len > EXTATTR_MAXNAMELEN) {
+		nd->nd_repstat = NFSERR_NOXATTR;
+		goto nfsmout;
+	}
+	name = malloc(len + 1, M_TEMP, M_WAITOK);
+	error = nfsrv_mtostr(nd, name, len);
+	if (error != 0)
+		goto nfsmout;
+	NFSM_DISSECT(tl, uint32_t *, NFSX_UNSIGNED);
+	len = fxdr_unsigned(int, *tl);
+	if (len <= 0 || len > IOSIZE_MAX) {
+		nd->nd_repstat = NFSERR_XATTR2BIG;
+		goto nfsmout;
+	}
+	switch (opt) {
+	case NFSV4SXATTR_CREATE:
+		error = nfsvno_getxattr(vp, name, nd->nd_cred, p, &mp, &mpend,
+		    &retlen);
+		if (error == 0)
+			m_freem(mp);
+		if (error != ENOATTR)
+			nd->nd_repstat = NFSERR_EXIST;
+		error = 0;
+		break;
+	case NFSV4SXATTR_REPLACE:
+		error = nfsvno_getxattr(vp, name, nd->nd_cred, p, &mp, &mpend,
+		    &retlen);
+		if (error == 0)
+			m_freem(mp);
+		else
+			nd->nd_repstat = NFSERR_NOXATTR;
+		break;
+	case NFSV4SXATTR_EITHER:
+		break;
+	default:
+		nd->nd_repstat = NFSERR_BADXDR;
+	}
+	if (nd->nd_repstat != 0)
+		goto nfsmout;
+
+	/* Figure out how many iovecs are needed. */
+	cnt = 1;
+	mp = nd->nd_md;
+	i = mp->m_len - (nd->nd_dpos - mtod(mp, char *));
+	while (i < len) {
+		mp = mp->m_next;
+		if (mp == NULL) {
+			nd->nd_repstat = NFSERR_BADXDR;
+			goto nfsmout;
+		}
+		i += mp->m_len;
+		cnt++;
+	}
+
+	/* Now create the uio structure and iovec. */
+	ivp = mallocarray(cnt, sizeof(*ivp), M_TEMP, M_WAITOK);
+	uiop->uio_iov = iv = ivp;
+	uiop->uio_iovcnt = cnt;
+	uiop->uio_resid = len;
+	rem = NFSM_RNDUP(len) - len;
+	cnt = len;
+	mp = nd->nd_md;
+	i = mp->m_len - (nd->nd_dpos - mtod(mp, char *));
+	while (cnt > 0) {
+		if (mp == NULL)
+			panic("nfsvno_write");
+		if (i > 0) {
+			i = min(i, cnt);
+			ivp->iov_base = nd->nd_dpos;
+			ivp->iov_len = i;
+			ivp++;
+			cnt -= i;
+			if (cnt == 0)
+				nd->nd_dpos += i;
+		}
+		if (cnt > 0) {
+			mp = mp->m_next;
+			if (mp != NULL) {
+				i = mp->m_len;
+				nd->nd_dpos = mtod(mp, caddr_t);
+			}
+		}
+	}
+	if (rem > 0)
+		nd->nd_dpos += rem;
+	nd->nd_md = mp;
+
+	uiop->uio_rw = UIO_WRITE;
+	uiop->uio_segflg = UIO_SYSSPACE;
+	uiop->uio_td = p;
+	uiop->uio_offset = 0;
+	/* Now, do the Set Extended attribute, with Change before and after. */
+	NFSZERO_ATTRBIT(&attrbits);
+	NFSSETBIT_ATTRBIT(&attrbits, NFSATTRBIT_CHANGE);
+	nd->nd_repstat = nfsvno_getattr(vp, &ova, nd, p, 1, &attrbits);
+	if (nd->nd_repstat == 0)
+		nd->nd_repstat = nfsvno_setxattr(vp, name, uiop, nd->nd_cred,
+		    p);
+	free(iv, M_TEMP);
+	if (nd->nd_repstat == 0)
+		nd->nd_repstat = nfsvno_getattr(vp, &nva, nd, p, 1, &attrbits);
+	if (nd->nd_repstat == 0) {
+		NFSM_BUILD(tl, uint32_t *, 2 * NFSX_HYPER + NFSX_UNSIGNED);
+		*tl++ = newnfs_true;
+		txdr_hyper(ova.na_filerev, tl); tl += 2;
+		txdr_hyper(nva.na_filerev, tl);
+	}
+
+nfsmout:
+	free(name, M_TEMP);
+	if (nd->nd_repstat == 0)
+		nd->nd_repstat = error;
+	vput(vp);
+	NFSEXITCODE2(0, nd);
+	return (0);
+}
+
+/*
  * nfsv4 service not supported
  */
 APPLESTATIC int

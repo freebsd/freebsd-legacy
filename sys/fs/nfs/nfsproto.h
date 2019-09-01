@@ -390,11 +390,12 @@
 
 /* and the ones for the optional Extended attribute support (RFC-8276). */
 #define	NFSPROC_GETEXTATTR	61
+#define	NFSPROC_SETEXTATTR	62
 
 /*
  * Must be defined as one higher than the last NFSv4.2 Proc# above.
  */
-#define	NFSV42_NPROCS		62
+#define	NFSV42_NPROCS		63
 
 #endif	/* NFS_V3NPROCS */
 
@@ -1490,5 +1491,10 @@ typedef struct nfsv4stateid nfsv4stateid_t;
 /* Seek Contents. */
 #define	NFSV4CONTENT_DATA	0
 #define	NFSV4CONTENT_HOLE	1
+
+/* Options for Set Extended attribute (RFC-8276). */
+#define	NFSV4SXATTR_EITHER	0
+#define	NFSV4SXATTR_CREATE	1
+#define	NFSV4SXATTR_REPLACE	2
 
 #endif	/* _NFS_NFSPROTO_H_ */

@@ -149,6 +149,7 @@ static vop_allocate_t nfs_allocate;
 static vop_copy_file_range_t nfs_copy_file_range;
 static vop_ioctl_t nfs_ioctl;
 static vop_getextattr_t nfs_getextattr;
+static vop_setextattr_t nfs_setextattr;
 
 /*
  * Global vfs data structures for nfs
@@ -191,6 +192,7 @@ static struct vop_vector newnfs_vnodeops_nosig = {
 	.vop_copy_file_range =	nfs_copy_file_range,
 	.vop_ioctl =		nfs_ioctl,
 	.vop_getextattr =	nfs_getextattr,
+	.vop_setextattr =	nfs_setextattr,
 };
 
 static int
@@ -3790,7 +3792,63 @@ nfs_getextattr(struct vop_getextattr_args *ap)
 	switch (error) {
 	case NFSERR_NOTSUPP:
 	case NFSERR_OPILLEGAL:
-	case NFSERR_MINORVERMISMATCH:
+		mtx_lock(&nmp->nm_mtx);
+		nmp->nm_privflag |= NFSMNTP_NOXATTR;
+		mtx_unlock(&nmp->nm_mtx);
+		error = EOPNOTSUPP;
+		break;
+	case NFSERR_NOXATTR:
+	case NFSERR_XATTR2BIG:
+		error = ENOATTR;
+		break;
+	default:
+		error = nfscl_maperr(td, error, 0, 0);
+		break;
+	}
+	return (error);
+}
+
+/*
+ * nfs setextattr call
+ */
+static int
+nfs_setextattr(struct vop_setextattr_args *ap)
+{
+	struct vnode *vp = ap->a_vp;
+	struct nfsmount *nmp;
+	struct ucred *cred;
+	struct thread *td = ap->a_td;
+	struct nfsvattr nfsva;
+	int attrflag, error, ret;
+
+	nmp = VFSTONFS(vp->v_mount);
+	mtx_lock(&nmp->nm_mtx);
+	if (!NFSHASNFSV4(nmp) || nmp->nm_minorvers < NFSV42_MINORVERSION ||
+	    (nmp->nm_privflag & NFSMNTP_NOXATTR) != 0 ||
+	    ap->a_attrnamespace != EXTATTR_NAMESPACE_USER) {
+		mtx_unlock(&nmp->nm_mtx);
+		return (EOPNOTSUPP);
+	}
+	mtx_unlock(&nmp->nm_mtx);
+
+	if (ap->a_uio->uio_resid <= 0 || ap->a_uio->uio_resid > nmp->nm_wsize)
+		return (EINVAL);
+	cred = ap->a_cred;
+	if (cred == NULL)
+		cred = td->td_ucred;
+	/* Do the actual NFSv4.2 Optional Extended Attribute (RFC-8276) RPC. */
+	attrflag = 0;
+	error = nfsrpc_setextattr(vp, ap->a_name, ap->a_uio, &nfsva,
+	    &attrflag, cred, td);
+	if (attrflag != 0) {
+		ret = nfscl_loadattrcache(&vp, &nfsva, NULL, NULL, 0, 1);
+		if (error == 0 && ret != 0)
+			error = ret;
+	}
+
+	switch (error) {
+	case NFSERR_NOTSUPP:
+	case NFSERR_OPILLEGAL:
 		mtx_lock(&nmp->nm_mtx);
 		nmp->nm_privflag |= NFSMNTP_NOXATTR;
 		mtx_unlock(&nmp->nm_mtx);
