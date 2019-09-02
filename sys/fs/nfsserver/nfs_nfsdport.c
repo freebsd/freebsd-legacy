@@ -106,6 +106,8 @@ extern int nfsrv_dolocallocks;
 extern int nfsd_enable_stringtouid;
 extern struct nfsdevicehead nfsrv_devidhead;
 
+static int nfsrv_createiovec(int, struct mbuf **, struct mbuf **,
+    struct iovec **);
 static void nfsrv_pnfscreate(struct vnode *, struct vattr *, struct ucred *,
     NFSPROC_T *);
 static void nfsrv_pnfsremovesetup(struct vnode *, NFSPROC_T *, struct vnode **,
@@ -781,31 +783,20 @@ out:
 }
 
 /*
- * Read vnode op call into mbuf list.
+ * Create an mbuf chain and an associated iovec that can be used to Read
+ * or Getextattr of data.
+ * Upon success, return pointers to the first and last mbufs in the chain
+ * plus the malloc'd iovec and its iovlen.
  */
-int
-nfsvno_read(struct vnode *vp, off_t off, int cnt, struct ucred *cred,
-    struct thread *p, struct mbuf **mpp, struct mbuf **mpendp)
+static int
+nfsrv_createiovec(int len, struct mbuf **mpp, struct mbuf **mpendp,
+    struct iovec **ivp)
 {
-	struct mbuf *m;
-	int i;
+	struct mbuf *m, *m2 = NULL, *m3;
 	struct iovec *iv;
-	struct iovec *iv2;
-	int error = 0, len, left, siz, tlen, ioflag = 0;
-	struct mbuf *m2 = NULL, *m3;
-	struct uio io, *uiop = &io;
-	struct nfsheur *nh;
+	int i, left, siz;
 
-	/*
-	 * Attempt to read from a DS file. A return of ENOENT implies
-	 * there is no DS file to read.
-	 */
-	error = nfsrv_proxyds(NULL, vp, off, cnt, cred, p, NFSPROC_READDS, mpp,
-	    NULL, mpendp, NULL, NULL, NULL, 0, NULL);
-	if (error != ENOENT)
-		return (error);
-
-	len = left = NFSM_RNDUP(cnt);
+	left = len;
 	m3 = NULL;
 	/*
 	 * Generate the mbuf list with the uio_iov ref. to it.
@@ -824,9 +815,7 @@ nfsvno_read(struct vnode *vp, off_t off, int cnt, struct ucred *cred,
 			m3 = m;
 		m2 = m;
 	}
-	iv = malloc(i * sizeof (struct iovec),
-	    M_TEMP, M_WAITOK);
-	uiop->uio_iov = iv2 = iv;
+	*ivp = iv = malloc(i * sizeof (struct iovec), M_TEMP, M_WAITOK);
 	m = m3;
 	left = len;
 	i = 0;
@@ -844,7 +833,37 @@ nfsvno_read(struct vnode *vp, off_t off, int cnt, struct ucred *cred,
 		}
 		m = m->m_next;
 	}
-	uiop->uio_iovcnt = i;
+	*mpp = m3;
+	*mpendp = m2;
+	return (i);
+}
+
+/*
+ * Read vnode op call into mbuf list.
+ */
+int
+nfsvno_read(struct vnode *vp, off_t off, int cnt, struct ucred *cred,
+    struct thread *p, struct mbuf **mpp, struct mbuf **mpendp)
+{
+	struct mbuf *m;
+	struct iovec *iv;
+	int error = 0, len, tlen, ioflag = 0;
+	struct mbuf *m3;
+	struct uio io, *uiop = &io;
+	struct nfsheur *nh;
+
+	/*
+	 * Attempt to read from a DS file. A return of ENOENT implies
+	 * there is no DS file to read.
+	 */
+	error = nfsrv_proxyds(NULL, vp, off, cnt, cred, p, NFSPROC_READDS, mpp,
+	    NULL, mpendp, NULL, NULL, NULL, 0, NULL);
+	if (error != ENOENT)
+		return (error);
+
+	len = NFSM_RNDUP(cnt);
+	uiop->uio_iovcnt = nfsrv_createiovec(len, &m3, &m, &iv);
+	uiop->uio_iov = iv;
 	uiop->uio_offset = off;
 	uiop->uio_resid = len;
 	uiop->uio_rw = UIO_READ;
@@ -855,7 +874,7 @@ nfsvno_read(struct vnode *vp, off_t off, int cnt, struct ucred *cred,
 	/* XXX KDM make this more systematic? */
 	nfsstatsv1.srvbytes[NFSV4OP_READ] += uiop->uio_resid;
 	error = VOP_READ(vp, uiop, IO_NODELOCKED | ioflag, cred);
-	free(iv2, M_TEMP);
+	free(iv, M_TEMP);
 	if (error) {
 		m_freem(m3);
 		*mpp = NULL;
@@ -871,7 +890,7 @@ nfsvno_read(struct vnode *vp, off_t off, int cnt, struct ucred *cred,
 	} else if (len != tlen || tlen != cnt)
 		nfsrv_adj(m3, len - tlen, tlen - cnt);
 	*mpp = m3;
-	*mpendp = m2;
+	*mpendp = m;
 
 out:
 	NFSEXITCODE(error);
@@ -5874,38 +5893,25 @@ int
 nfsvno_getxattr(struct vnode *vp, char *name, struct ucred *cred,
     struct thread *p, struct mbuf **mpp, struct mbuf **mpendp, int *lenp)
 {
-	struct iovec *ivp, *ivp2;
+	struct iovec *iv;
 	struct uio io, *uiop = &io;
-	struct mbuf *mp, *mp2 = NULL, *mp3 = NULL;
-	int alen, error, i, len, maxiov, tlen;
+	struct mbuf *m, *m2;
+	int alen, error, len, tlen;
 	size_t siz;
 
-	maxiov = (NFS_SRVMAXIO + MCLBYTES - 1) / MCLBYTES;
-	if (maxiov < 1)
-		maxiov = 1;
-	ivp2 = ivp = mallocarray(maxiov, sizeof(*ivp), M_TEMP, M_WAITOK);
-	len = 0;
-	i = 0;
-	while (i < maxiov) {
-		NFSMGET(mp);
-		MCLGET(mp, M_WAITOK);
-		mp->m_len = M_SIZE(mp);
-		if (len == 0) {
-			mp3 = mp2 = mp;
-		} else {
-			mp2->m_next = mp;
-			mp2 = mp;
-		}
-		len += mp->m_len;
-		ivp->iov_base = mtod(mp, caddr_t);
-		ivp->iov_len = mp->m_len;
-		i++;
-		ivp++;
-	}
-	uiop->uio_iov = ivp2;
-	uiop->uio_iovcnt = i;
+	/* First, find out the size of the extended attribute. */
+	error = VOP_GETEXTATTR(vp, EXTATTR_NAMESPACE_USER, name, NULL,
+	    &siz, cred, p);
+	if (error != 0)
+		return (NFSERR_NOXATTR);
+	if (siz > 1000000)
+		return (NFSERR_XATTR2BIG);
+	len = siz;
+	tlen = NFSM_RNDUP(len);
+	uiop->uio_iovcnt = nfsrv_createiovec(tlen, &m, &m2, &iv);
+	uiop->uio_iov = iv;
 	uiop->uio_offset = 0;
-	uiop->uio_resid = len;
+	uiop->uio_resid = tlen;
 	uiop->uio_rw = UIO_READ;
 	uiop->uio_segflg = UIO_SYSSPACE;
 	uiop->uio_td = p;
@@ -5921,28 +5927,23 @@ nfsvno_getxattr(struct vnode *vp, char *name, struct ucred *cred,
 	if (error != 0)
 		goto out;
 	if (uiop->uio_resid > 0) {
-		alen = len;
-		len -= uiop->uio_resid;
+		alen = tlen;
+		len = tlen - uiop->uio_resid;
 		tlen = NFSM_RNDUP(len);
-		nfsrv_adj(mp3, alen - tlen, tlen - len);
-	} else {
-		error = VOP_GETEXTATTR(vp, EXTATTR_NAMESPACE_USER, name, NULL,
-		    &siz, cred, p);
-		if (error == 0 && len < siz)
-			error = NFSERR_XATTR2BIG;
+		if (alen != tlen)
+			printf("nfsvno_getxattr: weird size read\n");
+		nfsrv_adj(m, alen - tlen, tlen - len);
 	}
-	if (error == 0) {
-		*lenp = len;
-		*mpp = mp3;
-		*mpendp = mp;
-	}
+	*lenp = len;
+	*mpp = m;
+	*mpendp = m2;
 
 out:
 	if (error != 0) {
-		m_freem(mp3);
+		m_freem(m);
 		*lenp = 0;
 	}
-	free(ivp2, M_TEMP);
+	free(iv, M_TEMP);
 	NFSEXITCODE(error);
 	return (error);
 }
