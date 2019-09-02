@@ -31,6 +31,8 @@
 [ `id -u ` -ne 0 ] && echo "Must be root!" && exit 1
 
 # Run with marcus.cfg on a malloc backed MD with option trim.
+# Various panics seen with WiP kernel code. For example:
+# panic: Bad tailq head 0xfffff80160cb7170 first->prev != head
 
 . ../default.cfg
 
@@ -45,6 +47,7 @@ size="128m"
 s=0
 opt=""
 [ "$newfs_flags" = "-U" ] && opt="-U -j"
+export MAXSWAPPCT=80
 for flag in ' ' $opt; do
 	echo "mdconfig -a -t malloc -o reserve -s $size -u $mdstart"
 	mdconfig -a -t malloc -o reserve -s $size -u $mdstart || exit 1
@@ -55,7 +58,7 @@ for flag in ' ' $opt; do
 	mount /dev/md${mdstart}$part $mntpoint || exit 1
 	chmod 777 $mntpoint
 
-	export runRUNTIME=10m
+	export runRUNTIME=5m
 	export RUNDIR=$mntpoint/stressX
 
 	su $testuser -c 'cd ..; ./run.sh marcus.cfg' > /dev/null 2>&1
