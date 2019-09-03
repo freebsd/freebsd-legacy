@@ -49,6 +49,6 @@ EOF
 
 mycc -o /tmp/chain -I /usr/local/include -L /usr/local/lib -Wall -Wextra \
 	 -O2 -g /tmp/chain.c -lmill || exit 1
-/tmp/chain 1000000
+limits -c 0 /tmp/chain 1000000
 rm -f /tmp/chain /tmp/chain.c
 exit 0
