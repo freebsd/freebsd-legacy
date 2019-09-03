@@ -30,6 +30,9 @@
 
 # VM stress.
 
+# "panic: freeing free block: ffff40, size 8, mask 1" seen in WiP code:
+# https://people.freebsd.org/~pho/stress/log/sort.txt
+
 [ `sysctl -n vm.swap_total` -eq 0 ] && exit 0
 
 for i in `jot 6`; do
