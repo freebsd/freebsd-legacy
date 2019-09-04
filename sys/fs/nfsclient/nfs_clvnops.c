@@ -3713,10 +3713,6 @@ nfs_ioctl(struct vop_ioctl_args *ap)
 		return (error);
 	}
 
-	error = vn_lock(vp, LK_SHARED);
-	if (error != 0)
-		return (EBADF);
-
 	/* Do the actual NFSv4.2 RPC. */
 	switch (ap->a_command) {
 	case FIOSEEKDATA:
@@ -3728,6 +3724,10 @@ nfs_ioctl(struct vop_ioctl_args *ap)
 	default:
 		return (ENOTTY);
 	}
+
+	error = vn_lock(vp, LK_SHARED);
+	if (error != 0)
+		return (EBADF);
 	attrflag = 0;
 	if (*((off_t *)ap->a_data) >= VTONFS(vp)->n_size)
 		error = ENXIO;
