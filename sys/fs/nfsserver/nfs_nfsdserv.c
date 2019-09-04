@@ -869,9 +869,7 @@ APPLESTATIC int
 nfsrvd_write(struct nfsrv_descript *nd, __unused int isdgram,
     vnode_t vp, struct nfsexstuff *exp)
 {
-	int i, cnt;
 	u_int32_t *tl;
-	mbuf_t mp;
 	struct nfsvattr nva, forat;
 	int aftat_ret = 1, retlen, len, error = 0, forat_ret = 1;
 	int gotproxystateid, stable = NFSWRITE_FILESYNC;
@@ -953,28 +951,6 @@ nfsrvd_write(struct nfsrv_descript *nd, __unused int isdgram,
 			lop->lo_end = NFS64BITSSET;
 	}
 
-	/*
-	 * Loop through the mbuf chain, counting how many mbufs are a
-	 * part of this write operation, so the iovec size is known.
-	 */
-	cnt = 0;
-	mp = nd->nd_md;
-	i = NFSMTOD(mp, caddr_t) + mbuf_len(mp) - nd->nd_dpos;
-	while (len > 0) {
-		if (i > 0) {
-			len -= i;
-			cnt++;
-		}
-		mp = mbuf_next(mp);
-		if (!mp) {
-			if (len > 0) {
-				error = EBADRPC;
-				goto nfsmout;
-			}
-		} else
-			i = mbuf_len(mp);
-	}
-
 	if (retlen > NFS_SRVMAXIO || retlen < 0)
 		nd->nd_repstat = EIO;
 	if (vnode_vtype(vp) != VREG && !nd->nd_repstat) {
@@ -1016,7 +992,7 @@ nfsrvd_write(struct nfsrv_descript *nd, __unused int isdgram,
 	 * which is to return ok so long as there are no permission problems.
 	 */
 	if (retlen > 0) {
-		nd->nd_repstat = nfsvno_write(vp, off, retlen, cnt, &stable,
+		nd->nd_repstat = nfsvno_write(vp, off, retlen, &stable,
 		    nd->nd_md, nd->nd_dpos, nd->nd_cred, p);
 		error = nfsm_advance(nd, NFSM_RNDUP(retlen), -1);
 		if (error)
@@ -5538,11 +5514,9 @@ nfsrvd_setxattr(struct nfsrv_descript *nd, __unused int isdgram,
 {
 	uint32_t *tl;
 	mbuf_t mp = NULL, mpend = NULL;
-	struct iovec *ivp, *iv;
-	struct uio io, *uiop = &io;
 	struct nfsvattr ova, nva;
 	nfsattrbit_t attrbits;
-	int cnt, error, i, len, opt, rem, retlen;
+	int error, len, opt, retlen;
 	char *name;
 	struct thread *p = curthread;
 
@@ -5599,65 +5573,18 @@ nfsrvd_setxattr(struct nfsrv_descript *nd, __unused int isdgram,
 	if (nd->nd_repstat != 0)
 		goto nfsmout;
 
-	/* Figure out how many iovecs are needed. */
-	cnt = 1;
-	mp = nd->nd_md;
-	i = mp->m_len - (nd->nd_dpos - mtod(mp, char *));
-	while (i < len) {
-		mp = mp->m_next;
-		if (mp == NULL) {
-			nd->nd_repstat = NFSERR_BADXDR;
-			goto nfsmout;
-		}
-		i += mp->m_len;
-		cnt++;
-	}
-
-	/* Now create the uio structure and iovec. */
-	ivp = mallocarray(cnt, sizeof(*ivp), M_TEMP, M_WAITOK);
-	uiop->uio_iov = iv = ivp;
-	uiop->uio_iovcnt = cnt;
-	uiop->uio_resid = len;
-	rem = NFSM_RNDUP(len) - len;
-	cnt = len;
-	mp = nd->nd_md;
-	i = mp->m_len - (nd->nd_dpos - mtod(mp, char *));
-	while (cnt > 0) {
-		if (mp == NULL)
-			panic("nfsvno_write");
-		if (i > 0) {
-			i = min(i, cnt);
-			ivp->iov_base = nd->nd_dpos;
-			ivp->iov_len = i;
-			ivp++;
-			cnt -= i;
-			if (cnt == 0)
-				nd->nd_dpos += i;
-		}
-		if (cnt > 0) {
-			mp = mp->m_next;
-			if (mp != NULL) {
-				i = mp->m_len;
-				nd->nd_dpos = mtod(mp, caddr_t);
-			}
-		}
-	}
-	if (rem > 0)
-		nd->nd_dpos += rem;
-	nd->nd_md = mp;
-
-	uiop->uio_rw = UIO_WRITE;
-	uiop->uio_segflg = UIO_SYSSPACE;
-	uiop->uio_td = p;
-	uiop->uio_offset = 0;
 	/* Now, do the Set Extended attribute, with Change before and after. */
 	NFSZERO_ATTRBIT(&attrbits);
 	NFSSETBIT_ATTRBIT(&attrbits, NFSATTRBIT_CHANGE);
 	nd->nd_repstat = nfsvno_getattr(vp, &ova, nd, p, 1, &attrbits);
+	if (nd->nd_repstat == 0) {
+		nd->nd_repstat = nfsvno_setxattr(vp, name, len, nd->nd_md,
+		    nd->nd_dpos, nd->nd_cred, p);
+		if (nd->nd_repstat == ENXIO)
+			nd->nd_repstat = NFSERR_XATTR2BIG;
+	}
 	if (nd->nd_repstat == 0)
-		nd->nd_repstat = nfsvno_setxattr(vp, name, uiop, nd->nd_cred,
-		    p);
-	free(iv, M_TEMP);
+		nd->nd_repstat = nfsm_advance(nd, NFSM_RNDUP(len), -1);
 	if (nd->nd_repstat == 0)
 		nd->nd_repstat = nfsvno_getattr(vp, &nva, nd, p, 1, &attrbits);
 	if (nd->nd_repstat == 0) {

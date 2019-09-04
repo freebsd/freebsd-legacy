@@ -108,6 +108,8 @@ extern struct nfsdevicehead nfsrv_devidhead;
 
 static int nfsrv_createiovec(int, struct mbuf **, struct mbuf **,
     struct iovec **);
+static int nfsrv_createiovecw(int, struct mbuf *, char *, struct iovec **,
+    int *);
 static void nfsrv_pnfscreate(struct vnode *, struct vattr *, struct ucred *,
     NFSPROC_T *);
 static void nfsrv_pnfsremovesetup(struct vnode *, NFSPROC_T *, struct vnode **,
@@ -726,43 +728,21 @@ int
 nfsvno_readlink(struct vnode *vp, struct ucred *cred, struct thread *p,
     struct mbuf **mpp, struct mbuf **mpendp, int *lenp)
 {
-	struct iovec iv[(NFS_MAXPATHLEN+MLEN-1)/MLEN];
-	struct iovec *ivp = iv;
+	struct iovec *iv;
 	struct uio io, *uiop = &io;
-	struct mbuf *mp, *mp2 = NULL, *mp3 = NULL;
-	int i, len, tlen, error = 0;
+	struct mbuf *mp, *mp3;
+	int len, tlen, error = 0;
 
-	len = 0;
-	i = 0;
-	while (len < NFS_MAXPATHLEN) {
-		NFSMGET(mp);
-		MCLGET(mp, M_WAITOK);
-		mp->m_len = M_SIZE(mp);
-		if (len == 0) {
-			mp3 = mp2 = mp;
-		} else {
-			mp2->m_next = mp;
-			mp2 = mp;
-		}
-		if ((len + mp->m_len) > NFS_MAXPATHLEN) {
-			mp->m_len = NFS_MAXPATHLEN - len;
-			len = NFS_MAXPATHLEN;
-		} else {
-			len += mp->m_len;
-		}
-		ivp->iov_base = mtod(mp, caddr_t);
-		ivp->iov_len = mp->m_len;
-		i++;
-		ivp++;
-	}
+	len = NFS_MAXPATHLEN;
+	uiop->uio_iovcnt = nfsrv_createiovec(len, &mp3, &mp, &iv);
 	uiop->uio_iov = iv;
-	uiop->uio_iovcnt = i;
 	uiop->uio_offset = 0;
 	uiop->uio_resid = len;
 	uiop->uio_rw = UIO_READ;
 	uiop->uio_segflg = UIO_SYSSPACE;
 	uiop->uio_td = NULL;
 	error = VOP_READLINK(vp, uiop, cred);
+	free(iv, M_TEMP);
 	if (error) {
 		m_freem(mp3);
 		*lenp = 0;
@@ -898,34 +878,44 @@ out:
 }
 
 /*
- * Write vnode op from an mbuf list.
+ * Create the iovec for the mbuf chain passed in as an argument.
+ * The "cp" argument is where the data starts within the first mbuf in
+ * the chain. It returns the iovec and the iovcnt.
  */
-int
-nfsvno_write(struct vnode *vp, off_t off, int retlen, int cnt, int *stable,
-    struct mbuf *mp, char *cp, struct ucred *cred, struct thread *p)
+static int
+nfsrv_createiovecw(int retlen, struct mbuf *m, char *cp, struct iovec **ivpp,
+    int *iovcntp)
 {
+	struct mbuf *mp;
 	struct iovec *ivp;
-	int i, len;
-	struct iovec *iv;
-	int ioflags, error;
-	struct uio io, *uiop = &io;
-	struct nfsheur *nh;
+	int cnt, i, len;
 
 	/*
-	 * Attempt to write to a DS file. A return of ENOENT implies
-	 * there is no DS file to write.
+	 * Loop through the mbuf chain, counting how many mbufs are a
+	 * part of this write operation, so the iovec size is known.
 	 */
-	error = nfsrv_proxyds(NULL, vp, off, retlen, cred, p, NFSPROC_WRITEDS,
-	    &mp, cp, NULL, NULL, NULL, NULL, 0, NULL);
-	if (error != ENOENT) {
-		*stable = NFSWRITE_FILESYNC;
-		return (error);
+	cnt = 0;
+	len = retlen;
+	mp = m;
+	i = mtod(mp, caddr_t) + mbuf_len(mp) - cp;
+	while (len > 0) {
+		if (i > 0) {
+			len -= i;
+			cnt++;
+		}
+		mp = mbuf_next(mp);
+		if (!mp) {
+			if (len > 0)
+				return (EBADRPC);
+		} else
+			i = mbuf_len(mp);
 	}
 
-	ivp = malloc(cnt * sizeof (struct iovec), M_TEMP,
+	/* Now, create the iovec. */
+	mp = m;
+	*ivpp = ivp = malloc(cnt * sizeof (struct iovec), M_TEMP,
 	    M_WAITOK);
-	uiop->uio_iov = iv = ivp;
-	uiop->uio_iovcnt = cnt;
+	*iovcntp = cnt;
 	i = mtod(mp, caddr_t) + mp->m_len - cp;
 	len = retlen;
 	while (len > 0) {
@@ -944,11 +934,42 @@ nfsvno_write(struct vnode *vp, off_t off, int retlen, int cnt, int *stable,
 			cp = mtod(mp, caddr_t);
 		}
 	}
+	return (0);
+}
+
+/*
+ * Write vnode op from an mbuf list.
+ */
+int
+nfsvno_write(struct vnode *vp, off_t off, int retlen, int *stable,
+    struct mbuf *mp, char *cp, struct ucred *cred, struct thread *p)
+{
+	struct iovec *iv;
+	int cnt, ioflags, error;
+	struct uio io, *uiop = &io;
+	struct nfsheur *nh;
+
+	/*
+	 * Attempt to write to a DS file. A return of ENOENT implies
+	 * there is no DS file to write.
+	 */
+	error = nfsrv_proxyds(NULL, vp, off, retlen, cred, p, NFSPROC_WRITEDS,
+	    &mp, cp, NULL, NULL, NULL, NULL, 0, NULL);
+	if (error != ENOENT) {
+		*stable = NFSWRITE_FILESYNC;
+		return (error);
+	}
+
 
 	if (*stable == NFSWRITE_UNSTABLE)
 		ioflags = IO_NODELOCKED;
 	else
 		ioflags = (IO_SYNC | IO_NODELOCKED);
+	error = nfsrv_createiovecw(retlen, mp, cp, &iv, &cnt);
+	if (error != 0)
+		return (error);
+	uiop->uio_iov = iv;
+	uiop->uio_iovcnt = cnt;
 	uiop->uio_resid = retlen;
 	uiop->uio_rw = UIO_WRITE;
 	uiop->uio_segflg = UIO_SYSSPACE;
@@ -5952,23 +5973,35 @@ out:
  * Set Extended attribute vnode op from an mbuf list.
  */
 int
-nfsvno_setxattr(struct vnode *vp, char *name, struct uio *uiop,
-    struct ucred *cred, struct thread *p)
+nfsvno_setxattr(struct vnode *vp, char *name, int len, struct mbuf *m,
+    char *cp, struct ucred *cred, struct thread *p)
 {
-	int error;
+	struct iovec *iv;
+	struct uio uio, *uiop = &uio;
+	int cnt, error;
 
-	error = 0;
 #ifdef MAC
 	error = mac_vnode_check_setextattr(cred, vp, EXTATTR_NAMESPACE_USER,
 	    name);
+	if (error != 0)
+		goto out;
 #endif
 
-	if (error == 0)
+	uiop->uio_rw = UIO_WRITE;
+	uiop->uio_segflg = UIO_SYSSPACE;
+	uiop->uio_td = p;
+	uiop->uio_offset = 0;
+	uiop->uio_resid = len;
+	error = nfsrv_createiovecw(len, m, cp, &iv, &cnt);
+	uiop->uio_iov = iv;
+	uiop->uio_iovcnt = cnt;
+	if (error == 0) {
 		error = VOP_SETEXTATTR(vp, EXTATTR_NAMESPACE_USER, name, uiop,
 		    cred, p);
-	if (error == 0 && uiop->uio_resid > 0)
-		error = NFSERR_XATTR2BIG;
+		free(iv, M_TEMP);
+	}
 
+out:
 	NFSEXITCODE(error);
 	return (error);
 }

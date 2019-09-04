@@ -673,8 +673,8 @@ int nfsvno_readlink(vnode_t, struct ucred *, NFSPROC_T *, mbuf_t *,
     mbuf_t *, int *);
 int nfsvno_read(vnode_t, off_t, int, struct ucred *, NFSPROC_T *,
     mbuf_t *, mbuf_t *);
-int nfsvno_write(vnode_t, off_t, int, int, int *, mbuf_t,
-    char *, struct ucred *, NFSPROC_T *);
+int nfsvno_write(vnode_t, off_t, int, int *, mbuf_t, char *, struct ucred *,
+    NFSPROC_T *);
 int nfsvno_createsub(struct nfsrv_descript *, struct nameidata *,
     vnode_t *, struct nfsvattr *, int *, int32_t *, NFSDEV_T,
     struct nfsexstuff *);
@@ -737,8 +737,8 @@ int nfsvno_seek(struct nfsrv_descript *, struct vnode *, u_long, off_t *, int,
     bool *, struct ucred *, NFSPROC_T *);
 int nfsvno_getxattr(struct vnode *, char *, struct ucred *, struct thread *,
     struct mbuf **, struct mbuf **, int *);
-int nfsvno_setxattr(struct vnode *, char *, struct uio *, struct ucred *,
-    struct thread *);
+int nfsvno_setxattr(struct vnode *, char *, int, struct mbuf *, char *,
+    struct ucred *, struct thread *);
 
 /* nfs_commonkrpc.c */
 int newnfs_nmcancelreqs(struct nfsmount *);
