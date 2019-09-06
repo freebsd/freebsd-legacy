@@ -5388,13 +5388,16 @@ out:
  * delegations.
  */
 APPLESTATIC int
-nfsrv_checkremove(vnode_t vp, int remove, NFSPROC_T *p)
+nfsrv_checkremove(vnode_t vp, int remove, struct nfsrv_descript *nd,
+    nfsquad_t clientid, NFSPROC_T *p)
 {
+	struct nfsclient *clp;
 	struct nfsstate *stp;
 	struct nfslockfile *lfp;
 	int error, haslock = 0;
 	fhandle_t nfh;
 
+	clp = NULL;
 	/*
 	 * First, get the lock file structure.
 	 * (A return of -1 means no associated state, so remove ok.)
@@ -5402,6 +5405,9 @@ nfsrv_checkremove(vnode_t vp, int remove, NFSPROC_T *p)
 	error = nfsrv_getlockfh(vp, NFSLCK_CHECK, NULL, &nfh, p);
 tryagain:
 	NFSLOCKSTATE();
+	if (error == 0 && clientid.qval != 0)
+		error = nfsrv_getclient(clientid, CLOPS_RENEW, &clp, NULL,
+		    (nfsquad_t)((u_quad_t)0), 0, nd, p);
 	if (!error)
 		error = nfsrv_getlockfile(NFSLCK_CHECK, NULL, &lfp, &nfh, 0);
 	if (error) {
@@ -5419,7 +5425,7 @@ tryagain:
 	/*
 	 * Now, we must Recall any delegations.
 	 */
-	error = nfsrv_cleandeleg(vp, lfp, NULL, &haslock, p);
+	error = nfsrv_cleandeleg(vp, lfp, clp, &haslock, p);
 	if (error) {
 		/*
 		 * nfsrv_cleandeleg() unlocks state for non-zero
@@ -5556,7 +5562,8 @@ nfsd_recalldelegation(vnode_t vp, NFSPROC_T *p)
 	starttime = NFSD_MONOSEC;
 	do {
 		if (NFSVOPLOCK(vp, LK_EXCLUSIVE) == 0) {
-			error = nfsrv_checkremove(vp, 0, p);
+			error = nfsrv_checkremove(vp, 0, NULL,
+			    (nfsquad_t)((u_quad_t)0), p);
 			NFSVOPUNLOCK(vp, 0);
 		} else
 			error = EPERM;

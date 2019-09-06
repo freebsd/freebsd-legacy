@@ -5604,6 +5604,75 @@ nfsmout:
 }
 
 /*
+ * nfs remove extended attribute service
+ */
+APPLESTATIC int
+nfsrvd_rmxattr(struct nfsrv_descript *nd, __unused int isdgram,
+    vnode_t vp, __unused struct nfsexstuff *exp)
+{
+	uint32_t *tl;
+	struct nfsvattr ova, nva;
+	nfsattrbit_t attrbits;
+	int error, len;
+	char *name;
+	struct thread *p = curthread;
+
+	error = 0;
+	name = NULL;
+	if (nfs_rootfhset == 0 || nfsd_checkrootexp(nd) != 0) {
+		nd->nd_repstat = NFSERR_WRONGSEC;
+		goto nfsmout;
+	}
+	NFSM_DISSECT(tl, uint32_t *, NFSX_UNSIGNED);
+	len = fxdr_unsigned(int, *tl);
+	if (len <= 0) {
+		nd->nd_repstat = NFSERR_BADXDR;
+		goto nfsmout;
+	}
+	if (len > EXTATTR_MAXNAMELEN) {
+		nd->nd_repstat = NFSERR_NOXATTR;
+		goto nfsmout;
+	}
+	name = malloc(len + 1, M_TEMP, M_WAITOK);
+	error = nfsrv_mtostr(nd, name, len);
+	if (error != 0)
+		goto nfsmout;
+
+	if ((nd->nd_flag & ND_IMPLIEDCLID) == 0) {
+		printf("EEK! nfsrvd_rmxattr: no implied clientid\n");
+		error = NFSERR_NOXATTR;
+		goto nfsmout;
+	}
+	/*
+	 * Now, do the Remove Extended attribute, with Change before and
+	 * after.
+	*/
+	NFSZERO_ATTRBIT(&attrbits);
+	NFSSETBIT_ATTRBIT(&attrbits, NFSATTRBIT_CHANGE);
+	nd->nd_repstat = nfsvno_getattr(vp, &ova, nd, p, 1, &attrbits);
+	if (nd->nd_repstat == 0) {
+		nd->nd_repstat = nfsvno_rmxattr(nd, vp, name, nd->nd_cred, p);
+		if (nd->nd_repstat == ENOATTR)
+			nd->nd_repstat = NFSERR_NOXATTR;
+	}
+	if (nd->nd_repstat == 0)
+		nd->nd_repstat = nfsvno_getattr(vp, &nva, nd, p, 1, &attrbits);
+	if (nd->nd_repstat == 0) {
+		NFSM_BUILD(tl, uint32_t *, 2 * NFSX_HYPER);
+		txdr_hyper(ova.na_filerev, tl); tl += 2;
+		txdr_hyper(nva.na_filerev, tl);
+	}
+
+nfsmout:
+	free(name, M_TEMP);
+	if (nd->nd_repstat == 0)
+		nd->nd_repstat = error;
+	vput(vp);
+	NFSEXITCODE2(0, nd);
+	return (0);
+}
+
+/*
  * nfsv4 service not supported
  */
 APPLESTATIC int

@@ -1291,7 +1291,8 @@ nfsvno_removesub(struct nameidata *ndp, int is_v4, struct ucred *cred,
 	if (vp->v_type == VDIR)
 		error = NFSERR_ISDIR;
 	else if (is_v4)
-		error = nfsrv_checkremove(vp, 1, p);
+		error = nfsrv_checkremove(vp, 1, NULL, (nfsquad_t)((u_quad_t)0),
+		    p);
 	if (error == 0)
 		nfsrv_pnfsremovesetup(vp, p, dsdvp, &mirrorcnt, fname, &fh);
 	if (!error)
@@ -1421,12 +1422,14 @@ nfsvno_rename(struct nameidata *fromndp, struct nameidata *tondp,
 	}
 	if (ndflag & ND_NFSV4) {
 		if (NFSVOPLOCK(fvp, LK_EXCLUSIVE) == 0) {
-			error = nfsrv_checkremove(fvp, 0, p);
+			error = nfsrv_checkremove(fvp, 0, NULL,
+			    (nfsquad_t)((u_quad_t)0), p);
 			NFSVOPUNLOCK(fvp, 0);
 		} else
 			error = EPERM;
 		if (tvp && !error)
-			error = nfsrv_checkremove(tvp, 1, p);
+			error = nfsrv_checkremove(tvp, 1, NULL,
+			    (nfsquad_t)((u_quad_t)0), p);
 	} else {
 		/*
 		 * For NFSv2 and NFSv3, try to get rid of the delegation, so
@@ -6002,6 +6005,40 @@ nfsvno_setxattr(struct vnode *vp, char *name, int len, struct mbuf *m,
 	}
 
 out:
+	NFSEXITCODE(error);
+	return (error);
+}
+
+/*
+ * Remove Extended attribute vnode op.
+ */
+int
+nfsvno_rmxattr(struct nfsrv_descript *nd, struct vnode *vp, char *name,
+    struct ucred *cred, struct thread *p)
+{
+	int error;
+
+	/*
+	 * Get rid of any delegations.  I am not sure why this is required,
+	 * but RFC-8276 says so.
+	 */
+	error = nfsrv_checkremove(vp, 0, nd, nd->nd_clientid, p);
+	if (error != 0)
+		goto out;
+#ifdef MAC
+	error = mac_vnode_check_deleteextattr(cred, vp, EXTATTR_NAMESPACE_USER,
+	    name);
+	if (error != 0)
+		goto out;
+#endif
+
+	error = VOP_DELETEEXTATTR(vp, EXTATTR_NAMESPACE_USER, name, cred, p);
+	if (error == EOPNOTSUPP)
+		error = VOP_SETEXTATTR(vp, EXTATTR_NAMESPACE_USER, name, NULL,
+		    cred, p);
+#ifdef MAC
+out:
+#endif
 	NFSEXITCODE(error);
 	return (error);
 }

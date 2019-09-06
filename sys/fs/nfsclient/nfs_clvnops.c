@@ -150,6 +150,7 @@ static vop_copy_file_range_t nfs_copy_file_range;
 static vop_ioctl_t nfs_ioctl;
 static vop_getextattr_t nfs_getextattr;
 static vop_setextattr_t nfs_setextattr;
+static vop_deleteextattr_t nfs_deleteextattr;
 
 /*
  * Global vfs data structures for nfs
@@ -193,6 +194,7 @@ static struct vop_vector newnfs_vnodeops_nosig = {
 	.vop_ioctl =		nfs_ioctl,
 	.vop_getextattr =	nfs_getextattr,
 	.vop_setextattr =	nfs_setextattr,
+	.vop_deleteextattr =	nfs_deleteextattr,
 };
 
 static int
@@ -3860,6 +3862,56 @@ nfs_setextattr(struct vop_setextattr_args *ap)
 		break;
 	default:
 		error = nfscl_maperr(td, error, 0, 0);
+		break;
+	}
+	return (error);
+}
+
+/*
+ * nfs setextattr call
+ */
+static int
+nfs_deleteextattr(struct vop_deleteextattr_args *ap)
+{
+	struct vnode *vp = ap->a_vp;
+	struct nfsmount *nmp;
+	struct nfsvattr nfsva;
+	int attrflag, error, ret;
+
+	nmp = VFSTONFS(vp->v_mount);
+	mtx_lock(&nmp->nm_mtx);
+	if (!NFSHASNFSV4(nmp) || nmp->nm_minorvers < NFSV42_MINORVERSION ||
+	    (nmp->nm_privflag & NFSMNTP_NOXATTR) != 0 ||
+	    ap->a_attrnamespace != EXTATTR_NAMESPACE_USER) {
+		mtx_unlock(&nmp->nm_mtx);
+		return (EOPNOTSUPP);
+	}
+	mtx_unlock(&nmp->nm_mtx);
+
+	/* Do the actual NFSv4.2 Optional Extended Attribute (RFC-8276) RPC. */
+	attrflag = 0;
+	error = nfsrpc_rmextattr(vp, ap->a_name, &nfsva, &attrflag, ap->a_cred,
+	    ap->a_td);
+	if (attrflag != 0) {
+		ret = nfscl_loadattrcache(&vp, &nfsva, NULL, NULL, 0, 1);
+		if (error == 0 && ret != 0)
+			error = ret;
+	}
+
+	switch (error) {
+	case NFSERR_NOTSUPP:
+	case NFSERR_OPILLEGAL:
+		mtx_lock(&nmp->nm_mtx);
+		nmp->nm_privflag |= NFSMNTP_NOXATTR;
+		mtx_unlock(&nmp->nm_mtx);
+		error = EOPNOTSUPP;
+		break;
+	case NFSERR_NOXATTR:
+	case NFSERR_XATTR2BIG:
+		error = ENOATTR;
+		break;
+	default:
+		error = nfscl_maperr(ap->a_td, error, 0, 0);
 		break;
 	}
 	return (error);

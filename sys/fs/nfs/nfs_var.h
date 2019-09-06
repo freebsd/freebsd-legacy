@@ -128,7 +128,8 @@ void nfsrv_setupstable(NFSPROC_T *);
 void nfsrv_updatestable(NFSPROC_T *);
 void nfsrv_writestable(u_char *, int, int, NFSPROC_T *);
 void nfsrv_throwawayopens(NFSPROC_T *);
-int nfsrv_checkremove(vnode_t, int, NFSPROC_T *);
+int nfsrv_checkremove(vnode_t, int, struct nfsrv_descript *, nfsquad_t,
+    NFSPROC_T *);
 void nfsd_recalldelegation(vnode_t, NFSPROC_T *);
 void nfsd_disabledelegation(vnode_t, NFSPROC_T *);
 int nfsrv_checksetattr(vnode_t, struct nfsrv_descript *,
@@ -286,6 +287,8 @@ int nfsrvd_seek(struct nfsrv_descript *, int,
 int nfsrvd_getxattr(struct nfsrv_descript *, int,
     vnode_t, struct nfsexstuff *);
 int nfsrvd_setxattr(struct nfsrv_descript *, int,
+    vnode_t, struct nfsexstuff *);
+int nfsrvd_rmxattr(struct nfsrv_descript *, int,
     vnode_t, struct nfsexstuff *);
 int nfsrvd_notsupp(struct nfsrv_descript *, int,
     vnode_t, struct nfsexstuff *);
@@ -552,6 +555,8 @@ int nfsrpc_getextattr(vnode_t, const char *, struct uio *, ssize_t *,
     struct nfsvattr *, int *, struct ucred *, NFSPROC_T *);
 int nfsrpc_setextattr(vnode_t, const char *, struct uio *, struct nfsvattr *,
     int *, struct ucred *, NFSPROC_T *);
+int nfsrpc_rmextattr(vnode_t, const char *, struct nfsvattr *, int *,
+    struct ucred *, NFSPROC_T *);
 
 /* nfs_clstate.c */
 int nfscl_open(vnode_t, u_int8_t *, int, u_int32_t, int,
@@ -738,6 +743,8 @@ int nfsvno_seek(struct nfsrv_descript *, struct vnode *, u_long, off_t *, int,
 int nfsvno_getxattr(struct vnode *, char *, struct ucred *, struct thread *,
     struct mbuf **, struct mbuf **, int *);
 int nfsvno_setxattr(struct vnode *, char *, int, struct mbuf *, char *,
+    struct ucred *, struct thread *);
+int nfsvno_rmxattr(struct nfsrv_descript *, struct vnode *, char *,
     struct ucred *, struct thread *);
 
 /* nfs_commonkrpc.c */

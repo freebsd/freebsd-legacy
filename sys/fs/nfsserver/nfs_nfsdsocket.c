@@ -212,7 +212,7 @@ int (*nfsrv4_ops0[NFSV42_NOPS])(struct nfsrv_descript *,
 	nfsrvd_getxattr,
 	nfsrvd_setxattr,
 	nfsrvd_notsupp,
-	nfsrvd_notsupp,
+	nfsrvd_rmxattr,
 };
 
 int (*nfsrv4_ops1[NFSV42_NOPS])(struct nfsrv_descript *,

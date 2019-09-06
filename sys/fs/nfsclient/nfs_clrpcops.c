@@ -8354,3 +8354,41 @@ nfsmout:
 	return (error);
 }
 
+/*
+ * The removeextattr RPC.
+ */
+APPLESTATIC int
+nfsrpc_rmextattr(vnode_t vp, const char *name, struct nfsvattr *nap,
+    int *attrflagp, struct ucred *cred, NFSPROC_T *p)
+{
+	uint32_t *tl;
+	int error;
+	struct nfsrv_descript nfsd;
+	struct nfsrv_descript *nd = &nfsd;
+	nfsattrbit_t attrbits;
+
+	*attrflagp = 0;
+	NFSCL_REQSTART(nd, NFSPROC_RMEXTATTR, vp);
+	nfsm_strtom(nd, name, strlen(name));
+	NFSM_BUILD(tl, uint32_t *, NFSX_UNSIGNED);
+	*tl = txdr_unsigned(NFSV4OP_GETATTR);
+	NFSGETATTR_ATTRBIT(&attrbits);
+	nfsrv_putattrbit(nd, &attrbits);
+	error = nfscl_request(nd, vp, p, cred, NULL);
+	if (error != 0)
+		return (error);
+	if (nd->nd_repstat == 0) {
+		/* Just skip over the reply and Getattr op status. */
+		NFSM_DISSECT(tl, uint32_t *, 2 * NFSX_HYPER + 2 *
+		    NFSX_UNSIGNED);
+		error = nfsm_loadattr(nd, nap);
+		if (error == 0)
+			*attrflagp = 1;
+	}
+	if (error == 0)
+		error = nd->nd_repstat;
+nfsmout:
+	mbuf_freem(nd->nd_mrep);
+	return (error);
+}
+
