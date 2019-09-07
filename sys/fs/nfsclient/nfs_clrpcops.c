@@ -4779,9 +4779,8 @@ nfsrpc_createsession(struct nfsmount *nmp, struct nfsclsession *sep,
 	/* Fill in fore channel attributes. */
 	NFSM_BUILD(tl, uint32_t *, 7 * NFSX_UNSIGNED);
 	*tl++ = 0;				/* Header pad size */
-	if ((nd->nd_flag & ND_NFSV42) != 0 && mds != 0 &&
-	    sb_max_adj - NFS_MAXXDR > nmp->nm_wsize - NFS_MAXXDR &&
-	    sb_max_adj - NFS_MAXXDR > nmp->nm_rsize - NFS_MAXXDR) {
+	if ((nd->nd_flag & ND_NFSV42) != 0 && mds != 0 && sb_max_adj >=
+	    nmp->nm_wsize && sb_max_adj >= nmp->nm_rsize) {
 		/*
 		 * NFSv4.2 Extended Attribute operations may want to do
 		 * requests/replies that are larger than nm_rsize/nm_wsize.
