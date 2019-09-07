@@ -64,6 +64,8 @@ struct nfsclsession {
 	uint64_t	nfsess_slots;
 	uint32_t	nfsess_sequenceid;
 	uint32_t	nfsess_maxcache;	/* Max size for cached reply. */
+	uint32_t	nfsess_maxreq;		/* Max request size. */
+	uint32_t	nfsess_maxresp;		/* Max reply size. */
 	uint16_t	nfsess_foreslots;
 	uint16_t	nfsess_backslots;
 	uint8_t		nfsess_sessionid[NFSX_V4SESSIONID];

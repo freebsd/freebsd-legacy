@@ -4633,8 +4633,8 @@ nfsv4_setsequence(struct nfsmount *nmp, struct nfsrv_descript *nd,
 
 	error = nfsv4_sequencelookup(nmp, sep, &slotpos, &maxslot, &slotseq,
 	    sessionid);
-	nd->nd_maxreq = sep->sess_maxreq;
-	nd->nd_maxresp = sep->sess_maxresp;
+	nd->nd_maxreq = sep->nfsess_maxreq;
+	nd->nd_maxresp = sep->nfsess_maxresp;
 
 	/* Build the Sequence arguments. */
 	NFSM_BUILD(tl, uint32_t *, NFSX_V4SESSIONID + 4 * NFSX_UNSIGNED);

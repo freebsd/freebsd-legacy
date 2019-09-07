@@ -74,6 +74,7 @@ extern int nfsrv_useacl;
 extern char nfsv4_callbackaddr[INET6_ADDRSTRLEN];
 extern int nfscl_debuglevel;
 extern int nfs_pnfsiothreads;
+extern u_long sb_max_adj;
 NFSCLSTATEMUTEX;
 int nfstest_outofseq = 0;
 int nfscl_assumeposixlocks = 1;
@@ -4778,8 +4779,19 @@ nfsrpc_createsession(struct nfsmount *nmp, struct nfsclsession *sep,
 	/* Fill in fore channel attributes. */
 	NFSM_BUILD(tl, uint32_t *, 7 * NFSX_UNSIGNED);
 	*tl++ = 0;				/* Header pad size */
-	*tl++ = txdr_unsigned(nmp->nm_wsize + NFS_MAXXDR);/* Max request size */
-	*tl++ = txdr_unsigned(nmp->nm_rsize + NFS_MAXXDR);/* Max reply size */
+	if ((nd->nd_flag & ND_NFSV42) != 0 && mds != 0 &&
+	    sb_max_adj - NFS_MAXXDR > nmp->nm_wsize - NFS_MAXXDR &&
+	    sb_max_adj - NFS_MAXXDR > nmp->nm_rsize - NFS_MAXXDR) {
+		/*
+		 * NFSv4.2 Extended Attribute operations may want to do
+		 * requests/replies that are larger than nm_rsize/nm_wsize.
+		 */
+		*tl++ = txdr_unsigned(sb_max_adj - NFS_MAXXDR);
+		*tl++ = txdr_unsigned(sb_max_adj - NFS_MAXXDR);
+	} else {
+		*tl++ = txdr_unsigned(nmp->nm_wsize + NFS_MAXXDR);
+		*tl++ = txdr_unsigned(nmp->nm_rsize + NFS_MAXXDR);
+	}
 	*tl++ = txdr_unsigned(4096);		/* Max response size cached */
 	*tl++ = txdr_unsigned(20);		/* Max operations */
 	*tl++ = txdr_unsigned(64);		/* Max slots */
@@ -4836,6 +4848,7 @@ nfsrpc_createsession(struct nfsmount *nmp, struct nfsclsession *sep,
 			else
 				break;
 		}
+		sep->nfsess_maxreq = maxval;
 
 		/* Make sure nm_rsize is small enough. */
 		maxval = fxdr_unsigned(uint32_t, *tl++);
@@ -4845,6 +4858,7 @@ nfsrpc_createsession(struct nfsmount *nmp, struct nfsclsession *sep,
 			else
 				break;
 		}
+		sep->nfsess_maxresp = maxval;
 
 		sep->nfsess_maxcache = fxdr_unsigned(int, *tl++);
 		tl++;
@@ -8327,6 +8341,11 @@ nfsrpc_setextattr(vnode_t vp, const char *name, struct uio *uiop,
 
 	*attrflagp = 0;
 	NFSCL_REQSTART(nd, NFSPROC_SETEXTATTR, vp);
+	if (uiop->uio_resid > nd->nd_maxreq) {
+		/* nd_maxreq is set by NFSCL_REQSTART(). */
+		mbuf_freem(nd->nd_mreq);
+		return (EINVAL);
+	}
 	NFSM_BUILD(tl, uint32_t *, NFSX_UNSIGNED);
 	*tl = txdr_unsigned(NFSV4SXATTR_EITHER);
 	nfsm_strtom(nd, name, strlen(name));
