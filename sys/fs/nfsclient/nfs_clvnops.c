@@ -150,6 +150,7 @@ static vop_copy_file_range_t nfs_copy_file_range;
 static vop_ioctl_t nfs_ioctl;
 static vop_getextattr_t nfs_getextattr;
 static vop_setextattr_t nfs_setextattr;
+static vop_listextattr_t nfs_listextattr;
 static vop_deleteextattr_t nfs_deleteextattr;
 
 /*
@@ -194,6 +195,7 @@ static struct vop_vector newnfs_vnodeops_nosig = {
 	.vop_ioctl =		nfs_ioctl,
 	.vop_getextattr =	nfs_getextattr,
 	.vop_setextattr =	nfs_setextattr,
+	.vop_listextattr =	nfs_listextattr,
 	.vop_deleteextattr =	nfs_deleteextattr,
 };
 
@@ -3847,6 +3849,80 @@ nfs_setextattr(struct vop_setextattr_args *ap)
 		if (error == 0 && ret != 0)
 			error = ret;
 	}
+
+	switch (error) {
+	case NFSERR_NOTSUPP:
+	case NFSERR_OPILLEGAL:
+		mtx_lock(&nmp->nm_mtx);
+		nmp->nm_privflag |= NFSMNTP_NOXATTR;
+		mtx_unlock(&nmp->nm_mtx);
+		error = EOPNOTSUPP;
+		break;
+	case NFSERR_NOXATTR:
+	case NFSERR_XATTR2BIG:
+		error = ENOATTR;
+		break;
+	default:
+		error = nfscl_maperr(td, error, 0, 0);
+		break;
+	}
+	return (error);
+}
+
+/*
+ * nfs listextattr call
+ */
+static int
+nfs_listextattr(struct vop_listextattr_args *ap)
+{
+	struct vnode *vp = ap->a_vp;
+	struct nfsmount *nmp;
+	struct ucred *cred;
+	struct thread *td = ap->a_td;
+	struct nfsvattr nfsva;
+	size_t len, len2;
+	uint64_t cookie;
+	int attrflag, error, ret;
+	bool eof;
+
+	nmp = VFSTONFS(vp->v_mount);
+	mtx_lock(&nmp->nm_mtx);
+	if (!NFSHASNFSV4(nmp) || nmp->nm_minorvers < NFSV42_MINORVERSION ||
+	    (nmp->nm_privflag & NFSMNTP_NOXATTR) != 0 ||
+	    ap->a_attrnamespace != EXTATTR_NAMESPACE_USER) {
+		mtx_unlock(&nmp->nm_mtx);
+		return (EOPNOTSUPP);
+	}
+	mtx_unlock(&nmp->nm_mtx);
+
+	cred = ap->a_cred;
+	if (cred == NULL)
+		cred = td->td_ucred;
+
+	/* Loop around doing List Extended Attribute RPCs. */
+	eof = false;
+	cookie = 0;
+	len2 = 0;
+	error = 0;
+	while (!eof && error == 0) {
+		len = nmp->nm_rsize;
+		attrflag = 0;
+		error = nfsrpc_listextattr(vp, &cookie, ap->a_uio, &len, &eof,
+		    &nfsva, &attrflag, cred, td);
+		if (attrflag != 0) {
+			ret = nfscl_loadattrcache(&vp, &nfsva, NULL, NULL, 0,
+			    1);
+			if (error == 0 && ret != 0)
+				error = ret;
+		}
+		if (error == 0) {
+			len2 += len;
+			if (len2 > SSIZE_MAX)
+				error = ENOATTR;
+		}
+	}
+	if (error == 0 && ap->a_size != NULL)
+		*ap->a_size = len2;
 
 	switch (error) {
 	case NFSERR_NOTSUPP:

@@ -392,11 +392,12 @@
 #define	NFSPROC_GETEXTATTR	61
 #define	NFSPROC_SETEXTATTR	62
 #define	NFSPROC_RMEXTATTR	63
+#define	NFSPROC_LISTEXTATTR	64
 
 /*
  * Must be defined as one higher than the last NFSv4.2 Proc# above.
  */
-#define	NFSV42_NPROCS		64
+#define	NFSV42_NPROCS		65
 
 #endif	/* NFS_V3NPROCS */
 

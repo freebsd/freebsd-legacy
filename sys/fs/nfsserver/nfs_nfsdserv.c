@@ -5482,8 +5482,8 @@ nfsrvd_getxattr(struct nfsrv_descript *nd, __unused int isdgram,
 	name = malloc(len + 1, M_TEMP, M_WAITOK);
 	nd->nd_repstat = nfsrv_mtostr(nd, name, len);
 	if (nd->nd_repstat == 0)
-		nd->nd_repstat = nfsvno_getxattr(vp, name, nd->nd_cred, p,
-		    &mp, &mpend, &len);
+		nd->nd_repstat = nfsvno_getxattr(vp, name, nd->nd_maxresp,
+		    nd->nd_cred, p, &mp, &mpend, &len);
 	if (nd->nd_repstat == ENOATTR)
 		nd->nd_repstat = NFSERR_NOXATTR;
 	else if (nd->nd_repstat == EOPNOTSUPP)
@@ -5513,11 +5513,11 @@ nfsrvd_setxattr(struct nfsrv_descript *nd, __unused int isdgram,
     vnode_t vp, __unused struct nfsexstuff *exp)
 {
 	uint32_t *tl;
-	mbuf_t mp = NULL, mpend = NULL;
 	struct nfsvattr ova, nva;
 	nfsattrbit_t attrbits;
-	int error, len, opt, retlen;
+	int error, len, opt;
 	char *name;
+	size_t siz;
 	struct thread *p = curthread;
 
 	error = 0;
@@ -5549,20 +5549,16 @@ nfsrvd_setxattr(struct nfsrv_descript *nd, __unused int isdgram,
 	}
 	switch (opt) {
 	case NFSV4SXATTR_CREATE:
-		error = nfsvno_getxattr(vp, name, nd->nd_cred, p, &mp, &mpend,
-		    &retlen);
-		if (error == 0)
-			m_freem(mp);
+		error = VOP_GETEXTATTR(vp, EXTATTR_NAMESPACE_USER, name, NULL,
+		    &siz, nd->nd_cred, p);
 		if (error != ENOATTR)
 			nd->nd_repstat = NFSERR_EXIST;
 		error = 0;
 		break;
 	case NFSV4SXATTR_REPLACE:
-		error = nfsvno_getxattr(vp, name, nd->nd_cred, p, &mp, &mpend,
-		    &retlen);
-		if (error == 0)
-			m_freem(mp);
-		else
+		error = VOP_GETEXTATTR(vp, EXTATTR_NAMESPACE_USER, name, NULL,
+		    &siz, nd->nd_cred, p);
+		if (error != 0)
 			nd->nd_repstat = NFSERR_NOXATTR;
 		break;
 	case NFSV4SXATTR_EITHER:
@@ -5665,6 +5661,118 @@ nfsrvd_rmxattr(struct nfsrv_descript *nd, __unused int isdgram,
 
 nfsmout:
 	free(name, M_TEMP);
+	if (nd->nd_repstat == 0)
+		nd->nd_repstat = error;
+	vput(vp);
+	NFSEXITCODE2(0, nd);
+	return (0);
+}
+
+/*
+ * nfs list extended attribute service
+ */
+APPLESTATIC int
+nfsrvd_listxattr(struct nfsrv_descript *nd, __unused int isdgram,
+    vnode_t vp, __unused struct nfsexstuff *exp)
+{
+	uint32_t cnt, *tl, len, len2, i, pos, retlen;
+	int error;
+	uint64_t cookie, cookie2;
+	u_char *buf;
+	bool eof;
+	struct thread *p = curthread;
+
+	error = 0;
+	buf = NULL;
+	if (nfs_rootfhset == 0 || nfsd_checkrootexp(nd) != 0) {
+		nd->nd_repstat = NFSERR_WRONGSEC;
+		goto nfsmout;
+	}
+	NFSM_DISSECT(tl, uint32_t *, NFSX_HYPER + NFSX_UNSIGNED);
+	/*
+	 * The cookie doesn't need to be in net byte order, but FreeBSD
+	 * does so to make it more readable in packet traces.
+	 */
+	cookie = fxdr_hyper(tl); tl += 2;
+	len = fxdr_unsigned(uint32_t, *tl);
+	if (len == 0 || cookie >= IOSIZE_MAX) {
+		nd->nd_repstat = NFSERR_BADXDR;
+		goto nfsmout;
+	}
+	if (len > nd->nd_maxresp - NFS_MAXXDR)
+		len = nd->nd_maxresp - NFS_MAXXDR;
+	len2 = len;
+	nd->nd_repstat = nfsvno_listxattr(vp, cookie, nd->nd_cred, p, &buf,
+	    &len, &eof);
+	if (nd->nd_repstat == EOPNOTSUPP)
+		nd->nd_repstat = NFSERR_NOTSUPP;
+	if (nd->nd_repstat == 0) {
+		cookie2 = cookie + len;
+		if (cookie2 < cookie)
+			nd->nd_repstat = NFSERR_BADXDR;
+	}
+	if (nd->nd_repstat == 0) {
+		/* Now copy the entries out. */
+		retlen = NFSX_HYPER + 2 * NFSX_UNSIGNED;
+		if (len == 0 && retlen <= len2) {
+			/* The cookie was at eof. */
+			NFSM_BUILD(tl, uint32_t *, NFSX_HYPER + 2 *
+			    NFSX_UNSIGNED);
+			txdr_hyper(cookie2, tl); tl += 2;
+			*tl++ = txdr_unsigned(0);
+			*tl = newnfs_true;
+			goto nfsmout;
+		}
+
+		/* Sanity check the cookie. */
+		for (pos = 0; pos < len; pos += (i + 1)) {
+			if (pos == cookie)
+				break;
+			i = buf[pos];
+		}
+		if (pos != cookie) {
+			nd->nd_repstat = NFSERR_INVAL;
+			goto nfsmout;
+		}
+
+		/* Loop around copying the entrie(s) out. */
+		cnt = 0;
+		len -= cookie;
+		i = buf[pos];
+		while (i < len && len2 >= retlen + NFSM_RNDUP(i) +
+		    NFSX_UNSIGNED) {
+			if (cnt == 0) {
+				NFSM_BUILD(tl, uint32_t *, NFSX_HYPER +
+				    NFSX_UNSIGNED);
+				txdr_hyper(cookie2, tl); tl += 2;
+			}
+			retlen += nfsm_strtom(nd, &buf[pos + 1], i);
+			len -= (i + 1);
+			pos += (i + 1);
+			i = buf[pos];
+			cnt++;
+		}
+		/*
+		 * eof is set true/false by nfsvno_listxattr(), but if we
+		 * can't copy all entries returned by nfsvno_listxattr(),
+		 * we are not at eof.
+		 */
+		if (len > 0)
+			eof = false;
+		if (cnt > 0) {
+			/* *tl is set above. */
+			*tl = txdr_unsigned(cnt);
+			NFSM_BUILD(tl, uint32_t *, NFSX_UNSIGNED);
+			if (eof)
+				*tl = newnfs_true;
+			else
+				*tl = newnfs_false;
+		} else
+			nd->nd_repstat = NFSERR_TOOSMALL;
+	}
+
+nfsmout:
+	free(buf, M_TEMP);
 	if (nd->nd_repstat == 0)
 		nd->nd_repstat = error;
 	vput(vp);

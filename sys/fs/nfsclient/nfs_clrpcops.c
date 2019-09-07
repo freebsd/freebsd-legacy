@@ -49,6 +49,7 @@ __FBSDID("$FreeBSD$");
 
 #include <fs/nfs/nfsport.h>
 #include <fs/nfsclient/nfs.h>
+#include <sys/extattr.h>
 #include <sys/sysctl.h>
 #include <sys/taskqueue.h>
 
@@ -8381,6 +8382,83 @@ nfsrpc_rmextattr(vnode_t vp, const char *name, struct nfsvattr *nap,
 		/* Just skip over the reply and Getattr op status. */
 		NFSM_DISSECT(tl, uint32_t *, 2 * NFSX_HYPER + 2 *
 		    NFSX_UNSIGNED);
+		error = nfsm_loadattr(nd, nap);
+		if (error == 0)
+			*attrflagp = 1;
+	}
+	if (error == 0)
+		error = nd->nd_repstat;
+nfsmout:
+	mbuf_freem(nd->nd_mrep);
+	return (error);
+}
+
+/*
+ * The listextattr RPC.
+ */
+APPLESTATIC int
+nfsrpc_listextattr(vnode_t vp, uint64_t *cookiep, struct uio *uiop,
+    size_t *lenp, bool *eofp, struct nfsvattr *nap, int *attrflagp,
+    struct ucred *cred, NFSPROC_T *p)
+{
+	uint32_t *tl;
+	int cnt, error, i, len;
+	struct nfsrv_descript nfsd;
+	struct nfsrv_descript *nd = &nfsd;
+	nfsattrbit_t attrbits;
+	u_char c;
+
+	*attrflagp = 0;
+	NFSCL_REQSTART(nd, NFSPROC_LISTEXTATTR, vp);
+	NFSM_BUILD(tl, uint32_t *, NFSX_HYPER + 2 * NFSX_UNSIGNED);
+	txdr_hyper(*cookiep, tl); tl += 2;
+	*tl++ = txdr_unsigned(*lenp);
+	*tl = txdr_unsigned(NFSV4OP_GETATTR);
+	NFSGETATTR_ATTRBIT(&attrbits);
+	nfsrv_putattrbit(nd, &attrbits);
+	error = nfscl_request(nd, vp, p, cred, NULL);
+	if (error != 0)
+		return (error);
+	*eofp = true;
+	*lenp = 0;
+	if (nd->nd_repstat == 0) {
+		NFSM_DISSECT(tl, uint32_t *, NFSX_HYPER + NFSX_UNSIGNED);
+		*cookiep = fxdr_hyper(tl); tl += 2;
+		cnt = fxdr_unsigned(int, *tl);
+		if (cnt <= 0) {
+			error = EBADRPC;
+			goto nfsmout;
+		}
+		for (i = 0; i < cnt; i++) {
+			NFSM_DISSECT(tl, uint32_t *, NFSX_UNSIGNED);
+			len = fxdr_unsigned(int, *tl);
+			if (len <= 0 || len > EXTATTR_MAXNAMELEN) {
+				error = EBADRPC;
+				goto nfsmout;
+			}
+			if (uiop == NULL)
+				error = nfsm_advance(nd, NFSM_RNDUP(len), -1);
+			else if (uiop->uio_resid >= len + 1) {
+				c = len;
+				error = uiomove(&c, sizeof(c), uiop);
+				if (error == 0)
+					error = nfsm_mbufuio(nd, uiop, len);
+			} else {
+				error = nfsm_advance(nd, NFSM_RNDUP(len), -1);
+				*eofp = false;
+			}
+			if (error != 0)
+				goto nfsmout;
+			*lenp += (len + 1);
+		}
+		/* Get the eof and skip over the Getattr op status. */
+		NFSM_DISSECT(tl, uint32_t *, 3 * NFSX_UNSIGNED);
+		/*
+		 * *eofp is set false above, because it wasn't able to copy
+		 * all of the reply.
+		 */
+		if (*eofp && *tl == 0)
+			*eofp = false;
 		error = nfsm_loadattr(nd, nap);
 		if (error == 0)
 			*attrflagp = 1;

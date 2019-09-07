@@ -6209,6 +6209,10 @@ nfsrv_checksequence(struct nfsrv_descript *nd, uint32_t sequenceid,
 	nd->nd_clientid.qval = sep->sess_clp->lc_clientid.qval;
 	nd->nd_flag |= ND_IMPLIEDCLID;
 
+	/* Save maximum request and reply sizes. */
+	nd->nd_maxreq = sep->sess_maxreq;
+	nd->nd_maxresp = sep->sess_maxresp;
+
 	/*
 	 * If this session handles the backchannel, save the nd_xprt for this
 	 * RPC, since this is the one being used.

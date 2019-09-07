@@ -182,7 +182,7 @@ struct nfsv4_opflag nfsv4_opflag[NFSV42_NOPS] = {
 	{ 0, 0, 0, 0, LK_EXCLUSIVE, 1, 1 },		/* Clone */
 	{ 0, 1, 0, 0, LK_SHARED, 1, 1 },		/* Getxattr */
 	{ 0, 1, 1, 1, LK_EXCLUSIVE, 1, 1 },		/* Setxattr */
-	{ 0, 0, 0, 0, LK_EXCLUSIVE, 1, 1 },		/* Listxattrs */
+	{ 0, 1, 0, 0, LK_SHARED, 1, 1 },		/* Listxattrs */
 	{ 0, 1, 1, 1, LK_EXCLUSIVE, 1, 1 },		/* Removexattr */
 };
 #endif	/* !APPLEKEXT */
@@ -211,7 +211,7 @@ static struct nfsrv_lughash	*nfsgroupnamehash;
 static int nfs_bigreply[NFSV42_NPROCS] = { 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
-    1, 0, 0 };
+    1, 0, 0, 1 };
 
 /* local functions */
 static int nfsrv_skipace(struct nfsrv_descript *nd, int *acesizep);
@@ -293,6 +293,7 @@ static struct {
 	{ NFSV4OP_GETXATTR, 2, "Getxattr", 8, },
 	{ NFSV4OP_SETXATTR, 2, "Setxattr", 8, },
 	{ NFSV4OP_REMOVEXATTR, 2, "Rmxattr", 7, },
+	{ NFSV4OP_LISTXATTRS, 2, "Listxattr", 9, },
 };
 
 /*
@@ -301,7 +302,7 @@ static struct {
 static int nfs_bigrequest[NFSV42_NPROCS] = {
 	0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0
+	0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0
 };
 
 /*
@@ -4632,6 +4633,8 @@ nfsv4_setsequence(struct nfsmount *nmp, struct nfsrv_descript *nd,
 
 	error = nfsv4_sequencelookup(nmp, sep, &slotpos, &maxslot, &slotseq,
 	    sessionid);
+	nd->nd_maxreq = sep->sess_maxreq;
+	nd->nd_maxresp = sep->sess_maxresp;
 
 	/* Build the Sequence arguments. */
 	NFSM_BUILD(tl, uint32_t *, NFSX_V4SESSIONID + 4 * NFSX_UNSIGNED);

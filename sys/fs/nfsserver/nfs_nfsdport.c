@@ -5914,8 +5914,9 @@ nfsvno_seek(struct nfsrv_descript *nd, struct vnode *vp, u_long cmd,
  * Get Extended Atribute vnode op into an mbuf list.
  */
 int
-nfsvno_getxattr(struct vnode *vp, char *name, struct ucred *cred,
-    struct thread *p, struct mbuf **mpp, struct mbuf **mpendp, int *lenp)
+nfsvno_getxattr(struct vnode *vp, char *name, uint32_t maxresp,
+    struct ucred *cred, struct thread *p, struct mbuf **mpp,
+    struct mbuf **mpendp, int *lenp)
 {
 	struct iovec *iv;
 	struct uio io, *uiop = &io;
@@ -5928,7 +5929,7 @@ nfsvno_getxattr(struct vnode *vp, char *name, struct ucred *cred,
 	    &siz, cred, p);
 	if (error != 0)
 		return (NFSERR_NOXATTR);
-	if (siz > 1000000)
+	if (siz > maxresp - NFS_MAXXDR)
 		return (NFSERR_XATTR2BIG);
 	len = siz;
 	tlen = NFSM_RNDUP(len);
@@ -6039,6 +6040,72 @@ nfsvno_rmxattr(struct nfsrv_descript *nd, struct vnode *vp, char *name,
 #ifdef MAC
 out:
 #endif
+	NFSEXITCODE(error);
+	return (error);
+}
+
+/*
+ * List Extended Atribute vnode op into an mbuf list.
+ */
+int
+nfsvno_listxattr(struct vnode *vp, uint64_t cookie, struct ucred *cred,
+    struct thread *p, u_char **bufp, uint32_t *lenp, bool *eofp)
+{
+	struct iovec iv;
+	struct uio io;
+	int error;
+	size_t siz;
+
+	*bufp = NULL;
+	/* First, find out the size of the extended attribute. */
+	error = VOP_LISTEXTATTR(vp, EXTATTR_NAMESPACE_USER, NULL, &siz, cred,
+	    p);
+	if (error != 0)
+		return (NFSERR_NOXATTR);
+	if (siz <= cookie) {
+		*lenp = 0;
+		*eofp = true;
+		goto out;
+	}
+	if (siz > cookie + *lenp) {
+		siz = cookie + *lenp;
+		*eofp = false;
+	} else
+		*eofp = true;
+	/* Just choose a sanity limit of 10Mbytes for malloc(M_TEMP). */
+	if (siz > 10 * 1024 * 1024) {
+		error = NFSERR_XATTR2BIG;
+		goto out;
+	}
+	*bufp = malloc(siz, M_TEMP, M_WAITOK);
+	iv.iov_base = *bufp;
+	iv.iov_len = siz;
+	io.uio_iovcnt = 1;
+	io.uio_iov = &iv;
+	io.uio_offset = 0;
+	io.uio_resid = siz;
+	io.uio_rw = UIO_READ;
+	io.uio_segflg = UIO_SYSSPACE;
+	io.uio_td = p;
+#ifdef MAC
+	error = mac_vnode_check_listextattr(cred, vp, EXTATTR_NAMESPACE_USER);
+	if (error != 0)
+		goto out;
+#endif
+
+	error = VOP_LISTEXTATTR(vp, EXTATTR_NAMESPACE_USER, &io, NULL, cred,
+	    p);
+	if (error != 0)
+		goto out;
+	if (io.uio_resid > 0)
+		siz -= io.uio_resid;
+	*lenp = siz;
+
+out:
+	if (error != 0) {
+		free(*bufp, M_TEMP);
+		*bufp = NULL;
+	}
 	NFSEXITCODE(error);
 	return (error);
 }
