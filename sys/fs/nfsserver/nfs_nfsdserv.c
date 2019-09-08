@@ -67,6 +67,7 @@ extern int nfsd_debuglevel;
 extern u_long sb_max_adj;
 extern int nfsrv_pnfsatime;
 extern int nfsrv_maxpnfsmirror;
+extern int nfs_maxcopyrange;
 #endif	/* !APPLEKEXT */
 
 static int	nfs_async = 0;
@@ -76,9 +77,6 @@ SYSCTL_INT(_vfs_nfsd, OID_AUTO, async, CTLFLAG_RW, &nfs_async, 0,
 extern int	nfsrv_doflexfile;
 SYSCTL_INT(_vfs_nfsd, OID_AUTO, default_flexfile, CTLFLAG_RW,
     &nfsrv_doflexfile, 0, "Make Flex File Layout the default for pNFS");
-static int	nfsrv_maxcopyrange = 10 * 1024 * 1024;
-SYSCTL_INT(_vfs_nfsd, OID_AUTO, maxcopyrange, CTLFLAG_RW,
-    &nfsrv_maxcopyrange, 0, "Max size of a Copy so RPC times reasonable");
 
 /*
  * This list defines the GSS mechanisms supported.
@@ -5338,12 +5336,12 @@ nfsrvd_copy_file_range(struct nfsrv_descript *nd, __unused int isdgram,
 	}
 
 	/*
-	 * Do the actual copy to an upper limit of vfs.nfsd.maxcopyrange.
+	 * Do the actual copy to an upper limit of vfs.nfs.maxcopyrange.
 	 * This limit is applied to ensure that the RPC replies in a
 	 * reasonable time.
 	 */
-	if (len > nfsrv_maxcopyrange)
-		xfer = nfsrv_maxcopyrange;
+	if (len > nfs_maxcopyrange)
+		xfer = nfs_maxcopyrange;
 	else
 		xfer = len;
 	nd->nd_repstat = vn_copy_file_range(vp, &inoff, tovp, &outoff, &xfer, 0,

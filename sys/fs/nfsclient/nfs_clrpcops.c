@@ -75,6 +75,7 @@ extern char nfsv4_callbackaddr[INET6_ADDRSTRLEN];
 extern int nfscl_debuglevel;
 extern int nfs_pnfsiothreads;
 extern u_long sb_max_adj;
+extern int nfs_maxcopyrange;
 NFSCLSTATEMUTEX;
 int nfstest_outofseq = 0;
 int nfscl_assumeposixlocks = 1;
@@ -8060,6 +8061,8 @@ nfsrpc_copyrpc(vnode_t invp, off_t inoff, vnode_t outvp, off_t outoff,
 	*commitp = NFSWRITE_UNSTABLE;
 	len = *lenp;
 	*lenp = 0;
+	if (len > nfs_maxcopyrange)
+		len = nfs_maxcopyrange;
 	NFSCL_REQSTART(nd, NFSPROC_COPY, invp);
 	NFSM_BUILD(tl, uint32_t *, NFSX_UNSIGNED);
 	*tl = txdr_unsigned(NFSV4OP_GETATTR);
