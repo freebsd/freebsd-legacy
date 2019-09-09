@@ -3706,11 +3706,7 @@ nfs_ioctl(struct vop_ioctl_args *ap)
 		return (ENOTTY);
 	nmp = VFSTONFS(vp->v_mount);
 	if (!NFSHASNFSV4(nmp) || nmp->nm_minorvers < NFSV42_MINORVERSION) {
-#ifdef notyet
 		error = vop_stdioctl(ap);
-#else
-		error = ENOTTY;
-#endif
 		return (error);
 	}
 
