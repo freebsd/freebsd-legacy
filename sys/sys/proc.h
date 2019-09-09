@@ -762,6 +762,8 @@ struct proc {
 #define	P2_ASLR_IGNSTART 0x00000100	/* Enable ASLR to consume sbrk area. */
 #define	P2_PROTMAX_ENABLE 0x00000200	/* Force enable implied PROT_MAX. */
 #define	P2_PROTMAX_DISABLE 0x00000400	/* Force disable implied PROT_MAX. */
+#define	P2_STKGAP_DISABLE 0x00000800	/* Disable stack gap for MAP_STACK */
+#define	P2_STKGAP_DISABLE_EXEC 0x00001000 /* Stack gap disabled after exec */
 
 /* Flags protected by proctree_lock, kept in p_treeflags. */
 #define	P_TREE_ORPHANED		0x00000001	/* Reparented, on orphan list */
@@ -967,7 +969,6 @@ extern u_long pgrphash;
 
 extern struct sx allproc_lock;
 extern int allproc_gen;
-extern struct sx zombproc_lock;
 extern struct sx proctree_lock;
 extern struct mtx ppeers_lock;
 extern struct mtx procid_lock;
@@ -985,7 +986,6 @@ LIST_HEAD(proclist, proc);
 TAILQ_HEAD(procqueue, proc);
 TAILQ_HEAD(threadqueue, thread);
 extern struct proclist allproc;		/* List of all processes. */
-extern struct proclist zombproc;	/* List of zombie processes. */
 extern struct proc *initproc, *pageproc; /* Process slots for init, pager. */
 
 extern struct uma_zone *proc_zone;
@@ -994,7 +994,6 @@ struct	proc *pfind(pid_t);		/* Find process by id. */
 struct	proc *pfind_any(pid_t);		/* Find (zombie) process by id. */
 struct	proc *pfind_any_locked(pid_t pid); /* Find process by id, locked. */
 struct	pgrp *pgfind(pid_t);		/* Find process group by id. */
-struct	proc *zpfind(pid_t);		/* Find zombie process by id. */
 void	pidhash_slockall(void);		/* Shared lock all pid hash lists. */
 void	pidhash_sunlockall(void);	/* Shared unlock all pid hash lists. */
 
@@ -1069,11 +1068,13 @@ void	proc_linkup(struct proc *p, struct thread *td);
 struct proc *proc_realparent(struct proc *child);
 void	proc_reap(struct thread *td, struct proc *p, int *status, int options);
 void	proc_reparent(struct proc *child, struct proc *newparent, bool set_oppid);
+void	proc_add_orphan(struct proc *child, struct proc *parent);
 void	proc_set_traced(struct proc *p, bool stop);
 void	proc_wkilled(struct proc *p);
 struct	pstats *pstats_alloc(void);
 void	pstats_fork(struct pstats *src, struct pstats *dst);
 void	pstats_free(struct pstats *ps);
+void	proc_clear_orphan(struct proc *p);
 void	reaper_abandon_children(struct proc *p, bool exiting);
 int	securelevel_ge(struct ucred *cr, int level);
 int	securelevel_gt(struct ucred *cr, int level);

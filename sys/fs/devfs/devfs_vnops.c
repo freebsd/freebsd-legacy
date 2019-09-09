@@ -52,6 +52,7 @@
 #include <sys/filio.h>
 #include <sys/jail.h>
 #include <sys/kernel.h>
+#include <sys/limits.h>
 #include <sys/lock.h>
 #include <sys/malloc.h>
 #include <sys/mman.h>
@@ -1427,7 +1428,6 @@ devfs_reclaim(struct vop_reclaim_args *ap)
 		vp->v_data = NULL;
 	}
 	mtx_unlock(&devfs_de_interlock);
-	vnode_destroy_vobject(vp);
 	return (0);
 }
 

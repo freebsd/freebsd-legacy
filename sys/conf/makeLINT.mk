@@ -12,7 +12,7 @@ clean:
 	rm -f LINT-NOINET LINT-NOINET6 LINT-NOIP
 .endif
 
-NOTES=	${.CURDIR}/../../conf/NOTES ${.CURDIR}/NOTES
+NOTES+=	${.CURDIR}/../../conf/NOTES ${.CURDIR}/NOTES
 MAKELINT_SED= ${.CURDIR}/../../conf/makeLINT.sed
 LINT: ${NOTES} ${MAKELINT_SED}
 	cat ${NOTES} | sed -E -n -f ${MAKELINT_SED} > ${.TARGET}
@@ -48,8 +48,10 @@ LINT: ${NOTES} ${MAKELINT_SED}
 	echo "nodevice netmap"		>> ${.TARGET}-NOIP
 .endif
 .if ${TARGET} == "arm"
-	cat ${.TARGET} ${.CURDIR}/NOTES.armv5 > ${.TARGET}-V5
-	cat ${.TARGET} ${.CURDIR}/NOTES.armv7 > ${.TARGET}-V7
+	cat ${NOTES} ${.CURDIR}/NOTES.armv5 | sed -E -n -f ${MAKELINT_SED} > \
+	    ${.TARGET}-V5
+	cat ${NOTES} ${.CURDIR}/NOTES.armv7 | sed -E -n -f ${MAKELINT_SED} > \
+	    ${.TARGET}-V7
 	rm ${.TARGET}
 .endif
 .if ${TARGET} == "mips"
@@ -64,4 +66,5 @@ LINT: ${NOTES} ${MAKELINT_SED}
 	echo "nodevice mlx5" >> ${.TARGET}
 	echo "nodevice mlx5en" >> ${.TARGET}
 	echo "nodevice mlx5ib" >> ${.TARGET}
+	echo "nooptions	RATELIMIT" >> ${.TARGET}
 .endif

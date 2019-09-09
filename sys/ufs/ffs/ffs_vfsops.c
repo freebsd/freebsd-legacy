@@ -1671,9 +1671,17 @@ ffs_vgetf(mp, ino, flags, vpp, ffs_flags)
 	struct vnode *vp;
 	int error;
 
+	MPASS((ffs_flags & FFSV_REPLACE) == 0 || (flags & LK_EXCLUSIVE) != 0);
+
 	error = vfs_hash_get(mp, ino, flags, curthread, vpp, NULL, NULL);
-	if (error || *vpp != NULL)
+	if (error != 0)
 		return (error);
+	if (*vpp != NULL) {
+		if ((ffs_flags & FFSV_REPLACE) == 0)
+			return (0);
+		vgone(*vpp);
+		vput(*vpp);
+	}
 
 	/*
 	 * We must promote to an exclusive lock for vnode creation.  This
@@ -1735,8 +1743,19 @@ ffs_vgetf(mp, ino, flags, vpp, ffs_flags)
 	}
 	vp->v_vflag &= ~VV_FORCEINSMQ;
 	error = vfs_hash_insert(vp, ino, flags, curthread, vpp, NULL, NULL);
-	if (error || *vpp != NULL)
+	if (error != 0)
 		return (error);
+	if (*vpp != NULL) {
+		/*
+		 * Calls from ffs_valloc() (i.e. FFSV_REPLACE set)
+		 * operate on empty inode, which must not be found by
+		 * other threads until fully filled.  Vnode for empty
+		 * inode must be not re-inserted on the hash by other
+		 * thread, after removal by us at the beginning.
+		 */
+		MPASS((ffs_flags & FFSV_REPLACE) == 0);
+		return (0);
+	}
 
 	/* Read in the disk contents for the inode, copy into the inode. */
 	error = bread(ump->um_devvp, fsbtodb(fs, ino_to_fsba(fs, ino)),
@@ -1748,7 +1767,6 @@ ffs_vgetf(mp, ino, flags, vpp, ffs_flags)
 		 * still zero, it will be unlinked and returned to the free
 		 * list by vput().
 		 */
-		brelse(bp);
 		vput(vp);
 		*vpp = NULL;
 		return (error);
@@ -1998,7 +2016,13 @@ ffs_use_bwrite(void *devfd, off_t loc, void *buf, int size)
 	if (MOUNTEDSOFTDEP(ump->um_mountp))
 		softdep_setup_sbupdate(ump, (struct fs *)bp->b_data, bp);
 	bcopy((caddr_t)fs, bp->b_data, (u_int)fs->fs_sbsize);
-	ffs_oldfscompat_write((struct fs *)bp->b_data, ump);
+	fs = (struct fs *)bp->b_data;
+	ffs_oldfscompat_write(fs, ump);
+	/*
+	 * Because we may have made changes to the superblock, we need to
+	 * recompute its check-hash.
+	 */
+	fs->fs_ckhash = ffs_calc_sbhash(fs);
 	if (devfdp->suspended)
 		bp->b_flags |= B_VALIDSUSPWRT;
 	if (devfdp->waitfor != MNT_WAIT)

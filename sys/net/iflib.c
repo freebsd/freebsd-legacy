@@ -702,6 +702,7 @@ static void iflib_altq_if_start(if_t ifp);
 static int iflib_altq_if_transmit(if_t ifp, struct mbuf *m);
 #endif
 static int iflib_register(if_ctx_t);
+static void iflib_deregister(if_ctx_t);
 static void iflib_init_locked(if_ctx_t ctx);
 static void iflib_add_device_sysctl_pre(if_ctx_t ctx);
 static void iflib_add_device_sysctl_post(if_ctx_t ctx);
@@ -4731,7 +4732,7 @@ iflib_device_register(device_t dev, void *sc, if_shared_ctx_t sctx, if_ctx_t *ct
 			    err);
 			goto fail_queues;
 		}
-	} else {
+	} else if (scctx->isc_intr != IFLIB_INTR_MSIX) {
 		rid = 0;
 		if (scctx->isc_intr == IFLIB_INTR_MSI) {
 			MPASS(msix == 1);
@@ -4741,6 +4742,11 @@ iflib_device_register(device_t dev, void *sc, if_shared_ctx_t sctx, if_ctx_t *ct
 			device_printf(dev, "iflib_legacy_setup failed %d\n", err);
 			goto fail_queues;
 		}
+	} else {
+		device_printf(dev,
+		    "Cannot use iflib with only 1 MSI-X interrupt!\n");
+		err = ENODEV;
+		goto fail_intr_free;
 	}
 
 	ether_ifattach(ctx->ifc_ifp, ctx->ifc_mac.octet);
@@ -4781,9 +4787,11 @@ fail_intr_free:
 fail_queues:
 	iflib_tx_structures_free(ctx);
 	iflib_rx_structures_free(ctx);
+	taskqgroup_detach(qgroup_if_config_tqg, &ctx->ifc_admin_task);
 	IFDI_DETACH(ctx);
 fail_unlock:
 	CTX_UNLOCK(ctx);
+	iflib_deregister(ctx);
 fail_ctx_free:
 	device_set_softc(ctx->ifc_dev, NULL);
         if (ctx->ifc_flags & IFC_SC_ALLOCATED)
@@ -4977,6 +4985,7 @@ fail_iflib_detach:
 	IFDI_DETACH(ctx);
 fail_unlock:
 	CTX_UNLOCK(ctx);
+	iflib_deregister(ctx);
 fail_ctx_free:
 	free(ctx->ifc_softc, M_IFLIB);
 	free(ctx, M_IFLIB);
@@ -4993,15 +5002,7 @@ iflib_pseudo_deregister(if_ctx_t ctx)
 	struct taskqgroup *tqg;
 	iflib_fl_t fl;
 
-	/* Unregister VLAN events */
-	if (ctx->ifc_vlan_attach_event != NULL)
-		EVENTHANDLER_DEREGISTER(vlan_config, ctx->ifc_vlan_attach_event);
-	if (ctx->ifc_vlan_detach_event != NULL)
-		EVENTHANDLER_DEREGISTER(vlan_unconfig, ctx->ifc_vlan_detach_event);
-
 	ether_ifdetach(ifp);
-	/* ether_ifdetach calls if_qflush - lock must be destroy afterwards*/
-	CTX_LOCK_DESTROY(ctx);
 	/* XXX drain any dependent tasks */
 	tqg = qgroup_if_io_tqg;
 	for (txq = ctx->ifc_txqs, i = 0; i < NTXQSETS(ctx); i++, txq++) {
@@ -5022,10 +5023,11 @@ iflib_pseudo_deregister(if_ctx_t ctx)
 	if (ctx->ifc_vflr_task.gt_uniq != NULL)
 		taskqgroup_detach(tqg, &ctx->ifc_vflr_task);
 
-	if_free(ifp);
-
 	iflib_tx_structures_free(ctx);
 	iflib_rx_structures_free(ctx);
+
+	iflib_deregister(ctx);
+
 	if (ctx->ifc_flags & IFC_SC_ALLOCATED)
 		free(ctx->ifc_softc, M_IFLIB);
 	free(ctx, M_IFLIB);
@@ -5112,19 +5114,19 @@ iflib_device_deregister(if_ctx_t ctx)
 	CTX_UNLOCK(ctx);
 
 	/* ether_ifdetach calls if_qflush - lock must be destroy afterwards*/
-	CTX_LOCK_DESTROY(ctx);
-	device_set_softc(ctx->ifc_dev, NULL);
 	iflib_free_intr_mem(ctx);
 
 	bus_generic_detach(dev);
-	if_free(ifp);
 
 	iflib_tx_structures_free(ctx);
 	iflib_rx_structures_free(ctx);
+
+	iflib_deregister(ctx);
+
+	device_set_softc(ctx->ifc_dev, NULL);
 	if (ctx->ifc_flags & IFC_SC_ALLOCATED)
 		free(ctx->ifc_softc, M_IFLIB);
 	unref_ctx_core_offset(ctx);
-	STATE_LOCK_DESTROY(ctx);
 	free(ctx, M_IFLIB);
 	return (0);
 }
@@ -5342,7 +5344,6 @@ iflib_register(if_ctx_t ctx)
 	 */
 	kobj_init((kobj_t) ctx, (kobj_class_t) driver);
 	kobj_class_compile((kobj_class_t) driver);
-	driver->refs++;
 
 	if_initname(ifp, device_get_name(dev), device_get_unit(dev));
 	if_setsoftc(ifp, ctx);
@@ -5372,6 +5373,36 @@ iflib_register(if_ctx_t ctx)
 		    iflib_media_change, iflib_media_status);
 	}
 	return (0);
+}
+
+static void
+iflib_deregister(if_ctx_t ctx)
+{
+	if_t ifp = ctx->ifc_ifp;
+
+	/* Remove all media */
+	ifmedia_removeall(&ctx->ifc_media);
+
+	/* Unregister VLAN events */
+	if (ctx->ifc_vlan_attach_event != NULL) {
+		EVENTHANDLER_DEREGISTER(vlan_config, ctx->ifc_vlan_attach_event);
+		ctx->ifc_vlan_attach_event = NULL;
+	}
+	if (ctx->ifc_vlan_detach_event != NULL) {
+		EVENTHANDLER_DEREGISTER(vlan_unconfig, ctx->ifc_vlan_detach_event);
+		ctx->ifc_vlan_detach_event = NULL;
+	}
+
+	/* Release kobject reference */
+	kobj_delete((kobj_t) ctx, NULL);
+
+	/* Free the ifnet structure */
+	if_free(ifp);
+
+	STATE_LOCK_DESTROY(ctx);
+
+	/* ether_ifdetach calls if_qflush - lock must be destroy afterwards*/
+	CTX_LOCK_DESTROY(ctx);
 }
 
 static int

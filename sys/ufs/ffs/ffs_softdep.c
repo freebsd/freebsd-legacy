@@ -2028,8 +2028,6 @@ retry_flush:
 		if (oldmnt->mnt_kern_flag & MNTK_UNMOUNT) {
 			retry = 0;
 			MNT_ILOCK(oldmnt);
-			KASSERT((oldmnt->mnt_kern_flag & MNTK_NOINSMNTQ) != 0,
-			    ("softdep_flushfiles: !MNTK_NOINSMNTQ"));
 			morework = oldmnt->mnt_nvnodelistsize > 0;
 #ifdef QUOTA
 			ump = VFSTOUFS(oldmnt);
@@ -6682,7 +6680,7 @@ softdep_journal_freeblocks(ip, cred, length, flags)
 #ifdef QUOTA
 	/* Reference the quotas in case the block count is wrong in the end. */
 	quotaref(vp, freeblks->fb_quota);
-	(void) chkdq(ip, -datablocks, NOCRED, 0);
+	(void) chkdq(ip, -datablocks, NOCRED, FORCE);
 #endif
 	freeblks->fb_chkcnt = -datablocks;
 	UFS_LOCK(ump);
@@ -6700,7 +6698,6 @@ softdep_journal_freeblocks(ip, cred, length, flags)
 	error = bread(ump->um_devvp, fsbtodb(fs, ino_to_fsba(fs, ip->i_number)),
 	    (int)fs->fs_bsize, cred, &bp);
 	if (error) {
-		brelse(bp);
 		softdep_error("softdep_journal_freeblocks", error);
 		return;
 	}
@@ -6946,7 +6943,7 @@ softdep_setup_freeblocks(ip, length, flags)
 #ifdef QUOTA
 	/* Reference the quotas in case the block count is wrong in the end. */
 	quotaref(ITOV(ip), freeblks->fb_quota);
-	(void) chkdq(ip, -datablocks, NOCRED, 0);
+	(void) chkdq(ip, -datablocks, NOCRED, FORCE);
 #endif
 	freeblks->fb_chkcnt = -datablocks;
 	UFS_LOCK(ump);
