@@ -47,6 +47,8 @@ __FBSDID("$FreeBSD$");
 
 #include <fs/nfs/nfsport.h>
 
+#include <sys/extattr.h>
+
 #include <security/mac/mac_framework.h>
 
 /*
@@ -2485,6 +2487,8 @@ nfsv4_fillattr(struct nfsrv_descript *nd, struct mount *mp, vnode_t vp,
 	struct nfsfsinfo fsinf;
 	struct timespec temptime;
 	NFSACL_T *aclp, *naclp = NULL;
+	size_t atsiz;
+	bool xattrsupp;
 #ifdef QUOTA
 	struct dqblk dqb;
 	uid_t savuid;
@@ -2559,6 +2563,18 @@ nfsv4_fillattr(struct nfsrv_descript *nd, struct mount *mp, vnode_t vp,
 		}
 	}
 
+	/* Check to see if Extended Attributes are supported. */
+	xattrsupp = false;
+	if (NFSISSET_ATTRBIT(retbitp, NFSATTRBIT_XATTRSUPPORT)) {
+		if (NFSVOPLOCK(vp, LK_SHARED) == 0) {
+			error = VOP_GETEXTATTR(vp, EXTATTR_NAMESPACE_USER,
+			    "xxx", NULL, &atsiz, cred, p);
+			NFSVOPUNLOCK(vp, 0);
+			if (error != EOPNOTSUPP)
+				xattrsupp = true;
+		}
+	}
+	
 	/*
 	 * Put out the attribute bitmap for the ones being filled in
 	 * and get the field for the number of attributes returned.
@@ -3006,6 +3022,14 @@ nfsv4_fillattr(struct nfsrv_descript *nd, struct mount *mp, vnode_t vp,
 		case NFSATTRBIT_LAYOUTBLKSIZE:
 			NFSM_BUILD(tl, u_int32_t *, NFSX_UNSIGNED);
 			*tl = txdr_unsigned(NFS_SRVMAXIO);
+			retnum += NFSX_UNSIGNED;
+			break;
+		case NFSATTRBIT_XATTRSUPPORT:
+			NFSM_BUILD(tl, u_int32_t *, NFSX_UNSIGNED);
+			if (xattrsupp)
+				*tl = newnfs_true;
+			else
+				*tl = newnfs_false;
 			retnum += NFSX_UNSIGNED;
 			break;
 		default:

@@ -629,6 +629,11 @@
 #define	NFSACCESS_DELETE		0x10
 #define	NFSACCESS_EXECUTE		0x20
 
+/* Additional Extended Attribute access bits RFC-8276. */
+#define	NFSACCESS_XAREAD		0x40
+#define	NFSACCESS_XAWRITE		0x80
+#define	NFSACCESS_XALIST		0x100
+
 #define	NFSWRITE_UNSTABLE		0
 #define	NFSWRITE_DATASYNC		1
 #define	NFSWRITE_FILESYNC		2
@@ -978,6 +983,8 @@ struct nfsv3_sattr {
 #define	NFSATTRBIT_SPACEFREED		78
 #define	NFSATTRBIT_CHANGEATTRTYPE	79
 #define	NFSATTRBIT_SECLABEL		80
+/* Not sure what attribute bit #81 is? */
+#define	NFSATTRBIT_XATTRSUPPORT		82
 
 #define	NFSATTRBM_SUPPORTEDATTRS	0x00000001
 #define	NFSATTRBM_TYPE			0x00000002
@@ -1060,8 +1067,10 @@ struct nfsv3_sattr {
 #define	NFSATTRBM_SPACEFREED		0x00004000
 #define	NFSATTRBM_CHANGEATTRTYPE	0x00008000
 #define	NFSATTRBM_SECLABEL		0x00010000
+/* Not sure what attribute bit#81/0x00020000 is? */
+#define	NFSATTRBM_XATTRSUPPORT		0x00040000
 
-#define	NFSATTRBIT_MAX			81
+#define	NFSATTRBIT_MAX			83
 
 /*
  * Sets of attributes that are supported, by words in the bitmap.
@@ -1145,7 +1154,8 @@ struct nfsv3_sattr {
 	(NFSATTRBM_LAYOUTTYPE |						\
 	NFSATTRBM_LAYOUTBLKSIZE |					\
 	NFSATTRBM_LAYOUTALIGNMENT |					\
-	NFSATTRBM_SUPPATTREXCLCREAT)
+	NFSATTRBM_SUPPATTREXCLCREAT |					\
+	NFSATTRBM_XATTRSUPPORT)
 
 /*
  * These are the set only attributes.
@@ -1186,7 +1196,7 @@ struct nfsv3_sattr {
 /*
  * NFSATTRBIT_NFSV42 - Attributes only supported by NFSv4.2.
  */
-#define	NFSATTRBIT_NFSV42_2	0
+#define	NFSATTRBIT_NFSV42_2	NFSATTRBM_XATTRSUPPORT
 
 /*
  * Set of attributes that the getattr vnode op needs.
