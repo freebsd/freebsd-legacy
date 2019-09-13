@@ -124,7 +124,8 @@ nfsrvd_access(struct nfsrv_descript *nd, __unused int isdgram,
 	if ((nd->nd_flag & ND_NFSV4) &&
 	    (nfsmode & ~(NFSACCESS_READ | NFSACCESS_LOOKUP |
 	     NFSACCESS_MODIFY | NFSACCESS_EXTEND | NFSACCESS_DELETE |
-	     NFSACCESS_EXECUTE))) {
+	     NFSACCESS_EXECUTE | NFSACCESS_XAREAD | NFSACCESS_XAWRITE |
+	     NFSACCESS_XALIST))) {
 		nd->nd_repstat = NFSERR_INVAL;
 		vput(vp);
 		goto out;
@@ -146,6 +147,24 @@ nfsrvd_access(struct nfsrv_descript *nd, __unused int isdgram,
 		if (nfsvno_accchk(vp, VWRITE | VAPPEND, nd->nd_cred, exp, p,
 		    NFSACCCHK_NOOVERRIDE, NFSACCCHK_VPISLOCKED, &supported))
 			nfsmode &= ~NFSACCESS_EXTEND;
+	}
+	if (nfsmode & NFSACCESS_XAREAD) {
+		supported |= NFSACCESS_XAREAD;
+		if (nfsvno_accchk(vp, VREAD, nd->nd_cred, exp, p,
+		    NFSACCCHK_NOOVERRIDE, NFSACCCHK_VPISLOCKED, &supported))
+			nfsmode &= ~NFSACCESS_XAREAD;
+	}
+	if (nfsmode & NFSACCESS_XAWRITE) {
+		supported |= NFSACCESS_XAWRITE;
+		if (nfsvno_accchk(vp, VWRITE, nd->nd_cred, exp, p,
+		    NFSACCCHK_NOOVERRIDE, NFSACCCHK_VPISLOCKED, &supported))
+			nfsmode &= ~NFSACCESS_XAWRITE;
+	}
+	if (nfsmode & NFSACCESS_XALIST) {
+		supported |= NFSACCESS_XALIST;
+		if (nfsvno_accchk(vp, VREAD, nd->nd_cred, exp, p,
+		    NFSACCCHK_NOOVERRIDE, NFSACCCHK_VPISLOCKED, &supported))
+			nfsmode &= ~NFSACCESS_XALIST;
 	}
 	if (nfsmode & NFSACCESS_DELETE) {
 		supported |= NFSACCESS_DELETE;
