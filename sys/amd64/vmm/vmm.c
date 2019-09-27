@@ -1002,9 +1002,7 @@ vm_gpa_release(void *cookie)
 {
 	vm_page_t m = cookie;
 
-	vm_page_lock(m);
 	vm_page_unwire(m, PQ_ACTIVE);
-	vm_page_unlock(m);
 }
 
 int
@@ -1413,7 +1411,7 @@ vm_handle_paging(struct vm *vm, int vcpuid, bool *retu)
 	}
 
 	map = &vm->vmspace->vm_map;
-	rv = vm_fault(map, vme->u.paging.gpa, ftype, VM_FAULT_NORMAL);
+	rv = vm_fault(map, vme->u.paging.gpa, ftype, VM_FAULT_NORMAL, NULL);
 
 	VCPU_CTR3(vm, vcpuid, "vm_handle_paging rv = %d, gpa = %#lx, "
 	    "ftype = %d", rv, vme->u.paging.gpa, ftype);

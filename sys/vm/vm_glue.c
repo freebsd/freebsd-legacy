@@ -219,26 +219,11 @@ vm_imgact_hold_page(vm_object_t object, vm_ooffset_t offset)
 {
 	vm_page_t m;
 	vm_pindex_t pindex;
-	int rv;
 
-	VM_OBJECT_WLOCK(object);
 	pindex = OFF_TO_IDX(offset);
-	m = vm_page_grab(object, pindex, VM_ALLOC_NORMAL | VM_ALLOC_NOBUSY |
-	    VM_ALLOC_WIRED);
-	if (m->valid != VM_PAGE_BITS_ALL) {
-		vm_page_xbusy(m);
-		rv = vm_pager_get_pages(object, &m, 1, NULL, NULL);
-		if (rv != VM_PAGER_OK) {
-			vm_page_lock(m);
-			vm_page_unwire_noq(m);
-			vm_page_free(m);
-			vm_page_unlock(m);
-			m = NULL;
-			goto out;
-		}
-		vm_page_xunbusy(m);
-	}
-out:
+	VM_OBJECT_WLOCK(object);
+	(void)vm_page_grab_valid(&m, object, pindex,
+	    VM_ALLOC_NORMAL | VM_ALLOC_NOBUSY | VM_ALLOC_WIRED);
 	VM_OBJECT_WUNLOCK(object);
 	return (m);
 }
@@ -270,9 +255,7 @@ vm_imgact_unmap_page(struct sf_buf *sf)
 	m = sf_buf_page(sf);
 	sf_buf_free(sf);
 	sched_unpin();
-	vm_page_lock(m);
 	vm_page_unwire(m, PQ_ACTIVE);
-	vm_page_unlock(m);
 }
 
 void
@@ -337,7 +320,7 @@ vm_thread_stack_create(struct domainset *ds, vm_object_t *ksobjp, int pages)
 	ks = kva_alloc((pages + KSTACK_GUARD_PAGES) * PAGE_SIZE);
 #endif
 	if (ks == 0) {
-		printf("vm_thread_new: kstack allocation failed\n");
+		printf("%s: kstack allocation failed\n", __func__);
 		vm_object_deallocate(ksobj);
 		return (0);
 	}
@@ -379,11 +362,9 @@ vm_thread_stack_dispose(vm_object_t ksobj, vm_offset_t ks, int pages)
 	for (i = 0; i < pages; i++) {
 		m = vm_page_lookup(ksobj, i);
 		if (m == NULL)
-			panic("vm_thread_dispose: kstack already missing?");
-		vm_page_lock(m);
+			panic("%s: kstack already missing?", __func__);
 		vm_page_unwire_noq(m);
 		vm_page_free(m);
-		vm_page_unlock(m);
 	}
 	VM_OBJECT_WUNLOCK(ksobj);
 	vm_object_deallocate(ksobj);

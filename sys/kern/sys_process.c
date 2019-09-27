@@ -286,7 +286,7 @@ proc_rwmem(struct proc *p, struct uio *uio)
 		/*
 		 * Fault and hold the page on behalf of the process.
 		 */
-		error = vm_fault_hold(map, pageno, reqprot, fault_flags, &m);
+		error = vm_fault(map, pageno, reqprot, fault_flags, &m);
 		if (error != KERN_SUCCESS) {
 			if (error == KERN_RESOURCE_SHORTAGE)
 				error = ENOMEM;
@@ -312,10 +312,7 @@ proc_rwmem(struct proc *p, struct uio *uio)
 		/*
 		 * Release the page.
 		 */
-		vm_page_lock(m);
-		if (vm_page_unwire(m, PQ_ACTIVE) && m->object == NULL)
-			vm_page_free(m);
-		vm_page_unlock(m);
+		vm_page_unwire(m, PQ_ACTIVE);
 
 	} while (error == 0 && uio->uio_resid > 0);
 
