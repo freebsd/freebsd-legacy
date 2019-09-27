@@ -5250,15 +5250,13 @@ nfsrvd_copy_file_range(struct nfsrv_descript *nd, __unused int isdgram,
 		outlop->lo_end = outlop->lo_first + len;
 	}
 
-	/* Only supports synchronous Copy. */
-	if (*++tl != newnfs_true) {
-		nd->nd_repstat = NFSERR_OFFLOADNOREQS;
-		NFSM_BUILD(tl, uint32_t *, 2 * NFSX_UNSIGNED);
-		*tl++ = newnfs_true;
-		*tl = newnfs_true;
-		goto nfsmout;
-	}
-	cnt = fxdr_unsigned(int, *++tl);
+	/*
+	 * At this time only consecutive, synchronous copy is supported,
+	 * so ca_consecutive and ca_synchronous can be ignored.
+	 */
+	tl += 2;
+
+	cnt = fxdr_unsigned(int, *tl);
 	if ((nd->nd_flag & ND_DSSERVER) != 0 || cnt != 0)
 		nd->nd_repstat = NFSERR_NOTSUPP;
 	if (nd->nd_repstat == 0 && (inoff > OFF_MAX || outoff > OFF_MAX ||
