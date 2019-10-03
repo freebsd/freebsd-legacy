@@ -77,6 +77,9 @@ SYSCTL_INT(_vfs_nfsd, OID_AUTO, async, CTLFLAG_RW, &nfs_async, 0,
 extern int	nfsrv_doflexfile;
 SYSCTL_INT(_vfs_nfsd, OID_AUTO, default_flexfile, CTLFLAG_RW,
     &nfsrv_doflexfile, 0, "Make Flex File Layout the default for pNFS");
+static int	nfsrv_linuxseekdata = 1;
+SYSCTL_INT(_vfs_nfsd, OID_AUTO, linuxseekdata, CTLFLAG_RW,
+    &nfsrv_linuxseekdata, 0, "Return EINVAL for SEEK_DATA at EOF");
 
 /*
  * This list defines the GSS mechanisms supported.
@@ -5450,6 +5453,9 @@ nfsrvd_seek(struct nfsrv_descript *nd, __unused int isdgram,
 	nd->nd_repstat = nfsvno_seek(nd, vp, cmd, &off, content, &eof,
 	    nd->nd_cred, curthread);
 	vrele(vp);
+	if (nd->nd_repstat == 0 && eof && content == NFSV4CONTENT_DATA &&
+	    nfsrv_linuxseekdata != 0)
+		nd->nd_repstat = NFSERR_INVAL;
 	if (nd->nd_repstat == 0) {
 		NFSM_BUILD(tl, uint32_t *, NFSX_UNSIGNED + NFSX_HYPER);
 		if (eof)
