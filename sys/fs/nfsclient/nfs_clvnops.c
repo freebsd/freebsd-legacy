@@ -3585,8 +3585,9 @@ nfs_copy_file_range(struct vop_copy_file_range_args *ap)
 	error = vn_rlimit_fsize(outvp, &io, ap->a_fsizetd);
 
 	/*
-	 * Flush all writes for both files, so they will be up to date
-	 * on the server before doing the copy.
+	 * Flush the input file so that the data is up to date before
+	 * the copy.  Flush writes for the output file so that they
+	 * do not overwrite the data copied to the output file by the Copy.
 	 */
 	if (error == 0)
 		error = ncl_flush(invp, MNT_WAIT, curthread, 1, 0);
