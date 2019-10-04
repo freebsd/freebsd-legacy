@@ -3700,7 +3700,7 @@ nfs_ioctl(struct vop_ioctl_args *ap)
 	struct nfsvattr nfsva;
 	struct nfsmount *nmp;
 	int attrflag, content, error, ret;
-	bool eof;
+	bool eof = false;			/* shut up compiler. */
 
 	if (vp->v_type != VREG)
 		return (ENOTTY);
@@ -3729,8 +3729,11 @@ nfs_ioctl(struct vop_ioctl_args *ap)
 	if (*((off_t *)ap->a_data) >= VTONFS(vp)->n_size)
 		error = ENXIO;
 	else {
-		error = nfsrpc_seek(vp, (off_t *)ap->a_data, &eof, content,
-		    ap->a_cred, &nfsva, &attrflag);
+		/* Flush all writes, so that the server is up to date. */
+		error = ncl_flush(vp, MNT_WAIT, ap->a_td, 1, 0);
+		if (error == 0)
+			error = nfsrpc_seek(vp, (off_t *)ap->a_data, &eof,
+			    content, ap->a_cred, &nfsva, &attrflag);
 		/* If at eof for FIOSEEKDATA, return ENXIO. */
 		if (eof && error == 0 && content == NFSV4CONTENT_DATA)
 			error = ENXIO;
