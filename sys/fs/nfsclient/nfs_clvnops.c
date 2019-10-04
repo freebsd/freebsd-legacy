@@ -3584,6 +3584,15 @@ nfs_copy_file_range(struct vop_copy_file_range_args *ap)
 	io.uio_resid = *ap->a_lenp;
 	error = vn_rlimit_fsize(outvp, &io, ap->a_fsizetd);
 
+	/*
+	 * Flush all writes for both files, so they will be up to date
+	 * on the server before doing the copy.
+	 */
+	if (error == 0)
+		error = ncl_flush(invp, MNT_WAIT, curthread, 1, 0);
+	if (error == 0)
+		error = ncl_flush(outvp, MNT_WAIT, curthread, 1, 0);
+
 	/* Do the actual NFSv4.2 RPC. */
 	len = *ap->a_lenp;
 	mtx_lock(&nmp->nm_mtx);
