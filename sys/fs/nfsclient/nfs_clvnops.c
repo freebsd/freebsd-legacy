@@ -3588,15 +3588,14 @@ nfs_copy_file_range(struct vop_copy_file_range_args *ap)
 	 * Flush the input file so that the data is up to date before
 	 * the copy.  Flush writes for the output file so that they
 	 * do not overwrite the data copied to the output file by the Copy.
-	 * Although a Commit is not required, the commit argument is set
-	 * on the invp so that, for a pNFS File/Flexible File Layout
-	 * server, the LayoutCommit will be done to ensure the input file size
-	 * is up to date on the Metadata Server.
+	 * Set the commit argument for both flushes so that the data is on
+	 * stable storage before the Copy RPC.  This is done in case the
+	 * server reboots during the Copy and needs to be redone.
 	 */
 	if (error == 0)
 		error = ncl_flush(invp, MNT_WAIT, curthread, 1, 0);
 	if (error == 0)
-		error = ncl_flush(outvp, MNT_WAIT, curthread, 0, 0);
+		error = ncl_flush(outvp, MNT_WAIT, curthread, 1, 0);
 
 	/* Do the actual NFSv4.2 RPC. */
 	len = *ap->a_lenp;
