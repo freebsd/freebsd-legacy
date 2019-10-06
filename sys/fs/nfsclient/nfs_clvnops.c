@@ -3588,11 +3588,15 @@ nfs_copy_file_range(struct vop_copy_file_range_args *ap)
 	 * Flush the input file so that the data is up to date before
 	 * the copy.  Flush writes for the output file so that they
 	 * do not overwrite the data copied to the output file by the Copy.
+	 * Although a Commit is not required, the commit argument is set
+	 * on the invp so that, for a pNFS File/Flexible File Layout
+	 * server, the LayoutCommit will be done to ensure the input file size
+	 * is up to date on the Metadata Server.
 	 */
 	if (error == 0)
 		error = ncl_flush(invp, MNT_WAIT, curthread, 1, 0);
 	if (error == 0)
-		error = ncl_flush(outvp, MNT_WAIT, curthread, 1, 0);
+		error = ncl_flush(outvp, MNT_WAIT, curthread, 0, 0);
 
 	/* Do the actual NFSv4.2 RPC. */
 	len = *ap->a_lenp;
@@ -3739,7 +3743,13 @@ nfs_ioctl(struct vop_ioctl_args *ap)
 	if (*((off_t *)ap->a_data) >= VTONFS(vp)->n_size)
 		error = ENXIO;
 	else {
-		/* Flush all writes, so that the server is up to date. */
+		/*
+		 * Flush all writes, so that the server is up to date.
+		 * Although a Commit is not required, the commit argument
+		 * is set so that, for a pNFS File/Flexible File Layout
+		 * server, the LayoutCommit will be done to ensure the file
+		 * size is up to date on the Metadata Server.
+		 */
 		error = ncl_flush(vp, MNT_WAIT, ap->a_td, 1, 0);
 		if (error == 0)
 			error = nfsrpc_seek(vp, (off_t *)ap->a_data, &eof,
