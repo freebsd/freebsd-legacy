@@ -5217,6 +5217,11 @@ nfsrvd_copy_file_range(struct nfsrv_descript *nd, __unused int isdgram,
 		nd->nd_repstat = NFSERR_NOTSUPP;
 		goto nfsmout;
 	}
+	if (vp == tovp) {
+		/* Copying a byte range within the same file is not allowed. */
+		nd->nd_repstat = NFSERR_INVAL;
+		goto nfsmout;
+	}
 	NFSM_DISSECT(tl, uint32_t *, 2 * NFSX_STATEID + 3 * NFSX_HYPER +
 	    3 * NFSX_UNSIGNED);
 	instp->ls_flags = (NFSLCK_CHECK | NFSLCK_READACCESS);
