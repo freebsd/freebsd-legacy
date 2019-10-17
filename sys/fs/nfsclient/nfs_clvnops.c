@@ -3542,8 +3542,9 @@ nfs_copy_file_range(struct vop_copy_file_range_args *ap)
 
 	nmp = VFSTONFS(invp->v_mount);
 	mtx_lock(&nmp->nm_mtx);
+	/* NFSv4.2 Copy is not permitted for infile == outfile. */
 	if (!NFSHASNFSV4(nmp) || nmp->nm_minorvers < NFSV42_MINORVERSION ||
-	    (nmp->nm_privflag & NFSMNTP_NOCOPY) != 0) {
+	    (nmp->nm_privflag & NFSMNTP_NOCOPY) != 0 || invp == outvp) {
 		mtx_unlock(&nmp->nm_mtx);
 		error = vn_generic_copy_file_range(ap->a_invp, ap->a_inoffp,
 		    ap->a_outvp, ap->a_outoffp, ap->a_lenp, ap->a_flags,
@@ -3633,6 +3634,15 @@ nfs_copy_file_range(struct vop_copy_file_range_args *ap)
 			    1, 1);
 			if (error == 0 && ret != 0)
 				error = ret;
+		}
+		if (error == 0 && len2 == 0) {
+			/*
+			 * Some Linux NFSv4.2 servers can reply NFS_OK, but
+			 * with a copied length (wr_count) == 0 when the
+			 * offset + len is past EOF. (RFC-7862 requires a
+			 * reply of NFS4ERR_INVAL for this case.)
+			 */
+			error = NFSERR_INVAL;
 		}
 		if (error == 0) {
 			if (consecutive == false) {
