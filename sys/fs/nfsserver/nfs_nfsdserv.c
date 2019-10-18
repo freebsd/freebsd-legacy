@@ -80,6 +80,10 @@ SYSCTL_INT(_vfs_nfsd, OID_AUTO, default_flexfile, CTLFLAG_RW,
 static int	nfsrv_linuxseekdata = 1;
 SYSCTL_INT(_vfs_nfsd, OID_AUTO, linuxseekdata, CTLFLAG_RW,
     &nfsrv_linuxseekdata, 0, "Return EINVAL for SEEK_DATA at EOF");
+static int	nfsrv_checkcopysize = 0;
+SYSCTL_INT(_vfs_nfsd, OID_AUTO, checkcopysize, CTLFLAG_RW,
+    &nfsrv_checkcopysize, 0,
+    "Enable check for Copy inoff + len > file_size");
 
 /*
  * This list defines the GSS mechanisms supported.
@@ -5340,24 +5344,39 @@ nfsrvd_copy_file_range(struct nfsrv_descript *nd, __unused int isdgram,
 			vn_rangelock_unlock(vp, rl_rcookie);
 		}
 
-		/*
-		 * If len == 0, set it based on invp's size.  Since it is range
-		 * locked, it should not change in size.
-		 */
-		if (len == 0) {
-			error = NFSVOPLOCK(vp, LK_SHARED);
-			if (error == 0) {
-				ret = nfsvno_getattr(vp, &at, nd, curthread, 1,
-				    NULL);
-				/* If offset past EOF, just leave len == 0. */
-				if (ret == 0 && at.na_size > inoff)
+		error = NFSVOPLOCK(vp, LK_SHARED);
+		if (error == 0) {
+			ret = nfsvno_getattr(vp, &at, nd, curthread, 1, NULL);
+			if (ret == 0) {
+				/*
+				 * Since invp is range locked, na_size should
+				 * not change.
+				 */
+				if (len == 0 && at.na_size > inoff) {
+					/*
+					 * If len == 0, set it based on invp's 
+					 * size. If offset is past EOF, just
+					 * leave len == 0.
+					 */
 					len = at.na_size - inoff;
-				NFSVOPUNLOCK(vp, 0);
-				if (ret != 0 && nd->nd_repstat == 0)
-					nd->nd_repstat = ret;
-			} else if (nd->nd_repstat == 0)
-				nd->nd_repstat = error;
-		}
+				} else if (nfsrv_checkcopysize != 0 &&
+				    inoff + len > at.na_size) {
+					/*
+					 * RFC-7862 says that NFSERR_INVAL must
+					 * be returned when inoff + len exceeds
+					 * the file size, however the NFSv4.2
+					 * Linux client likes to do this, so
+					 * only check if nfsrv_checkcopysize
+					 * is set.
+					 */
+					nd->nd_repstat = NFSERR_INVAL;
+				}
+			}
+			NFSVOPUNLOCK(vp, 0);
+			if (ret != 0 && nd->nd_repstat == 0)
+				nd->nd_repstat = ret;
+		} else if (nd->nd_repstat == 0)
+			nd->nd_repstat = error;
 	}
 
 	/*
@@ -5369,10 +5388,12 @@ nfsrvd_copy_file_range(struct nfsrv_descript *nd, __unused int isdgram,
 		xfer = nfs_maxcopyrange;
 	else
 		xfer = len;
-	nd->nd_repstat = vn_copy_file_range(vp, &inoff, tovp, &outoff, &xfer, 0,
-	    nd->nd_cred, nd->nd_cred, NULL);
-	if (nd->nd_repstat == 0)
-		len = xfer;
+	if (nd->nd_repstat == 0) {
+		nd->nd_repstat = vn_copy_file_range(vp, &inoff, tovp, &outoff,
+		    &xfer, 0, nd->nd_cred, nd->nd_cred, NULL);
+		if (nd->nd_repstat == 0)
+			len = xfer;
+	}
 
 	/* Unlock the ranges. */
 	if (rl_rcookie != NULL)
