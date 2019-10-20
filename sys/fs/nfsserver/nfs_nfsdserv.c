@@ -77,13 +77,10 @@ SYSCTL_INT(_vfs_nfsd, OID_AUTO, async, CTLFLAG_RW, &nfs_async, 0,
 extern int	nfsrv_doflexfile;
 SYSCTL_INT(_vfs_nfsd, OID_AUTO, default_flexfile, CTLFLAG_RW,
     &nfsrv_doflexfile, 0, "Make Flex File Layout the default for pNFS");
-static int	nfsrv_linuxseekdata = 1;
-SYSCTL_INT(_vfs_nfsd, OID_AUTO, linuxseekdata, CTLFLAG_RW,
-    &nfsrv_linuxseekdata, 0, "Return EINVAL for SEEK_DATA at EOF");
-static int	nfsrv_checkcopysize = 0;
-SYSCTL_INT(_vfs_nfsd, OID_AUTO, checkcopysize, CTLFLAG_RW,
-    &nfsrv_checkcopysize, 0,
-    "Enable check for Copy inoff + len > file_size");
+static int	nfsrv_linux42server = 1;
+SYSCTL_INT(_vfs_nfsd, OID_AUTO, linux42server, CTLFLAG_RW,
+    &nfsrv_linux42server, 0,
+    "Enable Linux style NFSv4.2 server (non-RFC compliant)");
 
 /*
  * This list defines the GSS mechanisms supported.
@@ -5359,15 +5356,15 @@ nfsrvd_copy_file_range(struct nfsrv_descript *nd, __unused int isdgram,
 					 * leave len == 0.
 					 */
 					len = at.na_size - inoff;
-				} else if (nfsrv_checkcopysize != 0 &&
+				} else if (nfsrv_linux42server == 0 &&
 				    inoff + len > at.na_size) {
 					/*
 					 * RFC-7862 says that NFSERR_INVAL must
 					 * be returned when inoff + len exceeds
 					 * the file size, however the NFSv4.2
 					 * Linux client likes to do this, so
-					 * only check if nfsrv_checkcopysize
-					 * is set.
+					 * only check if nfsrv_linux42server
+					 * is not set.
 					 */
 					nd->nd_repstat = NFSERR_INVAL;
 				}
@@ -5480,7 +5477,7 @@ nfsrvd_seek(struct nfsrv_descript *nd, __unused int isdgram,
 	    nd->nd_cred, curthread);
 	vrele(vp);
 	if (nd->nd_repstat == 0 && eof && content == NFSV4CONTENT_DATA &&
-	    nfsrv_linuxseekdata != 0)
+	    nfsrv_linux42server != 0)
 		nd->nd_repstat = NFSERR_INVAL;
 	if (nd->nd_repstat == 0) {
 		NFSM_BUILD(tl, uint32_t *, NFSX_UNSIGNED + NFSX_HYPER);
