@@ -3475,12 +3475,21 @@ nfs_advise(struct vop_advise_args *ap)
 	else
 		len = ap->a_end - ap->a_start + 1;
 	nmp = VFSTONFS(ap->a_vp->v_mount);
+	mtx_lock(&nmp->nm_mtx);
 	if (!NFSHASNFSV4(nmp) || nmp->nm_minorvers < NFSV42_MINORVERSION ||
 	    (NFSHASPNFS(nmp) && (nmp->nm_privflag & NFSMNTP_IOADVISETHRUMDS) ==
-	    0))
+	    0) || (nmp->nm_privflag & NFSMNTP_NOADVISE) != 0) {
+		mtx_unlock(&nmp->nm_mtx);
 		return (0);
-	nfsrpc_advise(ap->a_vp, ap->a_start, len, ap->a_advice,
+	}
+	mtx_unlock(&nmp->nm_mtx);
+	error = nfsrpc_advise(ap->a_vp, ap->a_start, len, ap->a_advice,
 	    td->td_ucred, td);
+	if (error == NFSERR_NOTSUPP) {
+		mtx_lock(&nmp->nm_mtx);
+		nmp->nm_privflag |= NFSMNTP_NOADVISE;
+		mtx_unlock(&nmp->nm_mtx);
+	}
 	return (0);
 }
 
@@ -3533,10 +3542,11 @@ nfs_copy_file_range(struct vop_copy_file_range_args *ap)
 	struct vnode *outvp = ap->a_outvp;
 	struct mount *mp;
 	struct nfsvattr innfsva, outnfsva;
+	struct vattr *vap;
 	struct uio io;
 	struct nfsmount *nmp;
-	size_t len, len2;
-	int error, inattrflag, outattrflag, ret;
+	size_t len, len2, copiedlen;
+	int error, inattrflag, outattrflag, ret, ret2;
 	off_t inoff, outoff;
 	bool consecutive, must_commit, tryoutcred;
 
@@ -3610,6 +3620,24 @@ nfs_copy_file_range(struct vop_copy_file_range_args *ap)
 	outoff = *ap->a_outoffp;
 	tryoutcred = true;
 	must_commit = false;
+	if (error == 0) {
+		vap = &VTONFS(invp)->n_vattr.na_vattr;
+		error = VOP_GETATTR(invp, vap, ap->a_incred);
+		if (error == 0) {
+			/*
+			 * Clip "len" at va_size so that RFC compliant servers
+			 * will not reply NFSERR_INVAL.
+			 * Setting "len == 0" for the RPC would be preferred,
+			 * but some Linux servers do not support that,
+			 */
+			if (inoff >= vap->va_size)
+				*ap->a_lenp = len = 0;
+			else if (inoff + len > vap->va_size)
+				*ap->a_lenp = len = vap->va_size - inoff;
+		} else
+			error = 0;
+	}
+	copiedlen = 0;
 	while (len > 0 && error == 0) {
 		inattrflag = outattrflag = 0;
 		len2 = len;
@@ -3623,27 +3651,12 @@ nfs_copy_file_range(struct vop_copy_file_range_args *ap)
 			    outvp, ap->a_outoffp, &len2, ap->a_flags,
 			    &inattrflag, &innfsva, &outattrflag, &outnfsva,
 			    ap->a_incred, consecutive, &must_commit);
-		if (inattrflag != 0) {
+		if (inattrflag != 0)
 			ret = nfscl_loadattrcache(&invp, &innfsva, NULL, NULL,
 			    0, 1);
-			if (error == 0 && ret != 0)
-				error = ret;
-		}
-		if (outattrflag != 0) {
-			ret = nfscl_loadattrcache(&outvp, &outnfsva, NULL, NULL,
-			    1, 1);
-			if (error == 0 && ret != 0)
-				error = ret;
-		}
-		if (error == 0 && len2 == 0) {
-			/*
-			 * Some Linux NFSv4.2 servers can reply NFS_OK, but
-			 * with a copied length (wr_count) == 0 when the
-			 * offset + len is past EOF. (RFC-7862 requires a
-			 * reply of NFS4ERR_INVAL for this case.)
-			 */
-			error = NFSERR_INVAL;
-		}
+		if (outattrflag != 0)
+			ret2 = nfscl_loadattrcache(&outvp, &outnfsva, NULL,
+			    NULL, 1, 1);
 		if (error == 0) {
 			if (consecutive == false) {
 				if (len2 == len) {
@@ -3654,10 +3667,24 @@ nfs_copy_file_range(struct vop_copy_file_range_args *ap)
 				} else
 					error = NFSERR_OFFLOADNOREQS;
 			}
-			len -= len2;
+			/*
+			 * If the Copy returns a length == 0, it hit the
+			 * EOF on the input file.
+			 */
+			if (len2 == 0) {
+				*ap->a_lenp = copiedlen;
+				len = 0;
+			} else {
+				len -= len2;
+				copiedlen += len2;
+			}
 			if (len == 0 && must_commit && error == 0)
 				error = ncl_commit(outvp, outoff, *ap->a_lenp,
 				    ap->a_outcred, curthread);
+			if (error == 0 && ret != 0)
+				error = ret;
+			if (error == 0 && ret2 != 0)
+				error = ret2;
 		} else if (error == NFSERR_OFFLOADNOREQS && consecutive) {
 			/*
 			 * Try consecutive == false, which is ok only if all

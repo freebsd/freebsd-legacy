@@ -111,6 +111,7 @@ struct	nfsmount {
 #define	NFSMNTP_SEEK		0x00000020
 #define	NFSMNTP_SEEKTESTED	0x00000040
 #define	NFSMNTP_NOXATTR		0x00000080
+#define	NFSMNTP_NOADVISE	0x00000100
 
 #define	NFSMNT_DIRPATH(m)	(&((m)->nm_name[(m)->nm_krbnamelen + 1]))
 #define	NFSMNT_SRVKRBNAME(m)						\
