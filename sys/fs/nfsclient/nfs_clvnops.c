@@ -3628,7 +3628,7 @@ nfs_copy_file_range(struct vop_copy_file_range_args *ap)
 			 * Clip "len" at va_size so that RFC compliant servers
 			 * will not reply NFSERR_INVAL.
 			 * Setting "len == 0" for the RPC would be preferred,
-			 * but some Linux servers do not support that,
+			 * but some Linux servers do not support that.
 			 */
 			if (inoff >= vap->va_size)
 				*ap->a_lenp = len = 0;
