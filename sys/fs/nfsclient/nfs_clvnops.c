@@ -3507,15 +3507,30 @@ nfs_allocate(struct vop_allocate_args *ap)
 
 	attrflag = 0;
 	nmp = VFSTONFS(vp->v_mount);
-	if (NFSHASNFSV4(nmp) && nmp->nm_minorvers >= NFSV42_MINORVERSION) {
-		error = nfsrpc_allocate(vp, *ap->a_offset, *ap->a_len, &nfsva,
-		    &attrflag, td->td_ucred, td, NULL);
+	mtx_lock(&nmp->nm_mtx);
+	if (NFSHASNFSV4(nmp) && nmp->nm_minorvers >= NFSV42_MINORVERSION &&
+	    (nmp->nm_privflag & NFSMNTP_NOALLOCATE) == 0) {
+		mtx_unlock(&nmp->nm_mtx);
+		/*
+		 * Flush first to ensure that the allocate adds to the
+		 * file's allocation on the server.
+		 */
+		error = ncl_flush(vp, MNT_WAIT, td, 1, 0);
+		if (error == 0)
+			error = nfsrpc_allocate(vp, *ap->a_offset, *ap->a_len,
+			    &nfsva, &attrflag, td->td_ucred, td, NULL);
 		if (error == 0) {
 			*ap->a_offset += *ap->a_len;
 			*ap->a_len = 0;
+		} else if (error == NFSERR_NOTSUPP) {
+			mtx_lock(&nmp->nm_mtx);
+			nmp->nm_privflag |= NFSMNTP_NOALLOCATE;
+			mtx_unlock(&nmp->nm_mtx);
 		}
-	} else
+	} else {
+		mtx_unlock(&nmp->nm_mtx);
 		error = EIO;
+	}
 	/*
 	 * If the NFS server cannot perform the Allocate operation, just call
 	 * vop_stdallocate() to perform it.
