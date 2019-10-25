@@ -5478,7 +5478,7 @@ nfsrvd_seek(struct nfsrv_descript *nd, __unused int isdgram,
 	vrele(vp);
 	if (nd->nd_repstat == 0 && eof && content == NFSV4CONTENT_DATA &&
 	    nfsrv_linux42server != 0)
-		nd->nd_repstat = NFSERR_INVAL;
+		nd->nd_repstat = NFSERR_NXIO;
 	if (nd->nd_repstat == 0) {
 		NFSM_BUILD(tl, uint32_t *, NFSX_UNSIGNED + NFSX_HYPER);
 		if (eof)
