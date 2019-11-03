@@ -5871,6 +5871,8 @@ out:
 
 /*
  * Seek vnode op call (actually it is a VOP_IOCTL()).
+ * This function is called with the vnode locked, but unlocks and vrele()s
+ * the vp before returning.
  */
 int
 nfsvno_seek(struct nfsrv_descript *nd, struct vnode *vp, u_long cmd,
@@ -5879,21 +5881,24 @@ nfsvno_seek(struct nfsrv_descript *nd, struct vnode *vp, u_long cmd,
 	struct nfsvattr at;
 	int error, ret;
 
-	ASSERT_VOP_UNLOCKED(vp, "nfsvno_seek vp");
+	ASSERT_VOP_LOCKED(vp, "nfsvno_seek vp");
 	/*
 	 * Attempt to seek on a DS file. A return of ENOENT implies
 	 * there is no DS file to seek on.
 	 */
 	error = nfsrv_proxyds(vp, 0, 0, cred, p, NFSPROC_SEEKDS, NULL,
 	    NULL, NULL, NULL, NULL, offp, content, eofp);
-	if (error != ENOENT)
+	if (error != ENOENT) {
+		vput(vp);
 		return (error);
+	}
 
 	/*
 	 * Do the VOP_IOCTL() call.  For the case where *offp == file_size,
 	 * VOP_IOCTL() will return ENXIO.  However, the correct reply for
 	 * NFSv4.2 is *eofp == true and error == 0 for this case.
 	 */
+	NFSVOPUNLOCK(vp, 0);
 	error = VOP_IOCTL(vp, cmd, offp, 0, cred, p);
 	*eofp = false;
 	if (error == ENXIO || (error == 0 && cmd == FIOSEEKHOLE)) {
@@ -5906,6 +5911,7 @@ nfsvno_seek(struct nfsrv_descript *nd, struct vnode *vp, u_long cmd,
 		if (ret != 0 && error == 0)
 			error = ret;
 	}
+	vrele(vp);
 	NFSEXITCODE(error);
 	return (error);
 }

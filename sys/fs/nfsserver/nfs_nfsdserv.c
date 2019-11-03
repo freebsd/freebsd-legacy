@@ -5472,10 +5472,9 @@ nfsrvd_seek(struct nfsrv_descript *nd, __unused int isdgram,
 	if (nd->nd_repstat != 0)
 		goto nfsmout;
 
-	NFSVOPUNLOCK(vp, 0);
+	/* nfsvno_seek() unlocks and vrele()s the vp. */
 	nd->nd_repstat = nfsvno_seek(nd, vp, cmd, &off, content, &eof,
 	    nd->nd_cred, curthread);
-	vrele(vp);
 	if (nd->nd_repstat == 0 && eof && content == NFSV4CONTENT_DATA &&
 	    nfsrv_linux42server != 0)
 		nd->nd_repstat = NFSERR_NXIO;
