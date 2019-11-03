@@ -8446,7 +8446,7 @@ nfsrpc_listextattr(vnode_t vp, uint64_t *cookiep, struct uio *uiop,
 		NFSM_DISSECT(tl, uint32_t *, NFSX_HYPER + NFSX_UNSIGNED);
 		*cookiep = fxdr_hyper(tl); tl += 2;
 		cnt = fxdr_unsigned(int, *tl);
-		if (cnt <= 0) {
+		if (cnt < 0) {
 			error = EBADRPC;
 			goto nfsmout;
 		}
