@@ -149,7 +149,8 @@ static int nfsrpc_getlayout(struct nfsmount *, vnode_t, struct nfsfh *, int,
     uint32_t *, nfsv4stateid_t *, uint64_t, struct nfscllayout **,
     struct ucred *, NFSPROC_T *);
 static int nfsrpc_fillsa(struct nfsmount *, struct sockaddr_in *,
-    struct sockaddr_in6 *, sa_family_t, int, struct nfsclds **, NFSPROC_T *);
+    struct sockaddr_in6 *, sa_family_t, int, int, struct nfsclds **,
+    NFSPROC_T *);
 static void nfscl_initsessionslots(struct nfsclsession *);
 static int nfscl_doflayoutio(vnode_t, struct uio *, int *, int *, int *,
     nfsv4stateid_t *, int, struct nfscldevinfo *, struct nfscllayout *,
@@ -956,12 +957,12 @@ nfsrpc_setclient(struct nfsmount *nmp, struct nfsclclient *clp, int reclaim,
 		 * previous session has failed, so...
 		 * do an ExchangeID followed by the CreateSession.
 		 */
-		error = nfsrpc_exchangeid(nmp, clp, &nmp->nm_sockreq,
+		error = nfsrpc_exchangeid(nmp, clp, &nmp->nm_sockreq, 0,
 		    NFSV4EXCH_USEPNFSMDS | NFSV4EXCH_USENONPNFS, &dsp, cred, p);
 		NFSCL_DEBUG(1, "aft exch=%d\n", error);
 		if (error == 0)
 			error = nfsrpc_createsession(nmp, &dsp->nfsclds_sess,
-			    &nmp->nm_sockreq,
+			    &nmp->nm_sockreq, NULL,
 			    dsp->nfsclds_sess.nfsess_sequenceid, 1, cred, p);
 		if (error == 0) {
 			NFSLOCKMNT(nmp);
@@ -4668,8 +4669,8 @@ nfsrpc_setaclrpc(vnode_t vp, struct ucred *cred, NFSPROC_T *p,
  */
 int
 nfsrpc_exchangeid(struct nfsmount *nmp, struct nfsclclient *clp,
-    struct nfssockreq *nrp, uint32_t exchflags, struct nfsclds **dspp,
-    struct ucred *cred, NFSPROC_T *p)
+    struct nfssockreq *nrp, int minorvers, uint32_t exchflags,
+    struct nfsclds **dspp, struct ucred *cred, NFSPROC_T *p)
 {
 	uint32_t *tl, v41flags;
 	struct nfsrv_descript nfsd;
@@ -4679,7 +4680,10 @@ nfsrpc_exchangeid(struct nfsmount *nmp, struct nfsclclient *clp,
 	int error, len;
 
 	*dspp = NULL;
-	nfscl_reqstart(nd, NFSPROC_EXCHANGEID, nmp, NULL, 0, NULL, NULL, 0, 0);
+	if (minorvers == 0)
+		minorvers = nmp->nm_minorvers;
+	nfscl_reqstart(nd, NFSPROC_EXCHANGEID, nmp, NULL, 0, NULL, NULL,
+	    NFS_VER4, minorvers);
 	NFSM_BUILD(tl, uint32_t *, 2 * NFSX_UNSIGNED);
 	*tl++ = txdr_unsigned(nfsboottime.tv_sec);	/* Client owner */
 	*tl = txdr_unsigned(clp->nfsc_rev);
@@ -4730,6 +4734,8 @@ nfsrpc_exchangeid(struct nfsmount *nmp, struct nfsclclient *clp,
 		}
 		if ((v41flags & NFSV4EXCH_USEPNFSDS) != 0)
 			dsp->nfsclds_flags |= NFSCLDS_DS;
+		if (minorvers == NFSV42_MINORVERSION)
+			dsp->nfsclds_flags |= NFSCLDS_MINORV2;
 		if (len > 0)
 			nd->nd_repstat = nfsrv_mtostr(nd,
 			    dsp->nfsclds_serverown, len);
@@ -4753,21 +4759,27 @@ nfsmout:
  */
 int
 nfsrpc_createsession(struct nfsmount *nmp, struct nfsclsession *sep,
-    struct nfssockreq *nrp, uint32_t sequenceid, int mds, struct ucred *cred,
-    NFSPROC_T *p)
+    struct nfssockreq *nrp, struct nfsclds *dsp, uint32_t sequenceid, int mds,
+    struct ucred *cred, NFSPROC_T *p)
 {
 	uint32_t crflags, maxval, *tl;
 	struct nfsrv_descript nfsd;
 	struct nfsrv_descript *nd = &nfsd;
-	int error, irdcnt;
+	int error, irdcnt, minorvers;
 
 	/* Make sure nm_rsize, nm_wsize is set. */
 	if (nmp->nm_rsize > NFS_MAXBSIZE || nmp->nm_rsize == 0)
 		nmp->nm_rsize = NFS_MAXBSIZE;
 	if (nmp->nm_wsize > NFS_MAXBSIZE || nmp->nm_wsize == 0)
 		nmp->nm_wsize = NFS_MAXBSIZE;
-	nfscl_reqstart(nd, NFSPROC_CREATESESSION, nmp, NULL, 0, NULL, NULL, 0,
-	    0);
+	if (dsp == NULL)
+		minorvers = nmp->nm_minorvers;
+	else if ((dsp->nfsclds_flags & NFSCLDS_MINORV2) != 0)
+		minorvers = NFSV42_MINORVERSION;
+	else
+		minorvers = NFSV41_MINORVERSION;
+	nfscl_reqstart(nd, NFSPROC_CREATESESSION, nmp, NULL, 0, NULL, NULL,
+	    NFS_VER4, minorvers);
 	NFSM_BUILD(tl, uint32_t *, 4 * NFSX_UNSIGNED);
 	*tl++ = sep->nfsess_clientid.lval[0];
 	*tl++ = sep->nfsess_clientid.lval[1];
@@ -4984,7 +4996,8 @@ nfsrpc_getdeviceinfo(struct nfsmount *nmp, uint8_t *deviceid, int layouttype,
 	struct sockaddr_in6 sin6, ssin6;
 	struct nfsclds *dsp = NULL, **dspp, **gotdspp;
 	struct nfscldevinfo *ndi;
-	int addrcnt = 0, bitcnt, error, gotvers, i, isudp, j, stripecnt;
+	int addrcnt = 0, bitcnt, error, gotminor, gotvers, i, isudp, j;
+	int stripecnt;
 	uint8_t stripeindex;
 	sa_family_t af, safilled;
 
@@ -5116,7 +5129,8 @@ nfsrpc_getdeviceinfo(struct nfsmount *nmp, uint8_t *deviceid, int layouttype,
 			}
 		}
 
-		gotvers = NFS_VER4;	/* Always NFSv4 for File Layout. */
+		gotvers = NFS_VER4;	/* Default NFSv4.1 for File Layout. */
+		gotminor = NFSV41_MINORVERSION;
 		/* For Flex File, we will take one of the versions to use. */
 		if (layouttype == NFSLAYOUT_FLEXFILE) {
 			NFSM_DISSECT(tl, uint32_t *, NFSX_UNSIGNED);
@@ -5127,15 +5141,19 @@ nfsrpc_getdeviceinfo(struct nfsmount *nmp, uint8_t *deviceid, int layouttype,
 				goto nfsmout;
 			}
 			gotvers = 0;
+			gotminor = 0;
 			for (i = 0; i < j; i++) {
 				NFSM_DISSECT(tl, uint32_t *, 5 * NFSX_UNSIGNED);
 				vers = fxdr_unsigned(uint32_t, *tl++);
 				minorvers = fxdr_unsigned(uint32_t, *tl++);
-				if ((vers == NFS_VER4 && (minorvers ==
-				    NFSV41_MINORVERSION || minorvers ==
-				    NFSV42_MINORVERSION)) || (vers ==
-				    NFS_VER3 && gotvers == 0)) {
+				if (vers == NFS_VER3)
+					minorvers = 0;
+				if ((vers == NFS_VER4 && ((minorvers ==
+				    NFSV41_MINORVERSION && gotminor == 0) ||
+				    minorvers == NFSV42_MINORVERSION)) ||
+				    (vers == NFS_VER3 && gotvers == 0)) {
 					gotvers = vers;
+					gotminor = minorvers;
 					/* We'll take this one. */
 					ndi->nfsdi_versindex = i;
 					ndi->nfsdi_vers = vers;
@@ -5153,7 +5171,7 @@ nfsrpc_getdeviceinfo(struct nfsmount *nmp, uint8_t *deviceid, int layouttype,
 				}
 			}
 			if (gotvers == 0) {
-				printf("pNFS: no NFSv3 or NFSv4.1\n");
+				printf("pNFS: no NFSv3, NFSv4.1 or NFSv4.2\n");
 				error = NFSERR_BADXDR;
 				goto nfsmout;
 			}
@@ -5179,7 +5197,7 @@ nfsrpc_getdeviceinfo(struct nfsmount *nmp, uint8_t *deviceid, int layouttype,
 			 * NFS version and IP address.
 			 */
 			error = nfsrpc_fillsa(nmp, &ssin, &ssin6, safilled,
-			    gotvers, &dsp, p);
+			    gotvers, gotminor, &dsp, p);
 		}
 		if (error == 0) {
 			KASSERT(gotdspp != NULL, ("gotdspp is NULL"));
@@ -5408,15 +5426,15 @@ nfsrpc_getlayout(struct nfsmount *nmp, vnode_t vp, struct nfsfh *nfhp,
  */
 static int
 nfsrpc_fillsa(struct nfsmount *nmp, struct sockaddr_in *sin,
-    struct sockaddr_in6 *sin6, sa_family_t af, int vers, struct nfsclds **dspp,
-    NFSPROC_T *p)
+    struct sockaddr_in6 *sin6, sa_family_t af, int vers, int minorvers,
+    struct nfsclds **dspp, NFSPROC_T *p)
 {
 	struct sockaddr_in *msad, *sad;
 	struct sockaddr_in6 *msad6, *sad6;
 	struct nfsclclient *clp;
 	struct nfssockreq *nrp;
 	struct nfsclds *dsp, *tdsp;
-	int error;
+	int error, firsttry;
 	enum nfsclds_state retv;
 	uint32_t sequenceid;
 
@@ -5527,9 +5545,16 @@ nfsrpc_fillsa(struct nfsmount *nmp, struct sockaddr_in *sin,
 	/* Now, do the exchangeid and create session. */
 	if (error == 0) {
 		if (vers == NFS_VER4) {
-			error = nfsrpc_exchangeid(nmp, clp, nrp,
-			    NFSV4EXCH_USEPNFSDS, &dsp, nrp->nr_cred, p);
-			NFSCL_DEBUG(3, "DS exchangeid=%d\n", error);
+			firsttry = 0;
+			do {
+				error = nfsrpc_exchangeid(nmp, clp, nrp, 
+				    minorvers, NFSV4EXCH_USEPNFSDS, &dsp,
+				    nrp->nr_cred, p);
+				NFSCL_DEBUG(3, "DS exchangeid=%d\n", error);
+				if (error == NFSERR_MINORVERMISMATCH)
+					minorvers = NFSV42_MINORVERSION;
+			} while (error == NFSERR_MINORVERMISMATCH &&
+			    firsttry++ == 0);
 			if (error != 0)
 				newnfs_disconnect(nrp);
 		} else {
@@ -5569,7 +5594,7 @@ nfsrpc_fillsa(struct nfsmount *nmp, struct sockaddr_in *sin,
 				    dsp->nfsclds_sess.nfsess_sequenceid;
 			NFSUNLOCKMNT(nmp);
 			error = nfsrpc_createsession(nmp, &dsp->nfsclds_sess,
-			    nrp, sequenceid, 0, nrp->nr_cred, p);
+			    nrp, dsp, sequenceid, 0, nrp->nr_cred, p);
 			NFSCL_DEBUG(3, "DS createsess=%d\n", error);
 		}
 	} else {
@@ -5931,7 +5956,7 @@ nfscl_findlayoutforio(struct nfscllayout *lyp, uint64_t off, uint32_t rwaccess,
 }
 
 /*
- * Do I/O using an NFSv4.1 file layout.
+ * Do I/O using an NFSv4.1 or NFSv4.2 file layout.
  */
 static int
 nfscl_doflayoutio(vnode_t vp, struct uio *uiop, int *iomode, int *must_commit,
@@ -5940,7 +5965,7 @@ nfscl_doflayoutio(vnode_t vp, struct uio *uiop, int *iomode, int *must_commit,
     uint64_t len, int docommit, struct ucred *cred, NFSPROC_T *p)
 {
 	uint64_t io_off, rel_off, stripe_unit_size, transfer, xfer;
-	int commit_thru_mds, error, stripe_index, stripe_pos;
+	int commit_thru_mds, error, stripe_index, stripe_pos, minorvers;
 	struct nfsnode *np;
 	struct nfsfh *fhp;
 	struct nfsclds **dspp;
@@ -5957,6 +5982,10 @@ nfscl_doflayoutio(vnode_t vp, struct uio *uiop, int *iomode, int *must_commit,
 	while (len > 0 && error == 0) {
 		stripe_index = nfsfldi_stripeindex(dp, stripe_pos);
 		dspp = nfsfldi_addr(dp, stripe_index);
+		if (((*dspp)->nfsclds_flags & NFSCLDS_MINORV2) != 0)
+			minorvers = NFSV42_MINORVERSION;
+		else
+			minorvers = NFSV41_MINORVERSION;
 		if (len > transfer && docommit == 0)
 			xfer = transfer;
 		else
@@ -5994,7 +6023,7 @@ nfscl_doflayoutio(vnode_t vp, struct uio *uiop, int *iomode, int *must_commit,
 		if (docommit != 0) {
 			if (error == 0)
 				error = nfsrpc_commitds(vp, io_off, xfer,
-				    *dspp, fhp, 0, 0, cred, p);
+				    *dspp, fhp, NFS_VER4, minorvers, cred, p);
 			if (error == 0) {
 				/*
 				 * Set both eof and uio_resid = 0 to end any
@@ -6009,11 +6038,11 @@ nfscl_doflayoutio(vnode_t vp, struct uio *uiop, int *iomode, int *must_commit,
 			}
 		} else if (rwflag == NFSV4OPEN_ACCESSREAD)
 			error = nfsrpc_readds(vp, uiop, stateidp, eofp, *dspp,
-			    io_off, xfer, fhp, 0, 0, 0, cred, p);
+			    io_off, xfer, fhp, 0, NFS_VER4, minorvers, cred, p);
 		else {
 			error = nfsrpc_writeds(vp, uiop, iomode, must_commit,
 			    stateidp, *dspp, io_off, xfer, fhp, commit_thru_mds,
-			    0, 0, 0, cred, p);
+			    0, NFS_VER4, minorvers, cred, p);
 			if (error == 0) {
 				NFSLOCKCLSTATE();
 				lyp->nfsly_flags |= NFSLY_WRITTEN;

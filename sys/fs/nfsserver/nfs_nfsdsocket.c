@@ -412,6 +412,17 @@ int nfsrv_writerpc[NFS_NPROCS] = { 0, 0, 1, 0, 0, 0, 0,
     1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 };
 
+SYSCTL_DECL(_vfs_nfsd);
+static int	nfs_minminorv4 = NFSV4_MINORVERSION;
+SYSCTL_INT(_vfs_nfsd, OID_AUTO, server_min_minorversion4, CTLFLAG_RWTUN,
+    &nfs_minminorv4, 0,
+    "The lowest minor version of NFSv4 handled by the server");
+
+static int	nfs_maxminorv4 = NFSV42_MINORVERSION;
+SYSCTL_INT(_vfs_nfsd, OID_AUTO, server_max_minorversion4, CTLFLAG_RWTUN,
+    &nfs_maxminorv4, 0,
+    "The highest minor version of NFSv4 handled by the server");
+
 /* local functions */
 static void nfsrvd_compound(struct nfsrv_descript *nd, int isdgram,
     u_char *tag, int taglen, u_int32_t minorvers);
@@ -796,9 +807,10 @@ nfsrvd_compound(struct nfsrv_descript *nd, int isdgram, u_char *tag,
 	(void) nfsm_strtom(nd, tag, taglen);
 	NFSM_BUILD(retopsp, u_int32_t *, NFSX_UNSIGNED);
 	NFSM_DISSECT(tl, u_int32_t *, NFSX_UNSIGNED);
-	if (minorvers != NFSV4_MINORVERSION &&
+	if ((minorvers != NFSV4_MINORVERSION &&
 	    minorvers != NFSV41_MINORVERSION &&
-	    minorvers != NFSV42_MINORVERSION)
+	    minorvers != NFSV42_MINORVERSION) ||
+	    minorvers < nfs_minminorv4 || minorvers > nfs_maxminorv4)
 		nd->nd_repstat = NFSERR_MINORVERMISMATCH;
 	if (nd->nd_repstat)
 		numops = 0;

@@ -4077,6 +4077,8 @@ nfsrvd_exchangeid(struct nfsrv_descript *nd, __unused int isdgram,
 			clp->lc_flags |= LCL_GSSPRIVACY;
 	} else
 		clp->lc_flags = LCL_NFSV41;
+	if ((nd->nd_flag & ND_NFSV42) != 0)
+		clp->lc_flags |= LCL_NFSV42;
 	if ((nd->nd_flag & ND_GSS) != 0 && nd->nd_princlen > 0) {
 		clp->lc_flags |= LCL_NAME;
 		clp->lc_namelen = nd->nd_princlen;
