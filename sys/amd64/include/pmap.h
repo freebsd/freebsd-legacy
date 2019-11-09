@@ -201,13 +201,6 @@
 #define	NDMPML4E	8
 
 /*
- * NPAPML4E is the maximum number of PML4 entries that will be
- * used to implement the page array.  This should be roughly 3% of
- * NPDPML4E owing to 3% overhead for struct vm_page.
- */
-#define	NPAPML4E	1
-
-/*
  * These values control the layout of virtual memory.  The starting address
  * of the direct map, which is controlled by DMPML4I, must be a multiple of
  * its size.  (See the PHYS_TO_DMAP() and DMAP_TO_PHYS() macros.)
@@ -226,8 +219,7 @@
 #define	PML4PML4I	(NPML4EPG/2)	/* Index of recursive pml4 mapping */
 
 #define	KPML4BASE	(NPML4EPG-NKPML4E) /* KVM at highest addresses */
-#define	PAPML4I		(KPML4BASE-1-NPAPML4E) /* Below KVM */
-#define	DMPML4I		rounddown(PAPML4I-NDMPML4E, NDMPML4E) /* Below pages */
+#define	DMPML4I		rounddown(KPML4BASE-NDMPML4E, NDMPML4E) /* Below KVM */
 
 #define	KPML4I		(NPML4EPG-1)
 #define	KPDPI		(NPDPEPG-2)	/* kernbase at -2GB */
@@ -433,6 +425,7 @@ void	pmap_activate_sw(struct thread *);
 void	pmap_bootstrap(vm_paddr_t *);
 int	pmap_cache_bits(pmap_t pmap, int mode, boolean_t is_pde);
 int	pmap_change_attr(vm_offset_t, vm_size_t, int);
+int	pmap_change_prot(vm_offset_t, vm_size_t, vm_prot_t);
 void	pmap_demote_DMAP(vm_paddr_t base, vm_size_t len, boolean_t invalidate);
 void	pmap_flush_cache_range(vm_offset_t, vm_offset_t);
 void	pmap_flush_cache_phys_range(vm_paddr_t, vm_paddr_t, vm_memattr_t);

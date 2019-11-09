@@ -32,8 +32,11 @@
 
 #include <arm/allwinner/clkng/aw_clk.h>
 #include <arm/allwinner/clkng/aw_clk_m.h>
+#include <arm/allwinner/clkng/aw_clk_mipi.h>
 #include <arm/allwinner/clkng/aw_clk_nkmp.h>
 #include <arm/allwinner/clkng/aw_clk_nm.h>
+#include <arm/allwinner/clkng/aw_clk_nmm.h>
+#include <arm/allwinner/clkng/aw_clk_np.h>
 #include <arm/allwinner/clkng/aw_clk_prediv_mux.h>
 #include <arm/allwinner/clkng/aw_clk_frac.h>
 #include <dev/extres/clk/clk_mux.h>
@@ -50,6 +53,9 @@ enum aw_ccung_clk_type {
 	AW_CLK_PREDIV_MUX,
 	AW_CLK_FRAC,
 	AW_CLK_M,
+	AW_CLK_MIPI,
+	AW_CLK_NP,
+	AW_CLK_NMM,
 };
 
 struct aw_ccung_clk {
@@ -63,6 +69,9 @@ struct aw_ccung_clk {
 		struct aw_clk_prediv_mux_def	*prediv_mux;
 		struct aw_clk_frac_def		*frac;
 		struct aw_clk_m_def		*m;
+		struct aw_clk_mipi_def		*mipi;
+		struct aw_clk_np_def		*np;
+		struct aw_clk_nmm_def		*nmm;
 	} clk;
 };
 

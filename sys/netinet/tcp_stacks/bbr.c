@@ -8618,7 +8618,6 @@ dodata:				/* XXX */
 			bbr->rc_timer_first = 1;
 			bbr_timer_cancel(bbr,
 			    __LINE__, bbr->r_ctl.rc_rcvtime);
-			INP_INFO_RLOCK_ASSERT(&V_tcbinfo);
 			INP_WLOCK_ASSERT(tp->t_inpcb);
 			tcp_twstart(tp);
 			return (1);
@@ -9619,7 +9618,6 @@ bbr_check_data_after_close(struct mbuf *m, struct tcp_bbr *bbr,
     struct tcpcb *tp, int32_t * tlen, struct tcphdr *th, struct socket *so)
 {
 
-	INP_INFO_RLOCK_ASSERT(&V_tcbinfo);
 	if (bbr->rc_allow_data_af_clo == 0) {
 close_now:
 		tp = tcp_close(tp);
@@ -9861,7 +9859,6 @@ bbr_do_closing(struct mbuf *m, struct tcphdr *th, struct socket *so,
 		return (ret_val);
 	}
 	if (ourfinisacked) {
-		INP_INFO_RLOCK_ASSERT(&V_tcbinfo);
 		tcp_twstart(tp);
 		m_freem(m);
 		return (1);
@@ -9974,7 +9971,6 @@ bbr_do_lastack(struct mbuf *m, struct tcphdr *th, struct socket *so,
 		return (ret_val);
 	}
 	if (ourfinisacked) {
-		INP_INFO_RLOCK_ASSERT(&V_tcbinfo);
 		tp = tcp_close(tp);
 		ctf_do_drop(m, tp);
 		return (1);
@@ -11814,12 +11810,13 @@ bbr_do_segment_nounlock(struct mbuf *m, struct tcphdr *th, struct socket *so,
 						uint32_t del;
 
 						del = lcts - bbr->rc_pacer_started;
-						if (del > bbr->r_ctl.rc_last_delay_val) {
+						if (bbr->r_ctl.rc_last_delay_val > del) {
 							BBR_STAT_INC(bbr_force_timer_start);
 							bbr->r_ctl.rc_last_delay_val -= del;
 							bbr->rc_pacer_started = lcts;
 						} else {
 							/* We are late */
+							bbr->r_ctl.rc_last_delay_val = 0;
 							BBR_STAT_INC(bbr_force_output);
 							(void)tp->t_fb->tfb_tcp_output(tp);
 						}
@@ -12278,8 +12275,9 @@ bbr_output_wtime(struct tcpcb *tp, const struct timeval *tv)
 			 * We are early setup to adjust 
 			 * our slot time.
 			 */
+			uint64_t merged_val;
+			
 			bbr->r_ctl.rc_agg_early += (bbr->r_ctl.rc_last_delay_val - delay_calc);
-			bbr->r_ctl.rc_last_delay_val = 0;
 			bbr->r_agg_early_set = 1;
 			if (bbr->r_ctl.rc_hptsi_agg_delay) {
 				if (bbr->r_ctl.rc_hptsi_agg_delay >= bbr->r_ctl.rc_agg_early) {
@@ -12292,9 +12290,13 @@ bbr_output_wtime(struct tcpcb *tp, const struct timeval *tv)
 					bbr->r_ctl.rc_hptsi_agg_delay = 0;
 				}
 			}
+			merged_val = bbr->rc_pacer_started;
+			merged_val <<= 32;
+			merged_val |= bbr->r_ctl.rc_last_delay_val;
 			bbr_log_pacing_delay_calc(bbr, inp->inp_hpts_calls,
-						 bbr->r_ctl.rc_agg_early, cts, 3, 0,
+						 bbr->r_ctl.rc_agg_early, cts, delay_calc, merged_val,
 						 bbr->r_agg_early_set, 3);
+			bbr->r_ctl.rc_last_delay_val = 0;
 			BBR_STAT_INC(bbr_early);
 			delay_calc = 0;
 		}
@@ -13343,12 +13345,14 @@ send:
 			}
 		} else {
 			/* Not doing TSO */
-			if (optlen + ipoptlen > tp->t_maxseg) {
+			if (optlen + ipoptlen >= tp->t_maxseg) {
 				/*
 				 * Since we don't have enough space to put
 				 * the IP header chain and the TCP header in
 				 * one packet as required by RFC 7112, don't
-				 * send it.
+				 * send it. Also ensure that at least one
+				 * byte of the payload can be put into the
+				 * TCP segment.
 				 */
 				SOCKBUF_UNLOCK(&so->so_snd);
 				error = EMSGSIZE;

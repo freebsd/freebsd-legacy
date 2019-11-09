@@ -466,8 +466,8 @@ tcp_lro_log(struct tcpcb *tp, struct lro_ctrl *lc,
 		log.u_bbr.lt_epoch = le->ack_seq;
 		log.u_bbr.pacing_gain = th_win;
 		log.u_bbr.cwnd_gain = le->window;
-		log.u_bbr.cur_del_rate = (uint64_t)m;
-		log.u_bbr.bw_inuse = (uint64_t)le->m_head;
+		log.u_bbr.cur_del_rate = (uintptr_t)m;
+		log.u_bbr.bw_inuse = (uintptr_t)le->m_head;
 		log.u_bbr.pkts_out = le->mbuf_cnt;	/* Total mbufs added */
 		log.u_bbr.applimited = le->ulp_csum;
 		log.u_bbr.lost = le->mbuf_appended;
@@ -875,9 +875,16 @@ tcp_lro_flush(struct lro_ctrl *lc, struct lro_entry *le)
 
 	/* Now lets lookup the inp first */
 	CURVNET_SET(lc->ifp->if_vnet);
-	if (tcplro_stacks_wanting_mbufq == 0)
+	/*
+	 * XXXRRS Currently the common input handler for
+	 * mbuf queuing cannot handle VLAN Tagged. This needs
+	 * to be fixed and the or condition removed (i.e. the 
+	 * common code should do the right lookup for the vlan
+	 * tag and anything else that the vlan_input() does).
+	 */
+	if ((tcplro_stacks_wanting_mbufq == 0) || (le->m_head->m_flags & M_VLANTAG))
 		goto skip_lookup;
-	INP_INFO_RLOCK_ET(&V_tcbinfo, et);
+	NET_EPOCH_ENTER(et);
 	switch (le->eh_type) {
 #ifdef INET6
 	case ETHERTYPE_IPV6:
@@ -896,7 +903,7 @@ tcp_lro_flush(struct lro_ctrl *lc, struct lro_entry *le)
 		break;
 #endif
 	}
-	INP_INFO_RUNLOCK_ET(&V_tcbinfo, et);
+	NET_EPOCH_EXIT(et);
 	if (inp && ((inp->inp_flags & (INP_DROPPED|INP_TIMEWAIT)) ||
 		    (inp->inp_flags2 & INP_FREED))) {
 		/* We don't want this guy */

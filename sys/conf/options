@@ -319,8 +319,12 @@ NFS_ROOT	opt_nfsroot.h
 # SMB/CIFS requester
 NETSMB		opt_netsmb.h
 
+# Enable debugnet(4) networking support.
+DEBUGNET 	opt_global.h
 # Enable netdump(4) client support.
 NETDUMP 	opt_global.h
+# Enable netgdb(4) support.
+NETGDB 		opt_global.h
 
 # Options used only in subr_param.c.
 HZ		opt_param.h
@@ -418,6 +422,7 @@ RATELIMIT		opt_ratelimit.h
 RATELIMIT_DEBUG		opt_ratelimit.h
 INET			opt_inet.h
 INET6			opt_inet6.h
+STATS			opt_global.h
 IPDIVERT
 IPFILTER		opt_ipfilter.h
 IPFILTER_DEFAULT_BLOCK	opt_ipfilter.h

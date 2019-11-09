@@ -210,8 +210,8 @@ SYSCTL_COUNTER_U64(_vfs, OID_AUTO, recycles, CTLFLAG_RD, &recycles_count,
  * XXX these are probably of (very) limited utility now.
  */
 static int reassignbufcalls;
-SYSCTL_INT(_vfs, OID_AUTO, reassignbufcalls, CTLFLAG_RW, &reassignbufcalls, 0,
-    "Number of calls to reassignbuf");
+SYSCTL_INT(_vfs, OID_AUTO, reassignbufcalls, CTLFLAG_RW | CTLFLAG_STATS,
+    &reassignbufcalls, 0, "Number of calls to reassignbuf");
 
 static counter_u64_t free_owe_inact;
 SYSCTL_COUNTER_U64(_vfs, OID_AUTO, free_owe_inact, CTLFLAG_RD, &free_owe_inact,
@@ -351,10 +351,10 @@ sysctl_try_reclaim_vnode(SYSCTL_HANDLER_ARGS)
 
 	if (req->newptr == NULL)
 		return (EINVAL);
-	if (req->newlen > PATH_MAX)
+	if (req->newlen >= PATH_MAX)
 		return (E2BIG);
 
-	buf = malloc(PATH_MAX + 1, M_TEMP, M_WAITOK);
+	buf = malloc(PATH_MAX, M_TEMP, M_WAITOK);
 	error = SYSCTL_IN(req, buf, req->newlen);
 	if (error != 0)
 		goto out;
@@ -1273,7 +1273,7 @@ vnlru_proc(void)
 {
 	struct mount *mp, *nmp;
 	unsigned long onumvnodes;
-	int done, force, trigger, usevnodes;
+	int done, force, trigger, usevnodes, vsp;
 	bool reclaim_nc_src;
 
 	EVENTHANDLER_REGISTER(shutdown_pre_sync, kproc_shutdown, vnlruproc,
@@ -1301,7 +1301,8 @@ vnlru_proc(void)
 			force = 1;
 			vstir = 0;
 		}
-		if (vspace() >= vlowat && force == 0) {
+		vsp = vspace();
+		if (vsp >= vlowat && force == 0) {
 			vnlruproc_sig = 0;
 			wakeup(&vnlruproc_sig);
 			msleep(vnlruproc, &vnode_free_list_mtx,
@@ -1368,7 +1369,8 @@ vnlru_proc(void)
 		 * After becoming active to expand above low water, keep
 		 * active until above high water.
 		 */
-		force = vspace() < vhiwat;
+		vsp = vspace();
+		force = vsp < vhiwat;
 	}
 }
 
@@ -1447,8 +1449,10 @@ vtryrecycle(struct vnode *vp)
 static void
 vcheckspace(void)
 {
+	int vsp;
 
-	if (vspace() < vlowat && vnlruproc_sig == 0) {
+	vsp = vspace();
+	if (vsp < vlowat && vnlruproc_sig == 0) {
 		vnlruproc_sig = 1;
 		wakeup(vnlruproc);
 	}
@@ -3342,7 +3346,7 @@ vinactive(struct vnode *vp, struct thread *td)
 	 * pending I/O and dirty pages in the object.
 	 */
 	if ((obj = vp->v_object) != NULL && (vp->v_vflag & VV_NOSYNC) == 0 &&
-	    (obj->flags & OBJ_MIGHTBEDIRTY) != 0) {
+	    vm_object_mightbedirty(obj)) {
 		VM_OBJECT_WLOCK(obj);
 		vm_object_page_clean(obj, 0, 0, 0);
 		VM_OBJECT_WUNLOCK(obj);
@@ -3832,8 +3836,10 @@ vn_printf(struct vnode *vp, const char *fmt, ...)
 		strlcat(buf, "|VI_DOINGINACT", sizeof(buf));
 	if (vp->v_iflag & VI_OWEINACT)
 		strlcat(buf, "|VI_OWEINACT", sizeof(buf));
+	if (vp->v_iflag & VI_TEXT_REF)
+		strlcat(buf, "|VI_TEXT_REF", sizeof(buf));
 	flags = vp->v_iflag & ~(VI_MOUNT | VI_DOOMED | VI_FREE |
-	    VI_ACTIVE | VI_DOINGINACT | VI_OWEINACT);
+	    VI_ACTIVE | VI_DOINGINACT | VI_OWEINACT | VI_TEXT_REF);
 	if (flags != 0) {
 		snprintf(buf2, sizeof(buf2), "|VI(0x%lx)", flags);
 		strlcat(buf, buf2, sizeof(buf));
@@ -4395,11 +4401,12 @@ vfs_msync(struct mount *mp, int flags)
 
 	CTR2(KTR_VFS, "%s: mp %p", __func__, mp);
 
-	vnlru_return_batch(mp);
+	if ((mp->mnt_kern_flag & MNTK_NOMSYNC) != 0)
+		return;
 
 	MNT_VNODE_FOREACH_ACTIVE(vp, mp, mvp) {
 		obj = vp->v_object;
-		if (obj != NULL && (obj->flags & OBJ_MIGHTBEDIRTY) != 0 &&
+		if (obj != NULL && vm_object_mightbedirty(obj) &&
 		    (flags == MNT_WAIT || VOP_ISLOCKED(vp) == 0)) {
 			if (!vget(vp,
 			    LK_EXCLUSIVE | LK_RETRY | LK_INTERLOCK,
@@ -4628,6 +4635,11 @@ sync_fsync(struct vop_fsync_args *ap)
 		return (0);
 	}
 	save = curthread_pflags_set(TDP_SYNCIO);
+	/*
+	 * The filesystem at hand may be idle with free vnodes stored in the
+	 * batch.  Return them instead of letting them stay there indefinitely.
+	 */
+	vnlru_return_batch(mp);
 	vfs_msync(mp, MNT_NOWAIT);
 	error = VFS_SYNC(mp, MNT_LAZY);
 	curthread_pflags_restore(save);
@@ -4684,7 +4696,7 @@ vn_need_pageq_flush(struct vnode *vp)
 	MPASS(mtx_owned(VI_MTX(vp)));
 	need = 0;
 	if ((obj = vp->v_object) != NULL && (vp->v_vflag & VV_NOSYNC) == 0 &&
-	    (obj->flags & OBJ_MIGHTBEDIRTY) != 0)
+	    vm_object_mightbedirty(obj))
 		need = 1;
 	return (need);
 }
@@ -5697,6 +5709,121 @@ vfs_unixify_accmode(accmode_t *accmode)
 	*accmode &= ~(VSTAT_PERMS | VSYNCHRONIZE);
 
 	return (0);
+}
+
+/*
+ * Clear out a doomed vnode (if any) and replace it with a new one as long
+ * as the fs is not being unmounted. Return the root vnode to the caller.
+ */
+static int __noinline
+vfs_cache_root_fallback(struct mount *mp, int flags, struct vnode **vpp)
+{
+	struct vnode *vp;
+	int error;
+
+restart:
+	if (mp->mnt_rootvnode != NULL) {
+		MNT_ILOCK(mp);
+		vp = mp->mnt_rootvnode;
+		if (vp != NULL) {
+			if ((vp->v_iflag & VI_DOOMED) == 0) {
+				vrefact(vp);
+				MNT_IUNLOCK(mp);
+				error = vn_lock(vp, flags);
+				if (error == 0) {
+					*vpp = vp;
+					return (0);
+				}
+				vrele(vp);
+				goto restart;
+			}
+			/*
+			 * Clear the old one.
+			 */
+			mp->mnt_rootvnode = NULL;
+		}
+		MNT_IUNLOCK(mp);
+		if (vp != NULL) {
+			/*
+			 * Paired with a fence in vfs_op_thread_exit().
+			 */
+			atomic_thread_fence_acq();
+			vfs_op_barrier_wait(mp);
+			vrele(vp);
+		}
+	}
+	error = VFS_CACHEDROOT(mp, flags, vpp);
+	if (error != 0)
+		return (error);
+	if (mp->mnt_vfs_ops == 0) {
+		MNT_ILOCK(mp);
+		if (mp->mnt_vfs_ops != 0) {
+			MNT_IUNLOCK(mp);
+			return (0);
+		}
+		if (mp->mnt_rootvnode == NULL) {
+			vrefact(*vpp);
+			mp->mnt_rootvnode = *vpp;
+		} else {
+			if (mp->mnt_rootvnode != *vpp) {
+				if ((mp->mnt_rootvnode->v_iflag & VI_DOOMED) == 0) {
+					panic("%s: mismatch between vnode returned "
+					    " by VFS_CACHEDROOT and the one cached "
+					    " (%p != %p)",
+					    __func__, *vpp, mp->mnt_rootvnode);
+				}
+			}
+		}
+		MNT_IUNLOCK(mp);
+	}
+	return (0);
+}
+
+int
+vfs_cache_root(struct mount *mp, int flags, struct vnode **vpp)
+{
+	struct vnode *vp;
+	int error;
+
+	if (!vfs_op_thread_enter(mp))
+		return (vfs_cache_root_fallback(mp, flags, vpp));
+	vp = (struct vnode *)atomic_load_ptr(&mp->mnt_rootvnode);
+	if (vp == NULL || (vp->v_iflag & VI_DOOMED)) {
+		vfs_op_thread_exit(mp);
+		return (vfs_cache_root_fallback(mp, flags, vpp));
+	}
+	vrefact(vp);
+	vfs_op_thread_exit(mp);
+	error = vn_lock(vp, flags);
+	if (error != 0) {
+		vrele(vp);
+		return (vfs_cache_root_fallback(mp, flags, vpp));
+	}
+	*vpp = vp;
+	return (0);
+}
+
+struct vnode *
+vfs_cache_root_clear(struct mount *mp)
+{
+	struct vnode *vp;
+
+	/*
+	 * ops > 0 guarantees there is nobody who can see this vnode
+	 */
+	MPASS(mp->mnt_vfs_ops > 0);
+	vp = mp->mnt_rootvnode;
+	mp->mnt_rootvnode = NULL;
+	return (vp);
+}
+
+void
+vfs_cache_root_set(struct mount *mp, struct vnode *vp)
+{
+
+	MPASS(mp->mnt_vfs_ops > 0);
+	vrefact(vp);
+	mp->mnt_rootvnode = vp;
 }
 
 /*

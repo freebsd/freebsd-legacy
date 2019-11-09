@@ -231,6 +231,7 @@ struct mount {
 	int		*mnt_ref_pcpu;
 	int		*mnt_lockref_pcpu;
 	int		*mnt_writeopcount_pcpu;
+	struct vnode	*mnt_rootvnode;
 };
 
 /*
@@ -395,6 +396,7 @@ void          __mnt_vnode_markerfree_active(struct vnode **mvp, struct mount *);
 #define MNTK_UNMOUNTF	0x00000001	/* forced unmount in progress */
 #define MNTK_ASYNC	0x00000002	/* filtered async flag */
 #define MNTK_SOFTDEP	0x00000004	/* async disabled by softdep */
+#define MNTK_NOMSYNC	0x00000008	/* don't do vfs_msync */
 #define	MNTK_DRAINING	0x00000010	/* lock draining is happening */
 #define	MNTK_REFEXPIRE	0x00000020	/* refcount expiring is happening */
 #define MNTK_EXTENDED_SHARED	0x00000040 /* Allow shared locking for more ops */
@@ -409,6 +411,7 @@ void          __mnt_vnode_markerfree_active(struct vnode **mvp, struct mount *);
 #define	MNTK_UNMAPPED_BUFS	0x00002000
 #define	MNTK_USES_BCACHE	0x00004000 /* FS uses the buffer cache. */
 #define	MNTK_TEXT_REFS		0x00008000 /* Keep use ref for text */
+#define	MNTK_VMSETSIZE_BUG	0x00010000
 #define MNTK_NOASYNC	0x00800000	/* disable async */
 #define MNTK_UNMOUNT	0x01000000	/* unmount in progress */
 #define	MNTK_MWAIT	0x02000000	/* waiting for unmount to finish */
@@ -702,6 +705,7 @@ struct vfsops {
 	vfs_cmount_t		*vfs_cmount;
 	vfs_unmount_t		*vfs_unmount;
 	vfs_root_t		*vfs_root;
+	vfs_root_t		*vfs_cachedroot;
 	vfs_quotactl_t		*vfs_quotactl;
 	vfs_statfs_t		*vfs_statfs;
 	vfs_sync_t		*vfs_sync;
@@ -739,6 +743,12 @@ vfs_statfs_t	__vfs_statfs;
 	int _rc;							\
 									\
 	_rc = (*(MP)->mnt_op->vfs_root)(MP, FLAGS, VPP);		\
+	_rc; })
+
+#define	VFS_CACHEDROOT(MP, FLAGS, VPP) ({				\
+	int _rc;							\
+									\
+	_rc = (*(MP)->mnt_op->vfs_cachedroot)(MP, FLAGS, VPP);		\
 	_rc; })
 
 #define	VFS_QUOTACTL(MP, C, U, A) ({					\
@@ -949,6 +959,9 @@ vfs_sysctl_t		vfs_stdsysctl;
 
 void	syncer_suspend(void);
 void	syncer_resume(void);
+
+struct vnode *vfs_cache_root_clear(struct mount *);
+void	vfs_cache_root_set(struct mount *, struct vnode *);
 
 void	vfs_op_barrier_wait(struct mount *);
 void	vfs_op_enter(struct mount *);

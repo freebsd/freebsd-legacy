@@ -1,11 +1,8 @@
-/*	$NetBSD: tree.h,v 1.8 2004/03/28 19:38:30 provos Exp $	*/
-/*	$OpenBSD: tree.h,v 1.7 2002/10/17 21:51:54 art Exp $	*/
-/* $FreeBSD$ */
-
 /*-
  * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
  *
  * Copyright 2002 Niels Provos <provos@citi.umich.edu>
+ * Copyright 2018-2019 Netflix, Inc.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -27,6 +24,8 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ * $FreeBSD$
  */
 
 #ifndef	_SYS_ARB_H_
@@ -253,7 +252,7 @@ struct {								\
 	ARB_PROTOTYPE_PREV(name, type, attr);				\
 	ARB_PROTOTYPE_CMINMAX(name, type, attr);			\
 	ARB_PROTOTYPE_MINMAX(name, type, attr);				\
-	ARB_PROTOTYPE_REBALANCE(name, type, attr);
+	ARB_PROTOTYPE_REINSERT(name, type, attr);
 #define	ARB_PROTOTYPE_INSERT_COLOR(name, type, attr)			\
 	attr void name##_ARB_INSERT_COLOR(struct name *, struct type *)
 #define	ARB_PROTOTYPE_REMOVE_COLOR(name, type, attr)			\
@@ -289,8 +288,8 @@ struct {								\
 	attr const struct type *name##_ARB_CMINMAX(const struct name *, int)
 #define	ARB_PROTOTYPE_MINMAX(name, type, attr)				\
 	attr struct type *name##_ARB_MINMAX(const struct name *, int)
-#define ARB_PROTOTYPE_REBALANCE(name, type, attr)			\
-	attr struct type *name##_ARB_REBALANCE(struct name *, struct type *)
+#define ARB_PROTOTYPE_REINSERT(name, type, attr)			\
+	attr struct type *name##_ARB_REINSERT(struct name *, struct type *)
 
 #define	ARB_GENERATE(name, type, field, cmp)				\
 	ARB_GENERATE_INTERNAL(name, type, field, cmp,)
@@ -309,7 +308,7 @@ struct {								\
 	ARB_GENERATE_PREV(name, type, field, attr)			\
 	ARB_GENERATE_CMINMAX(name, type, field, attr)			\
 	ARB_GENERATE_MINMAX(name, type, field, attr)			\
-	ARB_GENERATE_REBALANCE(name, type, field, cmp, attr)
+	ARB_GENERATE_REINSERT(name, type, field, cmp, attr)
 
 #define ARB_GENERATE_INSERT_COLOR(name, type, field, attr)		\
 attr void								\
@@ -695,9 +694,9 @@ attr struct type *							\
 name##_ARB_MINMAX(const struct name *head, int val)			\
 { return (__DECONST(struct type *, name##_ARB_CMINMAX(head, val))); }
 
-#define	ARB_GENERATE_REBALANCE(name, type, field, cmp, attr)		\
+#define	ARB_GENERATE_REINSERT(name, type, field, cmp, attr)		\
 attr struct type *							\
-name##_ARB_REBALANCE(struct name *head, struct type *elm)		\
+name##_ARB_REINSERT(struct name *head, struct type *elm)		\
 {									\
 	struct type *cmpelm;						\
 	if (((cmpelm = ARB_PREV(name, head, elm)) != NULL &&		\
@@ -731,7 +730,7 @@ name##_ARB_REBALANCE(struct name *head, struct type *elm)		\
 	name##_ARB_CMINMAX(x, ARB_INF) : ARB_CNODE(x, ARB_MAXIDX(x)))
 #define	ARB_MAX(name, x)	(ARB_MAXIDX(x) == ARB_NULLIDX ? \
 	name##_ARB_MINMAX(x, ARB_INF) : ARB_NODE(x, ARB_MAXIDX(x)))
-#define	ARB_REBALANCE(name, x, y) name##_ARB_REBALANCE(x, y)
+#define	ARB_REINSERT(name, x, y) name##_ARB_REINSERT(x, y)
 
 #define	ARB_FOREACH(x, name, head)					\
 	for ((x) = ARB_MIN(name, head);					\
@@ -775,5 +774,8 @@ name##_ARB_REBALANCE(struct name *head, struct type *elm)		\
 
 #define	ARB_ARRFOREACH_REVERSE(x, field, head) \
 	ARB_ARRFOREACH_REVWCOND(x, field, head, 1)
+
+#define	ARB_RESET_TREE(head, name, maxn)				\
+	*(head) = ARB_INITIALIZER(name, maxn)
 
 #endif	/* _SYS_ARB_H_ */

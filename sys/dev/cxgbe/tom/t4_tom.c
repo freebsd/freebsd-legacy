@@ -32,6 +32,7 @@ __FBSDID("$FreeBSD$");
 
 #include "opt_inet.h"
 #include "opt_inet6.h"
+#include "opt_kern_tls.h"
 #include "opt_ratelimit.h"
 
 #include <sys/param.h>
@@ -806,6 +807,20 @@ t4_tcp_info(struct toedev *tod, struct tcpcb *tp, struct tcp_info *ti)
 	fill_tcp_info(sc, toep->tid, ti);
 }
 
+#ifdef KERN_TLS
+static int
+t4_alloc_tls_session(struct toedev *tod, struct tcpcb *tp,
+    struct ktls_session *tls)
+{
+	struct toepcb *toep = tp->t_toe;
+
+	INP_WLOCK_ASSERT(tp->t_inpcb);
+	MPASS(tls != NULL);
+
+	return (tls_alloc_ktls(toep, tls));
+}
+#endif
+
 /*
  * The TOE driver will not receive any more CPLs for the tid associated with the
  * toepcb; release the hold on the inpcb.
@@ -1353,7 +1368,6 @@ free_tid_tabs(struct tid_info *t)
 {
 
 	free_tid_tab(t);
-	free_atid_tab(t);
 	free_stid_tab(t);
 }
 
@@ -1363,10 +1377,6 @@ alloc_tid_tabs(struct tid_info *t)
 	int rc;
 
 	rc = alloc_tid_tab(t, M_NOWAIT);
-	if (rc != 0)
-		goto failed;
-
-	rc = alloc_atid_tab(t, M_NOWAIT);
 	if (rc != 0)
 		goto failed;
 
@@ -1721,6 +1731,9 @@ t4_tom_activate(struct adapter *sc)
 	tod->tod_offload_socket = t4_offload_socket;
 	tod->tod_ctloutput = t4_ctloutput;
 	tod->tod_tcp_info = t4_tcp_info;
+#ifdef KERN_TLS
+	tod->tod_alloc_tls_session = t4_alloc_tls_session;
+#endif
 
 	for_each_port(sc, i) {
 		for_each_vi(sc->port[i], v, vi) {

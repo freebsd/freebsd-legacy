@@ -247,6 +247,7 @@ struct xvnode {
 #define	VV_NOSYNC	0x0004	/* unlinked, stop syncing */
 #define	VV_ETERNALDEV	0x0008	/* device that is never destroyed */
 #define	VV_CACHEDLABEL	0x0010	/* Vnode has valid cached MAC label */
+#define	VV_VMSIZEVNLOCK	0x0020	/* object size check requires vnode lock */
 #define	VV_COPYONWRITE	0x0040	/* vnode is doing copy-on-write */
 #define	VV_SYSTEM	0x0080	/* vnode being used by kernel */
 #define	VV_PROCDEP	0x0100	/* vnode is process dependent */
@@ -746,6 +747,7 @@ int	vn_io_fault_pgmove(vm_page_t ma[], vm_offset_t offset, int xfersize,
 	rangelock_trywlock(&(vp)->v_rl, (start), (end), VI_MTX(vp))
 
 int	vfs_cache_lookup(struct vop_lookup_args *ap);
+int	vfs_cache_root(struct mount *mp, int flags, struct vnode **vpp);
 void	vfs_timestamp(struct timespec *);
 void	vfs_write_resume(struct mount *mp, int flags);
 int	vfs_write_suspend(struct mount *mp, int flags);

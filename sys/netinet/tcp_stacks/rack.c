@@ -5875,7 +5875,6 @@ dodata:				/* XXX */
 		case TCPS_FIN_WAIT_2:
 			rack_timer_cancel(tp, rack,
 			    rack->r_ctl.rc_rcvtime, __LINE__);
-			INP_INFO_RLOCK_ASSERT(&V_tcbinfo);
 			tcp_twstart(tp);
 			return (1);
 		}
@@ -6353,7 +6352,6 @@ rack_do_syn_sent(struct mbuf *m, struct tcphdr *th, struct socket *so,
 		tp->t_flags |= (TF_ACKNOW | TF_NEEDSYN);
 		tcp_state_change(tp, TCPS_SYN_RECEIVED);
 	}
-	INP_INFO_RLOCK_ASSERT(&V_tcbinfo);
 	INP_WLOCK_ASSERT(tp->t_inpcb);
 	/*
 	 * Advance th->th_seq to correspond to first data byte. If data,
@@ -6847,7 +6845,6 @@ rack_check_data_after_close(struct mbuf *m,
 {
 	struct tcp_rack *rack;
 
-	INP_INFO_RLOCK_ASSERT(&V_tcbinfo);
 	rack = (struct tcp_rack *)tp->t_fb_ptr;
 	if (rack->rc_allow_data_af_clo == 0) {
 	close_now:
@@ -7079,7 +7076,6 @@ rack_do_closing(struct mbuf *m, struct tcphdr *th, struct socket *so,
 		return (ret_val);
 	}
 	if (ourfinisacked) {
-		INP_INFO_RLOCK_ASSERT(&V_tcbinfo);
 		tcp_twstart(tp);
 		m_freem(m);
 		return (1);
@@ -7187,7 +7183,6 @@ rack_do_lastack(struct mbuf *m, struct tcphdr *th, struct socket *so,
 		return (ret_val);
 	}
 	if (ourfinisacked) {
-		INP_INFO_RLOCK_ASSERT(&V_tcbinfo);
 		tp = tcp_close(tp);
 		ctf_do_drop(m, tp);
 		return (1);
@@ -7650,16 +7645,8 @@ rack_do_segment_nounlock(struct mbuf *m, struct tcphdr *th, struct socket *so,
 	kern_prefetch(rack, &prev_state);
 	prev_state = 0;
 	thflags = th->th_flags;
-	/*
-	 * If this is either a state-changing packet or current state isn't
-	 * established, we require a read lock on tcbinfo.  Otherwise, we
-	 * allow the tcbinfo to be in either locked or unlocked, as the
-	 * caller may have unnecessarily acquired a lock due to a race.
-	 */
-	if ((thflags & (TH_SYN | TH_FIN | TH_RST)) != 0 ||
-	    tp->t_state != TCPS_ESTABLISHED) {
-		INP_INFO_RLOCK_ASSERT(&V_tcbinfo);
-	}
+
+	NET_EPOCH_ASSERT();
 	INP_WLOCK_ASSERT(tp->t_inpcb);
 	KASSERT(tp->t_state > TCPS_LISTEN, ("%s: TCPS_LISTEN",
 	    __func__));
@@ -8115,7 +8102,7 @@ rack_output(struct tcpcb *tp)
 	struct mbuf *m;
 	struct mbuf *mb;
 	uint32_t if_hw_tsomaxsegcount = 0;
-	uint32_t if_hw_tsomaxsegsize;
+	uint32_t if_hw_tsomaxsegsize = 0;
 	int32_t maxseg;
 	long tot_len_this_send = 0;
 	struct ip *ip = NULL;
@@ -9200,12 +9187,14 @@ send:
 				sendalot = 1;
 
 		} else {
-			if (optlen + ipoptlen > tp->t_maxseg) {
+			if (optlen + ipoptlen >= tp->t_maxseg) {
 				/*
 				 * Since we don't have enough space to put
 				 * the IP header chain and the TCP header in
 				 * one packet as required by RFC 7112, don't
-				 * send it.
+				 * send it. Also ensure that at least one
+				 * byte of the payload can be put into the
+				 * TCP segment.
 				 */
 				SOCKBUF_UNLOCK(&so->so_snd);
 				error = EMSGSIZE;
@@ -10261,10 +10250,10 @@ rack_set_sockopt(struct socket *so, struct sockopt *sopt,
 		break;
 	case TCP_RACK_TLP_INC_VAR:
 		/* Does TLP include rtt variance in t-o */
-		return (EINVAL);
+		error = EINVAL;
 		break;
 	case TCP_RACK_IDLE_REDUCE_HIGH:
-		return (EINVAL);
+		error = EINVAL;
 		break;
 	case TCP_DELACK:
 		if (optval == 0)
@@ -10329,6 +10318,7 @@ rack_get_sockopt(struct socket *so, struct sockopt *sopt,
 	 * add a option that is not a int, then this will have quite an
 	 * impact to this routine.
 	 */
+	error = 0;
 	switch (sopt->sopt_name) {
 	case TCP_RACK_DO_DETECTION:
 		optval = rack->do_detection;
@@ -10398,10 +10388,10 @@ rack_get_sockopt(struct socket *so, struct sockopt *sopt,
 		break;
 	case TCP_RACK_TLP_INC_VAR:
 		/* Does TLP include rtt variance in t-o */
-		return (EINVAL);
+		error = EINVAL;
 		break;
 	case TCP_RACK_IDLE_REDUCE_HIGH:
-		return (EINVAL);
+		error = EINVAL;
 		break;
 	case TCP_RACK_MIN_PACE:
 		optval = rack->r_enforce_min_pace;
@@ -10423,7 +10413,9 @@ rack_get_sockopt(struct socket *so, struct sockopt *sopt,
 		break;
 	}
 	INP_WUNLOCK(inp);
-	error = sooptcopyout(sopt, &optval, sizeof optval);
+	if (error == 0) {
+		error = sooptcopyout(sopt, &optval, sizeof optval);
+	}
 	return (error);
 }
 
