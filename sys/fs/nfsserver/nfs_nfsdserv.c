@@ -5104,7 +5104,7 @@ nfsrvd_allocate(struct nfsrv_descript *nd, __unused int isdgram,
 {
 	uint32_t *tl;
 	struct nfsvattr forat;
-	int error = 0, forat_ret = 1, trycnt;
+	int error = 0, forat_ret = 1, gotproxystateid;
 	off_t off, len;
 	struct nfsstate st, *stp = &st;
 	struct nfslock lo, *lop = &lo;
@@ -5116,6 +5116,7 @@ nfsrvd_allocate(struct nfsrv_descript *nd, __unused int isdgram,
 		nd->nd_repstat = NFSERR_WRONGSEC;
 		goto nfsmout;
 	}
+	gotproxystateid = 0;
 	NFSM_DISSECT(tl, uint32_t *, NFSX_STATEID + 2 * NFSX_HYPER);
 	stp->ls_flags = (NFSLCK_CHECK | NFSLCK_WRITEACCESS);
 	lop->lo_flags = NFSLCK_WRITE;
@@ -5142,6 +5143,12 @@ nfsrvd_allocate(struct nfsrv_descript *nd, __unused int isdgram,
 	 */
 	if ((nd->nd_flag & ND_DSSERVER) != 0)
 		nd->nd_repstat = NFSERR_NOTSUPP;
+	/* However, allow the proxy stateid. */
+	if (stp->ls_stateid.seqid == 0xffffffff &&
+	    stp->ls_stateid.other[0] == 0x55555555 &&
+	    stp->ls_stateid.other[1] == 0x55555555 &&
+	    stp->ls_stateid.other[2] == 0x55555555)
+		gotproxystateid = 1;
 	off = fxdr_hyper(tl); tl += 2;
 	lop->lo_first = off;
 	len = fxdr_hyper(tl);
@@ -5150,7 +5157,7 @@ nfsrvd_allocate(struct nfsrv_descript *nd, __unused int isdgram,
 	 * Paranoia, just in case it wraps around, which shouldn't
 	 * ever happen anyhow.
 	 */
-	if (nd->nd_repstat == 0 && lop->lo_end < lop->lo_first)
+	if (nd->nd_repstat == 0 && (lop->lo_end < lop->lo_first || len <= 0))
 		nd->nd_repstat = NFSERR_INVAL;
 
 	if (nd->nd_repstat == 0 && vnode_vtype(vp) != VREG)
@@ -5165,19 +5172,13 @@ nfsrvd_allocate(struct nfsrv_descript *nd, __unused int isdgram,
 		nd->nd_repstat = nfsvno_accchk(vp, VWRITE, nd->nd_cred, exp,
 		    curthread, NFSACCCHK_ALLOWOWNER, NFSACCCHK_VPISLOCKED,
 		    NULL);
-	if (nd->nd_repstat == 0)
+	if (nd->nd_repstat == 0 && gotproxystateid == 0)
 		nd->nd_repstat = nfsrv_lockctrl(vp, &stp, &lop, NULL, clientid,
 		    &stateid, exp, nd, curthread);
 
-	/*
-	 * Do the actual VOP_ALLOCATE(), looping a reasonable number of
-	 * times to achieve completion.
-	 */
-	trycnt = 0;
-	while (nd->nd_repstat == 0 && len > 0 && trycnt++ < 20)
-		nd->nd_repstat = VOP_ALLOCATE(vp, &off, &len);
-	if (nd->nd_repstat == 0 && len > 0)
-		nd->nd_repstat = NFSERR_IO;
+	if (nd->nd_repstat == 0)
+		nd->nd_repstat = nfsvno_allocate(vp, off, len, nd->nd_cred,
+		    curthread);
 	vput(vp);
 	NFSEXITCODE2(0, nd);
 	return (0);

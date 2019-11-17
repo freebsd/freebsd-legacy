@@ -745,6 +745,7 @@ void nfsrv_killrpcs(struct nfsmount *);
 int nfsrv_setacl(struct vnode *, NFSACL_T *, struct ucred *, NFSPROC_T *);
 int nfsvno_seek(struct nfsrv_descript *, struct vnode *, u_long, off_t *, int,
     bool *, struct ucred *, NFSPROC_T *);
+int nfsvno_allocate(struct vnode *, off_t, off_t, struct ucred *, NFSPROC_T *);
 int nfsvno_getxattr(struct vnode *, char *, uint32_t, struct ucred *,
     struct thread *, struct mbuf **, struct mbuf **, int *);
 int nfsvno_setxattr(struct vnode *, char *, int, struct mbuf *, char *,

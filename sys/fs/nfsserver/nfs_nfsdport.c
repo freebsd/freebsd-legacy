@@ -125,6 +125,8 @@ static int nfsrv_readdsrpc(fhandle_t *, off_t, int, struct ucred *,
 static int nfsrv_writedsrpc(fhandle_t *, off_t, int, struct ucred *,
     NFSPROC_T *, struct vnode *, struct nfsmount **, int, struct mbuf **,
     char *, int *);
+static int nfsrv_allocatedsrpc(fhandle_t *, off_t, off_t, struct ucred *,
+    NFSPROC_T *, struct vnode *, struct nfsmount **, int, int *);
 static int nfsrv_setacldsrpc(fhandle_t *, struct ucred *, NFSPROC_T *,
     struct vnode *, struct nfsmount **, int, struct acl *, int *);
 static int nfsrv_setattrdsrpc(fhandle_t *, struct ucred *, NFSPROC_T *,
@@ -4580,7 +4582,10 @@ tryagain:
 				error = 0;
 				trycnt++;
 			}
-		} else {
+		} else if (ioproc == NFSPROC_ALLOCATE)
+			error = nfsrv_allocatedsrpc(fh, off, *offp, cred, p, vp,
+			    &nmp[0], mirrorcnt, &failpos);
+		else {
 			error = nfsrv_getattrdsrpc(&fh[mirrorcnt - 1], cred, p,
 			    vp, nmp[mirrorcnt - 1], nap);
 			if (nfsds_failerr(error) && mirrorcnt > 1) {
@@ -5193,6 +5198,165 @@ nfsrv_writedsrpc(fhandle_t *fhp, off_t off, int len, struct ucred *cred,
 		/* Wait for RPCs on separate threads to complete. */
 		while (tdrpc->inprog != 0 && tdrpc->done == 0)
 			tsleep(&tdrpc->tsk, PVFS, "srvwrds", timo);
+		if (nfsds_failerr(tdrpc->err) && *failposp == -1)
+			*failposp = i;
+		else if (error == 0 && tdrpc->err != 0)
+			error = tdrpc->err;
+	}
+	free(drpc, M_TEMP);
+	return (error);
+}
+
+/*
+ * Do a allocate RPC on a DS data file, using this structure for the arguments,
+ * so that this function can be executed by a separate kernel process.
+ */
+struct nfsrvallocatedsdorpc {
+	int			done;
+	int			inprog;
+	struct task		tsk;
+	fhandle_t		fh;
+	off_t			off;
+	off_t			len;
+	struct nfsmount		*nmp;
+	struct ucred		*cred;
+	NFSPROC_T		*p;
+	int			err;
+};
+
+static int
+nfsrv_allocatedsdorpc(struct nfsmount *nmp, fhandle_t *fhp, off_t off,
+    off_t len, struct nfsvattr *nap, struct ucred *cred, NFSPROC_T *p)
+{
+	uint32_t *tl;
+	struct nfsrv_descript *nd;
+	nfsattrbit_t attrbits;
+	nfsv4stateid_t st;
+	int error;
+
+	nd = malloc(sizeof(*nd), M_TEMP, M_WAITOK | M_ZERO);
+	nfscl_reqstart(nd, NFSPROC_ALLOCATE, nmp, (u_int8_t *)fhp,
+	    sizeof(fhandle_t), NULL, NULL, 0, 0);
+
+	/*
+	 * Use a stateid where other is an alternating 01010 pattern and
+	 * seqid is 0xffffffff.  This value is not defined as special by
+	 * the RFC and is used by the FreeBSD NFS server to indicate an
+	 * MDS->DS proxy operation.
+	 */
+	st.other[0] = 0x55555555;
+	st.other[1] = 0x55555555;
+	st.other[2] = 0x55555555;
+	st.seqid = 0xffffffff;
+	nfsm_stateidtom(nd, &st, NFSSTATEID_PUTSTATEID);
+	NFSM_BUILD(tl, uint32_t *, 2 * NFSX_HYPER + NFSX_UNSIGNED);
+	txdr_hyper(off, tl); tl += 2;
+	txdr_hyper(len, tl); tl += 2;
+	NFSD_DEBUG(4, "nfsrv_allocatedsdorpc: len=%jd\n", (intmax_t)len);
+
+	*tl = txdr_unsigned(NFSV4OP_GETATTR);
+	NFSGETATTR_ATTRBIT(&attrbits);
+	nfsrv_putattrbit(nd, &attrbits);
+	error = newnfs_request(nd, nmp, NULL, &nmp->nm_sockreq, NULL, p,
+	    cred, NFS_PROG, NFS_VER4, NULL, 1, NULL, NULL);
+	if (error != 0) {
+		free(nd, M_TEMP);
+		return (error);
+	}
+	NFSD_DEBUG(4, "nfsrv_allocatedsdorpc: aft allocaterpc=%d\n",
+	    nd->nd_repstat);
+	if (nd->nd_repstat == 0) {
+		NFSM_DISSECT(tl, uint32_t *, 2 * NFSX_UNSIGNED);
+		error = nfsv4_loadattr(nd, NULL, nap, NULL, NULL, 0, NULL, NULL,
+		    NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL);
+	} else
+		error = nd->nd_repstat;
+	NFSD_DEBUG(4, "nfsrv_allocatedsdorpc: aft loadattr=%d\n", error);
+nfsmout:
+	m_freem(nd->nd_mrep);
+	free(nd, M_TEMP);
+	NFSD_DEBUG(4, "nfsrv_allocatedsdorpc error=%d\n", error);
+	return (error);
+}
+
+/*
+ * Start up the thread that will execute nfsrv_allocatedsdorpc().
+ */
+static void
+start_allocatedsdorpc(void *arg, int pending)
+{
+	struct nfsrvallocatedsdorpc *drpc;
+
+	drpc = (struct nfsrvallocatedsdorpc *)arg;
+	drpc->err = nfsrv_allocatedsdorpc(drpc->nmp, &drpc->fh, drpc->off,
+	    drpc->len, NULL, drpc->cred, drpc->p);
+	drpc->done = 1;
+	NFSD_DEBUG(4, "start_allocatedsdorpc: err=%d\n", drpc->err);
+}
+
+static int
+nfsrv_allocatedsrpc(fhandle_t *fhp, off_t off, off_t len, struct ucred *cred,
+    NFSPROC_T *p, struct vnode *vp, struct nfsmount **nmpp, int mirrorcnt,
+    int *failposp)
+{
+	struct nfsrvallocatedsdorpc *drpc, *tdrpc;
+	struct nfsvattr na;
+	int error, i, ret, timo;
+
+	NFSD_DEBUG(4, "in nfsrv_allocatedsrpc\n");
+	drpc = NULL;
+	if (mirrorcnt > 1)
+		tdrpc = drpc = malloc(sizeof(*drpc) * (mirrorcnt - 1), M_TEMP,
+		    M_WAITOK);
+
+	/*
+	 * Do the allocate RPC for every DS, using a separate kernel process
+	 * for every DS except the last one.
+	 */
+	error = 0;
+	for (i = 0; i < mirrorcnt - 1; i++, tdrpc++) {
+		tdrpc->done = 0;
+		NFSBCOPY(fhp, &tdrpc->fh, sizeof(*fhp));
+		tdrpc->off = off;
+		tdrpc->len = len;
+		tdrpc->nmp = *nmpp;
+		tdrpc->cred = cred;
+		tdrpc->p = p;
+		tdrpc->inprog = 0;
+		tdrpc->err = 0;
+		ret = EIO;
+		if (nfs_pnfsiothreads != 0) {
+			ret = nfs_pnfsio(start_allocatedsdorpc, tdrpc);
+			NFSD_DEBUG(4, "nfsrv_allocatedsrpc: nfs_pnfsio=%d\n",
+			    ret);
+		}
+		if (ret != 0) {
+			ret = nfsrv_allocatedsdorpc(*nmpp, fhp, off, len, NULL,
+			    cred, p);
+			if (nfsds_failerr(ret) && *failposp == -1)
+				*failposp = i;
+			else if (error == 0 && ret != 0)
+				error = ret;
+		}
+		nmpp++;
+		fhp++;
+	}
+	ret = nfsrv_allocatedsdorpc(*nmpp, fhp, off, len, &na, cred, p);
+	if (nfsds_failerr(ret) && *failposp == -1 && mirrorcnt > 1)
+		*failposp = mirrorcnt - 1;
+	else if (error == 0 && ret != 0)
+		error = ret;
+	if (error == 0)
+		error = nfsrv_setextattr(vp, &na, p);
+	NFSD_DEBUG(4, "nfsrv_allocatedsrpc: aft setextat=%d\n", error);
+	tdrpc = drpc;
+	timo = hz / 50;		/* Wait for 20msec. */
+	if (timo < 1)
+		timo = 1;
+	for (i = 0; i < mirrorcnt - 1; i++, tdrpc++) {
+		/* Wait for RPCs on separate threads to complete. */
+		while (tdrpc->inprog != 0 && tdrpc->done == 0)
+			tsleep(&tdrpc->tsk, PVFS, "srvalds", timo);
 		if (nfsds_failerr(tdrpc->err) && *failposp == -1)
 			*failposp = i;
 		else if (error == 0 && tdrpc->err != 0)
@@ -5910,6 +6074,39 @@ nfsvno_seek(struct nfsrv_descript *nd, struct vnode *vp, u_long cmd,
 			error = ret;
 	}
 	vrele(vp);
+	NFSEXITCODE(error);
+	return (error);
+}
+
+/*
+ * Allocate vnode op call.
+ */
+int
+nfsvno_allocate(struct vnode *vp, off_t off, off_t len, struct ucred *cred,
+    NFSPROC_T *p)
+{
+	int error, trycnt;
+
+	ASSERT_VOP_ELOCKED(vp, "nfsvno_allocate vp");
+	/*
+	 * Attempt to allocate on a DS file. A return of ENOENT implies
+	 * there is no DS file to allocate on.
+	 */
+	error = nfsrv_proxyds(vp, off, 0, cred, p, NFSPROC_ALLOCATE, NULL,
+	    NULL, NULL, NULL, NULL, &len, 0, NULL);
+	if (error != ENOENT)
+		return (error);
+	error = 0;
+
+	/*
+	 * Do the actual VOP_ALLOCATE(), looping a reasonable number of
+	 * times to achieve completion.
+	 */
+	trycnt = 0;
+	while (error == 0 && len > 0 && trycnt++ < 20)
+		error = VOP_ALLOCATE(vp, &off, &len);
+	if (error == 0 && len > 0)
+		error = NFSERR_IO;
 	NFSEXITCODE(error);
 	return (error);
 }
