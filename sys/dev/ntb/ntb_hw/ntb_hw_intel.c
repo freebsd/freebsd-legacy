@@ -2409,6 +2409,14 @@ intel_ntb_sysctl_init(struct ntb_softc *ntb)
 	if (ntb->conn_type != NTB_CONN_B2B)
 		return;
 
+	SYSCTL_ADD_PROC(ctx, regpar, OID_AUTO, "outgoing_xlat01l",
+	    CTLFLAG_RD | CTLTYPE_OPAQUE, ntb,
+	    NTB_REG_32 | XEON_B2B_XLAT_OFFSETL,
+	    sysctl_handle_register, "IU", "Outgoing XLAT0L register");
+	SYSCTL_ADD_PROC(ctx, regpar, OID_AUTO, "outgoing_xlat01u",
+	    CTLFLAG_RD | CTLTYPE_OPAQUE, ntb,
+	    NTB_REG_32 | XEON_B2B_XLAT_OFFSETU,
+	    sysctl_handle_register, "IU", "Outgoing XLAT0U register");
 	SYSCTL_ADD_PROC(ctx, regpar, OID_AUTO, "outgoing_xlat23",
 	    CTLFLAG_RD | CTLTYPE_OPAQUE, ntb,
 	    NTB_REG_64 | ntb->bar_info[NTB_B2B_BAR_1].pbarxlat_off,
@@ -3124,6 +3132,7 @@ static device_method_t ntb_intel_methods[] = {
 	/* Bus interface */
 	DEVMETHOD(bus_child_location_str, ntb_child_location_str),
 	DEVMETHOD(bus_print_child,	ntb_print_child),
+	DEVMETHOD(bus_get_dma_tag,	ntb_get_dma_tag),
 	/* NTB interface */
 	DEVMETHOD(ntb_port_number,	intel_ntb_port_number),
 	DEVMETHOD(ntb_peer_port_count,	intel_ntb_peer_port_count),

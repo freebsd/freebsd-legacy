@@ -33,6 +33,7 @@ __FBSDID("$FreeBSD$");
 #include "opt_ddb.h"
 #include "opt_inet.h"
 #include "opt_inet6.h"
+#include "opt_kern_tls.h"
 #include "opt_ratelimit.h"
 #include "opt_rss.h"
 
@@ -65,13 +66,15 @@ __FBSDID("$FreeBSD$");
 #endif
 #include <netinet/in.h>
 #include <netinet/ip.h>
+#ifdef KERN_TLS
+#include <netinet/tcp_seq.h>
+#endif
 #if defined(__i386__) || defined(__amd64__)
 #include <machine/md_var.h>
 #include <machine/cputypes.h>
 #include <vm/vm.h>
 #include <vm/pmap.h>
 #endif
-#include <crypto/rijndael/rijndael.h>
 #ifdef DDB
 #include <ddb/ddb.h>
 #include <ddb/db_lex.h>
@@ -230,7 +233,7 @@ static void cxgbe_init(void *);
 static int cxgbe_ioctl(struct ifnet *, unsigned long, caddr_t);
 static int cxgbe_transmit(struct ifnet *, struct mbuf *);
 static void cxgbe_qflush(struct ifnet *);
-#ifdef RATELIMIT
+#if defined(KERN_TLS) || defined(RATELIMIT)
 static int cxgbe_snd_tag_alloc(struct ifnet *, union if_snd_tag_alloc_params *,
     struct m_snd_tag **);
 static int cxgbe_snd_tag_modify(struct m_snd_tag *,
@@ -577,6 +580,28 @@ SYSCTL_INT(_hw_cxgbe, OID_AUTO, cop_managed_offloading, CTLFLAG_RDTUN,
     "COP (Connection Offload Policy) controls all TOE offload");
 #endif
 
+#ifdef KERN_TLS
+/*
+ * This enables KERN_TLS for all adapters if set.
+ */
+static int t4_kern_tls = 0;
+SYSCTL_INT(_hw_cxgbe, OID_AUTO, kern_tls, CTLFLAG_RDTUN, &t4_kern_tls, 0,
+    "Enable KERN_TLS mode for all supported adapters");
+
+SYSCTL_NODE(_hw_cxgbe, OID_AUTO, tls, CTLFLAG_RD, 0,
+    "cxgbe(4) KERN_TLS parameters");
+
+static int t4_tls_inline_keys = 0;
+SYSCTL_INT(_hw_cxgbe_tls, OID_AUTO, inline_keys, CTLFLAG_RDTUN,
+    &t4_tls_inline_keys, 0,
+    "Always pass TLS keys in work requests (1) or attempt to store TLS keys "
+    "in card memory.");
+
+static int t4_tls_combo_wrs = 0;
+SYSCTL_INT(_hw_cxgbe_tls, OID_AUTO, combo_wrs, CTLFLAG_RDTUN, &t4_tls_combo_wrs,
+    0, "Attempt to combine TCB field updates with TLS record work requests.");
+#endif
+
 /* Functions used by VIs to obtain unique MAC addresses for each VI. */
 static int vi_mac_funcs[] = {
 	FW_VI_FUNC_ETH,
@@ -657,6 +682,7 @@ static int sysctl_autoneg(SYSCTL_HANDLER_ARGS);
 static int sysctl_handle_t4_reg64(SYSCTL_HANDLER_ARGS);
 static int sysctl_temperature(SYSCTL_HANDLER_ARGS);
 static int sysctl_vdd(SYSCTL_HANDLER_ARGS);
+static int sysctl_reset_sensor(SYSCTL_HANDLER_ARGS);
 static int sysctl_loadavg(SYSCTL_HANDLER_ARGS);
 static int sysctl_cctrl(SYSCTL_HANDLER_ARGS);
 static int sysctl_cim_ibq_obq(SYSCTL_HANDLER_ARGS);
@@ -1011,6 +1037,8 @@ t4_attach(device_t dev)
 
 	sc->policy = NULL;
 	rw_init(&sc->policy_lock, "connection offload policy");
+
+	callout_init(&sc->ktls_tick, 1);
 
 	rc = t4_map_bars_0_and_4(sc);
 	if (rc != 0)
@@ -1586,6 +1614,7 @@ t4_detach_common(device_t dev)
 	free(sc->tt.tls_rx_ports, M_CXGBE);
 	t4_destroy_dma_tag(sc);
 
+	callout_drain(&sc->ktls_tick);
 	callout_drain(&sc->sfl_callout);
 	if (mtx_initialized(&sc->tids.ftid_lock)) {
 		mtx_destroy(&sc->tids.ftid_lock);
@@ -1664,18 +1693,20 @@ cxgbe_vi_attach(device_t dev, struct vi_info *vi)
 	ifp->if_transmit = cxgbe_transmit;
 	ifp->if_qflush = cxgbe_qflush;
 	ifp->if_get_counter = cxgbe_get_counter;
-#ifdef RATELIMIT
+#if defined(KERN_TLS) || defined(RATELIMIT)
 	ifp->if_snd_tag_alloc = cxgbe_snd_tag_alloc;
 	ifp->if_snd_tag_modify = cxgbe_snd_tag_modify;
 	ifp->if_snd_tag_query = cxgbe_snd_tag_query;
 	ifp->if_snd_tag_free = cxgbe_snd_tag_free;
+#endif
+#ifdef RATELIMIT
 	ifp->if_ratelimit_query = cxgbe_ratelimit_query;
 #endif
 
 	ifp->if_capabilities = T4_CAP;
 	ifp->if_capenable = T4_CAP_ENABLE;
 #ifdef TCP_OFFLOAD
-	if (vi->nofldrxq != 0)
+	if (vi->nofldrxq != 0 && (vi->pi->adapter->flags & KERN_TLS_OK) == 0)
 		ifp->if_capabilities |= IFCAP_TOE;
 #endif
 #ifdef RATELIMIT
@@ -1694,6 +1725,12 @@ cxgbe_vi_attach(device_t dev, struct vi_info *vi)
 		ifp->if_hw_tsomaxsegcount = TX_SGL_SEGS_EO_TSO;
 #endif
 	ifp->if_hw_tsomaxsegsize = 65536;
+#ifdef KERN_TLS
+	if (vi->pi->adapter->flags & KERN_TLS_OK) {
+		ifp->if_capabilities |= IFCAP_TXTLS;
+		ifp->if_capenable |= IFCAP_TXTLS;
+	}
+#endif
 
 	ether_ifattach(ifp, vi->hw_addr);
 #ifdef DEV_NETMAP
@@ -2002,6 +2039,11 @@ cxgbe_ioctl(struct ifnet *ifp, unsigned long cmd, caddr_t data)
 		if (mask & IFCAP_NOMAP)
 			ifp->if_capenable ^= IFCAP_NOMAP;
 
+#ifdef KERN_TLS
+		if (mask & IFCAP_TXTLS)
+			ifp->if_capenable ^= (mask & IFCAP_TXTLS);
+#endif
+
 #ifdef VLAN_CAPABILITIES
 		VLAN_CAPABILITIES(ifp);
 #endif
@@ -2062,7 +2104,7 @@ cxgbe_transmit(struct ifnet *ifp, struct mbuf *m)
 
 	M_ASSERTPKTHDR(m);
 	MPASS(m->m_nextpkt == NULL);	/* not quite ready for this yet */
-#ifdef RATELIMIT
+#if defined(KERN_TLS) || defined(RATELIMIT)
 	if (m->m_pkthdr.csum_flags & CSUM_SND_TAG)
 		MPASS(m->m_pkthdr.snd_tag->ifp == ifp);
 #endif
@@ -2240,7 +2282,7 @@ cxgbe_get_counter(struct ifnet *ifp, ift_counter c)
 	}
 }
 
-#ifdef RATELIMIT
+#if defined(KERN_TLS) || defined(RATELIMIT)
 void
 cxgbe_snd_tag_init(struct cxgbe_snd_tag *cst, struct ifnet *ifp, int type)
 {
@@ -2259,6 +2301,11 @@ cxgbe_snd_tag_alloc(struct ifnet *ifp, union if_snd_tag_alloc_params *params,
 #ifdef RATELIMIT
 	case IF_SND_TAG_TYPE_RATE_LIMIT:
 		error = cxgbe_rate_tag_alloc(ifp, params, pt);
+		break;
+#endif
+#ifdef KERN_TLS
+	case IF_SND_TAG_TYPE_TLS:
+		error = cxgbe_tls_tag_alloc(ifp, params, pt);
 		break;
 #endif
 	default:
@@ -2313,6 +2360,11 @@ cxgbe_snd_tag_free(struct m_snd_tag *mst)
 #ifdef RATELIMIT
 	case IF_SND_TAG_TYPE_RATE_LIMIT:
 		cxgbe_rate_tag_free(mst);
+		return;
+#endif
+#ifdef KERN_TLS
+	case IF_SND_TAG_TYPE_TLS:
+		cxgbe_tls_tag_free(mst);
 		return;
 #endif
 	default:
@@ -4524,6 +4576,58 @@ get_params__post_init(struct adapter *sc)
 	return (rc);
 }
 
+#ifdef KERN_TLS
+static void
+ktls_tick(void *arg)
+{
+	struct adapter *sc;
+	uint32_t tstamp;
+
+	sc = arg;
+
+	tstamp = tcp_ts_getticks();
+	t4_write_reg(sc, A_TP_SYNC_TIME_HI, tstamp >> 1);
+	t4_write_reg(sc, A_TP_SYNC_TIME_LO, tstamp << 31);
+
+	callout_schedule_sbt(&sc->ktls_tick, SBT_1MS, 0, C_HARDCLOCK);
+}
+
+static void
+t4_enable_kern_tls(struct adapter *sc)
+{
+	uint32_t m, v;
+
+	m = F_ENABLECBYP;
+	v = F_ENABLECBYP;
+	t4_set_reg_field(sc, A_TP_PARA_REG6, m, v);
+
+	m = F_CPL_FLAGS_UPDATE_EN | F_SEQ_UPDATE_EN;
+	v = F_CPL_FLAGS_UPDATE_EN | F_SEQ_UPDATE_EN;
+	t4_set_reg_field(sc, A_ULP_TX_CONFIG, m, v);
+
+	m = F_NICMODE;
+	v = F_NICMODE;
+	t4_set_reg_field(sc, A_TP_IN_CONFIG, m, v);
+
+	m = F_LOOKUPEVERYPKT;
+	v = 0;
+	t4_set_reg_field(sc, A_TP_INGRESS_CONFIG, m, v);
+
+	m = F_TXDEFERENABLE | F_DISABLEWINDOWPSH | F_DISABLESEPPSHFLAG;
+	v = F_DISABLEWINDOWPSH;
+	t4_set_reg_field(sc, A_TP_PC_CONFIG, m, v);
+
+	m = V_TIMESTAMPRESOLUTION(M_TIMESTAMPRESOLUTION);
+	v = V_TIMESTAMPRESOLUTION(0x1f);
+	t4_set_reg_field(sc, A_TP_TIMER_RESOLUTION, m, v);
+
+	sc->flags |= KERN_TLS_OK;
+
+	sc->tlst.inline_keys = t4_tls_inline_keys;
+	sc->tlst.combo_wrs = t4_tls_combo_wrs;
+}
+#endif
+
 static int
 set_params__post_init(struct adapter *sc)
 {
@@ -4602,6 +4706,12 @@ set_params__post_init(struct adapter *sc)
 			    M_TIMERBACKOFFINDEX0 << shift, v << shift);
 		}
 	}
+#endif
+
+#ifdef KERN_TLS
+	if (t4_kern_tls != 0 && sc->cryptocaps & FW_CAPS_CONFIG_TLSKEYS &&
+	    sc->toecaps & FW_CAPS_CONFIG_TOE)
+		t4_enable_kern_tls(sc);
 #endif
 	return (0);
 }
@@ -4999,6 +5109,7 @@ update_mac_settings(struct ifnet *ifp, int flags)
 		ctx.hash = 0;
 		ctx.i = 0;
 		ctx.del = 1;
+		ctx.rc = 0;
 		/*
 		 * Unlike other drivers, we accumulate list of pointers into
 		 * interface address lists and we need to keep it safe even
@@ -5480,6 +5591,11 @@ adapter_full_init(struct adapter *sc)
 
 	if (!(sc->flags & IS_VF))
 		t4_intr_enable(sc);
+#ifdef KERN_TLS
+	if (sc->flags & KERN_TLS_OK)
+		callout_reset_sbt(&sc->ktls_tick, SBT_1MS, 0, ktls_tick, sc,
+		    C_HARDCLOCK);
+#endif
 	sc->flags |= FULL_INIT_DONE;
 done:
 	if (rc != 0)
@@ -6149,6 +6265,9 @@ t4_sysctls(struct adapter *sc)
 	SYSCTL_ADD_PROC(ctx, children, OID_AUTO, "temperature", CTLTYPE_INT |
 	    CTLFLAG_RD, sc, 0, sysctl_temperature, "I",
 	    "chip temperature (in Celsius)");
+	SYSCTL_ADD_PROC(ctx, children, OID_AUTO, "reset_sensor", CTLTYPE_INT |
+	    CTLFLAG_RW, sc, 0, sysctl_reset_sensor, "I",
+	    "reset the chip's temperature sensor.");
 
 	SYSCTL_ADD_PROC(ctx, children, OID_AUTO, "loadavg", CTLTYPE_STRING |
 	    CTLFLAG_RD, sc, 0, sysctl_loadavg, "A",
@@ -6346,6 +6465,25 @@ t4_sysctls(struct adapter *sc)
 		    CTLTYPE_STRING | CTLFLAG_RD, sc, 0,
 		    sysctl_wcwr_stats, "A", "write combined work requests");
 	}
+
+#ifdef KERN_TLS
+	if (sc->flags & KERN_TLS_OK) {
+		/*
+		 * dev.t4nex.0.tls.
+		 */
+		oid = SYSCTL_ADD_NODE(ctx, c0, OID_AUTO, "tls", CTLFLAG_RD,
+		    NULL, "KERN_TLS parameters");
+		children = SYSCTL_CHILDREN(oid);
+
+		SYSCTL_ADD_INT(ctx, children, OID_AUTO, "inline_keys",
+		    CTLFLAG_RW, &sc->tlst.inline_keys, 0, "Always pass TLS "
+		    "keys in work requests (1) or attempt to store TLS keys "
+		    "in card memory.");
+		SYSCTL_ADD_INT(ctx, children, OID_AUTO, "combo_wrs",
+		    CTLFLAG_RW, &sc->tlst.combo_wrs, 0, "Attempt to combine "
+		    "TCB field updates with TLS record work requests.");
+	}
+#endif
 
 #ifdef TCP_OFFLOAD
 	if (is_offload(sc)) {
@@ -6817,16 +6955,16 @@ cxgbe_sysctls(struct port_info *pi)
 
 	SYSCTL_ADD_ULONG(ctx, children, OID_AUTO, "tx_tls_records",
 	    CTLFLAG_RD, &pi->tx_tls_records,
-	    "# of TLS records transmitted");
+	    "# of TOE TLS records transmitted");
 	SYSCTL_ADD_ULONG(ctx, children, OID_AUTO, "tx_tls_octets",
 	    CTLFLAG_RD, &pi->tx_tls_octets,
-	    "# of payload octets in transmitted TLS records");
+	    "# of payload octets in transmitted TOE TLS records");
 	SYSCTL_ADD_ULONG(ctx, children, OID_AUTO, "rx_tls_records",
 	    CTLFLAG_RD, &pi->rx_tls_records,
-	    "# of TLS records received");
+	    "# of TOE TLS records received");
 	SYSCTL_ADD_ULONG(ctx, children, OID_AUTO, "rx_tls_octets",
 	    CTLFLAG_RD, &pi->rx_tls_octets,
-	    "# of payload octets in received TLS records");
+	    "# of payload octets in received TOE TLS records");
 }
 
 static int
@@ -7318,6 +7456,36 @@ sysctl_vdd(SYSCTL_HANDLER_ARGS)
 	}
 
 	return (sysctl_handle_int(oidp, &sc->params.core_vdd, 0, req));
+}
+
+static int
+sysctl_reset_sensor(SYSCTL_HANDLER_ARGS)
+{
+	struct adapter *sc = arg1;
+	int rc, v;
+	uint32_t param, val;
+
+	v = sc->sensor_resets;
+	rc = sysctl_handle_int(oidp, &v, 0, req);
+	if (rc != 0 || req->newptr == NULL || v <= 0)
+		return (rc);
+
+	if (sc->params.fw_vers < FW_VERSION32(1, 24, 7, 0) ||
+	    chip_id(sc) < CHELSIO_T5)
+		return (ENOTSUP);
+
+	rc = begin_synchronized_op(sc, NULL, SLEEP_OK | INTR_OK, "t4srst");
+	if (rc)
+		return (rc);
+	param = (V_FW_PARAMS_MNEM(FW_PARAMS_MNEM_DEV) |
+	    V_FW_PARAMS_PARAM_X(FW_PARAMS_PARAM_DEV_DIAG) |
+	    V_FW_PARAMS_PARAM_Y(FW_PARAM_DEV_DIAG_RESET_TMP_SENSOR));
+	val = 1;
+	rc = -t4_set_params(sc, sc->mbox, sc->pf, 0, 1, &param, &val);
+	end_synchronized_op(sc, 0);
+	if (rc == 0)
+		sc->sensor_resets++;
+	return (rc);
 }
 
 static int
@@ -10076,6 +10244,19 @@ clear_stats(struct adapter *sc, u_int port_id)
 				txq->txpkts0_pkts = 0;
 				txq->txpkts1_pkts = 0;
 				txq->raw_wrs = 0;
+				txq->tls_wrs = 0;
+				txq->kern_tls_records = 0;
+				txq->kern_tls_short = 0;
+				txq->kern_tls_partial = 0;
+				txq->kern_tls_full = 0;
+				txq->kern_tls_octets = 0;
+				txq->kern_tls_waste = 0;
+				txq->kern_tls_options = 0;
+				txq->kern_tls_header = 0;
+				txq->kern_tls_fin = 0;
+				txq->kern_tls_fin_short = 0;
+				txq->kern_tls_cbc = 0;
+				txq->kern_tls_gcm = 0;
 				mp_ring_reset_stats(txq->r);
 			}
 
@@ -10601,10 +10782,17 @@ tweak_tunables(void)
 #ifdef TCP_OFFLOAD
 	calculate_nqueues(&t4_nofldrxq, nc, NOFLDRXQ);
 	calculate_nqueues(&t4_nofldrxq_vi, nc, NOFLDRXQ_VI);
+#endif
 
+#if defined(TCP_OFFLOAD) || defined(KERN_TLS)
 	if (t4_toecaps_allowed == -1)
 		t4_toecaps_allowed = FW_CAPS_CONFIG_TOE;
+#else
+	if (t4_toecaps_allowed == -1)
+		t4_toecaps_allowed = 0;
+#endif
 
+#ifdef TCP_OFFLOAD
 	if (t4_rdmacaps_allowed == -1) {
 		t4_rdmacaps_allowed = FW_CAPS_CONFIG_RDMA_RDDP |
 		    FW_CAPS_CONFIG_RDMA_RDMAC;
@@ -10622,9 +10810,6 @@ tweak_tunables(void)
 	if (t4_pktc_idx_ofld < -1 || t4_pktc_idx_ofld >= SGE_NCOUNTERS)
 		t4_pktc_idx_ofld = PKTC_IDX_OFLD;
 #else
-	if (t4_toecaps_allowed == -1)
-		t4_toecaps_allowed = 0;
-
 	if (t4_rdmacaps_allowed == -1)
 		t4_rdmacaps_allowed = 0;
 
@@ -10851,44 +11036,6 @@ DB_FUNC(tcb, db_show_t4tcb, db_t4_table, CS_OWN, NULL)
 }
 #endif
 
-/*
- * Borrowed from cesa_prep_aes_key().
- *
- * NB: The crypto engine wants the words in the decryption key in reverse
- * order.
- */
-void
-t4_aes_getdeckey(void *dec_key, const void *enc_key, unsigned int kbits)
-{
-	uint32_t ek[4 * (RIJNDAEL_MAXNR + 1)];
-	uint32_t *dkey;
-	int i;
-
-	rijndaelKeySetupEnc(ek, enc_key, kbits);
-	dkey = dec_key;
-	dkey += (kbits / 8) / 4;
-
-	switch (kbits) {
-	case 128:
-		for (i = 0; i < 4; i++)
-			*--dkey = htobe32(ek[4 * 10 + i]);
-		break;
-	case 192:
-		for (i = 0; i < 2; i++)
-			*--dkey = htobe32(ek[4 * 11 + 2 + i]);
-		for (i = 0; i < 4; i++)
-			*--dkey = htobe32(ek[4 * 12 + i]);
-		break;
-	case 256:
-		for (i = 0; i < 4; i++)
-			*--dkey = htobe32(ek[4 * 13 + i]);
-		for (i = 0; i < 4; i++)
-			*--dkey = htobe32(ek[4 * 14 + i]);
-		break;
-	}
-	MPASS(dkey == dec_key);
-}
-
 static struct sx mlu;	/* mod load unload */
 SX_SYSINIT(cxgbe_mlu, &mlu, "cxgbe mod load/unload");
 
@@ -10926,6 +11073,9 @@ mod_event(module_t mod, int cmd, void *arg)
 #endif
 #ifdef INET6
 			t4_clip_modload();
+#endif
+#ifdef KERN_TLS
+			t6_ktls_modload();
 #endif
 			t4_tracer_modload();
 			tweak_tunables();
@@ -10966,6 +11116,9 @@ mod_event(module_t mod, int cmd, void *arg)
 
 			if (t4_sge_extfree_refs() == 0) {
 				t4_tracer_modunload();
+#ifdef KERN_TLS
+				t6_ktls_modunload();
+#endif
 #ifdef INET6
 				t4_clip_modunload();
 #endif
