@@ -36,6 +36,9 @@
 # http://people.freebsd.org/~pho/stress/log/tmpfs13.txt
 # Fixed by r269457.
 
+# "panic: vm_domainset_iter_first: Invalid domain 2" seen.
+# Fixed by r339075
+
 . ../default.cfg
 
 N=`sysctl -n hw.ncpu`
