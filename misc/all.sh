@@ -39,64 +39,59 @@
 #		panic: 43 vncache entries remaining			20111220
 # backingstore3.sh
 #		g_vfs_done():md6a[WRITE(offset=...)]error = 28		20111230
-# buildworld3.sh	WiP						20180919
-# chain.sh	WiP							20171225
-# contigmalloc3.sh panic: Bad link elm 0x6766fbc next->prev != elm	20180318
-# crossmp4.sh	Known nullfs issue					20150523
-# dev.sh	g_access(958) error 6 seen				20180329
 # devfs4.sh	WiP							20181031
-# Xextattr2.sh	WiP							20180921
-# fdatasync2.sh	Deadlock						20180312
-# fdgrowtable.sh	Deadlock					20180303
-# fsync.sh	GEOM_JOURNAL: Cannot suspend file system /mnt		20160818
+# fexecve.sh	WiP
+# fsync.sh	panic: Journal overflow					20190208
 # fuse.sh	Memory corruption seen in log file kostik734.txt	20141114
 # fuse2.sh	Deadlock seen						20121129
 # fuse3.sh	Deadlock seen						20141120
-# gbde.sh	panic: handle_written_inodeblock: Invalid link count...	20131128
+# gjournal.sh	panic: Journal overflow					20190626
 # gjournal2.sh	panic: Journal overflow					20180125
 # gjournal3.sh	panic: Bio not on queue					20171225
 # gjournal4.sh	CAM stuck in vmwait					20180517
+# gnop7.sh	WiP							20190820
+# gpt.sh	Page fault seen						20190913
 # graid1_4.sh	umount stuck in mntref r338639				20180921
 # graid1_8.sh	Known issue						20170909
 # graid1_9.sh	panic: Bad effnlink					20180212
-# kevent13.sh	panic: mutex pipe mutex not owned at sys_pipe.c:1769	20181118
+# kevent13.sh	panic: mutex pipe mutex not owned at sys_pipe.c:1769	20190208
 # lockf5.sh	Spinning threads seen					20160718
-# ifconfig.sh	WiP							20181029
-# ifconfig2.sh	WiP							20181029
-# maxvnodes2.sh	WiP							20161129
-# mdconfig.sh	Panic:  g_read_data(): invalid length 262144		20161128
+# ifconfig.sh	WiP							20190211
+# ifconfig2.sh	WiP							20190211
+# maxvnodes.sh	Only supposed to work in single user mode		20190412
+# maxvnodes2.sh	Only supposed to work in single user mode		20190412
 # memguard.sh	Waiting for fix commit
 # memguard2.sh	Waiting for fix commit
 # memguard3.sh	Waiting for fix commit
+# mkfifo8.sh	WiP							20190629
 # mlockall2.sh	Unrecoverable OOM killing seen				20190203
-# mmap32.sh	Kernel loop						20171118
-# newfs4.sh	watchdog fired. newbuf					20180618
+# newfs4.sh	watchdog fired. newbuf					20190225
 # nfs10.sh	Double fault						20151013
+# nfs13.sh	mount_nfs hangs in mntref				20191007
 # nfs16.sh	panic: Failed to register NFS lock locally - error=11	20160608
 # oom2.sh	Hang in pfault						20180324
-# pfl3.sh	panic: handle_written_inodeblock: live inodedep		20140812
-# pageout.sh	panic: handle_written_filepage: not started		20180303
-# Xptrace9.sh	WiP
+# pfl3.sh	panic: handle_written_inodeblock: live inodedep		20190211
+# pageout.sh	panic: handle_written_filepage: not started		20190218
 # quota2.sh	panic: dqflush: stray dquot				20120221
 # quota3.sh	panic: softdep_deallocate_dependencies: unrecovered ...	20111222
 # quota6.sh	panic: softdep_deallocate_dependencies: unrecovered ...	20130206
 # quota7.sh	panic: dqflush: stray dquot				20120221
-# sendfile11.sh	panic: vnode_pager_generic_getpages: sector size 8192 . 20170930
+# rename14.sh	WiP							20190616
+# sctp.sh	WiP							20190809
+# sctp2.sh	WiP							20190809
+# sctp3.sh	WiP							20190809
+# setsockopt2.sh in_epoch panic						20191010
 # signal.sh	Timing issues. Needs fixing				20171116
+# snap4.sh	panic: snapacct_ufs2: bad block				20181014
 # snap6.sh	panic: softdep_deallocate_dependencies: unrecovered ...	20130630
 # snap8.sh	panic: softdep_deallocate_dependencies: unrecovered ...	20120630
 # snap9.sh	panic: handle_written_filepage: not started		20170722
-# suj3.sh	panic: Memory modified after free			20150721
-# suj11.sh	panic: ufsdirhash_newblk: bad offset			20120118
-# suj13.sh	general protection fault in bufdaemon			20141130
-# suj30.sh	panic: flush_pagedep_deps: MKDIR_PARENT			20121020
-# suj31.sh	OOM							20180408
 # suj34.sh	Various hangs and panics (SUJ + NULLFS issue)		20131210
 # swap4.sh	WiP							20171208
 # swapoff2.sh	swap_pager_force_pagein: read from swap failed		20171223
 # ucom.sh	Stuck in tail -F					20180129
-# umountf3.sh	KDB: enter: watchdog timeout				20170514
-# umountf7.sh	panic: handle_written_inodeblock: live inodedep ...	20131129
+# umount4.sh	Double fault seen					20191101
+# umountf7.sh	panic: handle_written_inodeblock: live inodedep ...	20190219
 # umountf9.sh	panic: handle_written_inodeblock: live inodedep ...	20170221
 # unionfs.sh	insmntque: non-locked vp: xx is not exclusive locked...	20130909
 # unionfs2.sh	insmntque: mp-safe fs and non-locked vp is not ...	20111219
@@ -129,6 +124,7 @@
 # nfs6.sh
 # nfs11.sh	vmwait deadlock						20151004
 # nullfs8.sh
+# tmpfs18.sh	mntref hang seen					20191019
 
 # End of list
 
@@ -198,6 +194,8 @@ minspace=$((1024 * 1024)) # in k
 [ ! -d $(dirname $RUNDIR) ] &&
     echo "No such \$RUNDIR \"`dirname $RUNDIR`\"" &&
     exit 1
+[ `sysctl -n hw.physmem` -le $((3 * 1024 * 1024 * 1024)) ] &&
+	echo "Warn: Small RAM size for stress tests `sysctl -n hw.physmem`"
 [ `df -k $(dirname $RUNDIR) | tail -1 | awk '{print $4'}` -lt \
     $minspace ] &&
     echo "Warn: Not enough disk space on `dirname $RUNDIR` for \$RUNDIR"
@@ -218,12 +216,13 @@ ping -c 2 -t 2 $BLASTHOST > /dev/null 2>&1 ||
 echo "$loops" | grep -Eq "^[0-9]+$" ||
     { echo "The -l argument must be a positive number"; exit 1; }
 
-rm -f $alllist $allelepsed
+rm -f $alllist
 find `dirname $alllast` -maxdepth 1 -name $alllast -mtime +12h -delete
 touch $alllast $alllog
 chmod 640 $alllast $alllog
 find ../testcases -perm -1 \( -name "*.debug" -o -name "*.full" \) -delete
 tail -2000 $alllog > ${alllog}.new; mv ${alllog}.new $alllog
+tail -5000 $allelapsed > ${allelapsed}.new; mv ${allelapsed}.new $allelapsed
 
 console=/dev/console
 printf "\r\n" > $console &
@@ -232,6 +231,24 @@ sleep 1
 kill -0 $pid > /dev/null 2>&1 &&
 { console=/dev/null; kill -9 $pid; }
 while pgrep -q fsck; do sleep 10; done
+
+status() {
+	local s2 r
+
+	s2=`date +%s`
+	r=$(echo "elapsed $(((s2 - s1) / 86400)) day(s)," \
+	    "`date -u -j -f '%s' '+%H:%M.%S' $((s2 - s1))`")
+	printf "`date '+%Y%m%d %T'` all.sh done, $r\n"
+	printf "`date '+%Y%m%d %T'` all.sh done, $r\r\n" > $console
+}
+
+intr() {
+	printf "\nExit all.sh\n"
+	./cleanup.sh
+	exit 1
+}
+trap status EXIT
+trap intr INT
 
 [ -f all.debug.inc ] && . all.debug.inc
 s1=`date +%s`
@@ -298,7 +315,7 @@ while true; do
 		) | tee $alloutput
 		ts=`date '+%Y%m%d %T'`
 		grep -qw FAIL $alloutput &&
-		    echo "$ts $i" >> $allfaillog &&
+		    echo "$ts $rev $i" >> $allfaillog &&
 		    logger "stress2 test $i failed"
 		grep -qw FATAL $alloutput && exit $e
 		rm -f $alloutput
@@ -319,7 +336,5 @@ while true; do
 	done
 	[ $((loops -= 1)) -eq 0 ] && break
 done
-printf "`date '+%Y%m%d %T'` all: done\n"
-printf "`date '+%Y%m%d %T'` all: done\r\n" > $console
 [ -x ../tools/fail.sh ] && ../tools/fail.sh
 find /tmp . -name "*.core" -mtime -2 -maxdepth 2 -ls 2>/dev/null
