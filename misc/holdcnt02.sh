@@ -34,7 +34,7 @@
 
 [ `id -u ` -ne 0 ] && echo "Must be root!" && exit 1
 [ `swapinfo | wc -l` -eq 1 ] && exit 0
-[ `sysctl -n hw.physmem` -lt $((9 * 1024 * 1024 * 1024)) ] && exit 0
+[ `sysctl -n hw.physmem` -lt $((32 * 1024 * 1024 * 1024)) ] && exit 0
 
 . ../default.cfg
 
@@ -168,6 +168,7 @@ reader(void)
 
 	setproctitle("reader");
 	signal(SIGSEGV, hand);
+	signal(SIGBUS, hand);
 	fd = 0;
 	for (;;) {
 		(void)setjmp(jbuf);
