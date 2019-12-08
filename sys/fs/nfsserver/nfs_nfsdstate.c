@@ -2158,7 +2158,7 @@ tryagain:
 			NFSUNLOCKSTATE();
 			NFSVOPLOCK(vp, LK_EXCLUSIVE | LK_RETRY);
 			vnode_unlocked = 0;
-			if ((vp->v_iflag & VI_DOOMED) != 0)
+			if (VN_IS_DOOMED(vp))
 				ret = NFSERR_SERVERFAULT;
 			NFSLOCKSTATE();
 		}
@@ -2256,7 +2256,7 @@ tryagain:
 			NFSUNLOCKSTATE();
 			NFSVOPLOCK(vp, LK_EXCLUSIVE | LK_RETRY);
 			vnode_unlocked = 0;
-			if ((vp->v_iflag & VI_DOOMED) != 0) {
+			if (VN_IS_DOOMED(vp)) {
 				error = NFSERR_SERVERFAULT;
 				goto out;
 			}
@@ -2378,7 +2378,7 @@ out:
 	}
 	if (vnode_unlocked != 0) {
 		NFSVOPLOCK(vp, LK_EXCLUSIVE | LK_RETRY);
-		if (error == 0 && (vp->v_iflag & VI_DOOMED) != 0)
+		if (error == 0 && VN_IS_DOOMED(vp))
 			error = NFSERR_SERVERFAULT;
 	}
 	if (other_lop)
@@ -5137,7 +5137,7 @@ nfsrv_checkstable(struct nfsclient *clp)
  * Return 0 to indicate the conflict can't be revoked and 1 to indicate
  * the revocation worked and the conflicting client is "bye, bye", so it
  * can be tried again.
- * Return 2 to indicate that the vnode is VI_DOOMED after NFSVOPLOCK().
+ * Return 2 to indicate that the vnode is VIRF_DOOMED after NFSVOPLOCK().
  * Unlocks State before a non-zero value is returned.
  */
 static int
@@ -5168,7 +5168,7 @@ nfsrv_clientconflict(struct nfsclient *clp, int *haslockp, vnode_t vp,
 		*haslockp = 1;
 		if (vp != NULL) {
 			NFSVOPLOCK(vp, lktype | LK_RETRY);
-			if ((vp->v_iflag & VI_DOOMED) != 0)
+			if (VN_IS_DOOMED(vp))
 				return (2);
 		}
 		return (1);
@@ -5343,7 +5343,7 @@ nfsrv_delegconflict(struct nfsstate *stp, int *haslockp, NFSPROC_T *p,
 		*haslockp = 1;
 		if (vp != NULL) {
 			NFSVOPLOCK(vp, lktype | LK_RETRY);
-			if ((vp->v_iflag & VI_DOOMED) != 0) {
+			if (VN_IS_DOOMED(vp)) {
 				*haslockp = 0;
 				NFSLOCKV4ROOTMUTEX();
 				nfsv4_unlock(&nfsv4rootfs_lock, 1);
@@ -8333,7 +8333,7 @@ tryagain2:
 	 * changed until the copy is complete.
 	 */
 	NFSVOPLOCK(vp, LK_EXCLUSIVE | LK_RETRY);
-	if (ret == 0 && (vp->v_iflag & VI_DOOMED) != 0) {
+	if (ret == 0 && VN_IS_DOOMED(vp)) {
 		NFSD_DEBUG(4, "nfsrv_copymr: lk_exclusive doomed\n");
 		ret = ESTALE;
 	}
