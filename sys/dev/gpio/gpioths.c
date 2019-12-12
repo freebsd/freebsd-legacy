@@ -1,6 +1,8 @@
 /*-
- * Copyright (c) 2016 Michael Zhilin <mizhka@freebsd.org>
- * All rights reserved.
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
+ * Copyright (c) 2016 Michael Zhilin <mizhka@freebsd.org> All rights reserved.
+ * Copyright (c) 2019 Ian Lepore <ian@freebsd.org>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -24,28 +26,12 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
-#include <sys/param.h>
-#include <sys/kernel.h>
-#include <sys/bus.h>
-#include <sys/module.h>
-#include <sys/errno.h>
-#include <sys/systm.h>
-#include <sys/sysctl.h>
-
-#include <machine/bus.h>
-#include <sys/rman.h>
-#include <sys/gpio.h>
-#include <machine/resource.h>
-
-#include "gpiobus_if.h"
-
 /*
- * GPIOTHS - Temp/Humidity sensor over GPIO, e.g. DHT11/DHT22
+ * GPIOTHS - Temp/Humidity sensor over GPIO.
+ *
  * This is driver for Temperature & Humidity sensor which provides digital
  * output over single-wire protocol from embedded 8-bit microcontroller.
+ * Note that it uses a custom single-wire protocol, it is not 1-wire(tm).
  * 
  * This driver supports the following chips:
  *   DHT11:  Temp   0c to 50c +-2.0c, Humidity 20% to  90% +-5%
@@ -59,7 +45,38 @@ __FBSDID("$FreeBSD$");
  * as part of loader or kernel configuration:
  *	hint.gpioths.0.at="gpiobus0"
  *	hint.gpioths.0.pins=<PIN>
+ *
+ * Or configure via FDT data.
  */
+
+#include <sys/cdefs.h>
+__FBSDID("$FreeBSD$");
+
+#include <sys/param.h>
+#include <sys/kernel.h>
+#include <sys/bus.h>
+#include <sys/gpio.h>
+#include <sys/module.h>
+#include <sys/errno.h>
+#include <sys/systm.h>
+#include <sys/sysctl.h>
+#include <sys/taskqueue.h>
+
+#include <dev/gpio/gpiobusvar.h>
+
+#ifdef FDT
+#include <dev/ofw/ofw_bus.h>
+#include <dev/ofw/ofw_bus_subr.h>
+
+static struct ofw_compat_data compat_data[] = {
+	{"dht11",  true},
+	{NULL,     false}
+};
+OFWBUS_PNP_INFO(compat_data);
+SIMPLEBUS_PNP_INFO(compat_data);
+#endif /* FDT */
+
+#define	PIN_IDX 0			/* Use the first/only configured pin. */
 
 #define	GPIOTHS_POLLTIME	5	/* in seconds */
 
@@ -70,40 +87,45 @@ __FBSDID("$FreeBSD$");
 
 struct gpioths_softc {
 	device_t		 dev;
+	gpio_pin_t		 pin;
 	int			 temp;
 	int			 hum;
 	int			 fails;
-	struct callout		 callout;
+	struct timeout_task	 task;
+	bool			 detaching;
 };
 
-/* Prototypes */
-static int		gpioths_probe(device_t dev);
-static int		gpioths_attach(device_t dev);
-static int		gpioths_detach(device_t dev);
-static void		gpioths_poll(void *arg);
-
-/* DHT-specific methods */
-static int		gpioths_dht_initread(device_t bus, device_t dev);
-static int		gpioths_dht_readbytes(device_t bus, device_t dev);
-static int		gpioths_dht_timeuntil(device_t bus, device_t dev,
-			    uint32_t lev, uint32_t *time);
-
-/* Implementation */
 static int
 gpioths_probe(device_t dev)
 {
-	device_set_desc(dev, "Temperature and Humidity Sensor over GPIO");
-	return (0);
+	int rv;
+
+	/*
+	 * By default we only bid to attach if specifically added by our parent
+	 * (usually via hint.gpioths.#.at=busname).  On FDT systems we bid as
+	 * the default driver based on being configured in the FDT data.
+	 */
+	rv = BUS_PROBE_NOWILDCARD;
+
+#ifdef FDT
+	if (ofw_bus_status_okay(dev) &&
+	    ofw_bus_search_compatible(dev, compat_data)->ocd_data)
+		rv = BUS_PROBE_DEFAULT;
+#endif
+
+	device_set_desc(dev, "DHT11/DHT22 Temperature and Humidity Sensor");
+
+	return (rv);
 }
 
 static int
-gpioths_dht_timeuntil(device_t bus, device_t dev, uint32_t lev, uint32_t *time)
+gpioths_dht_timeuntil(struct gpioths_softc *sc, bool lev, uint32_t *time)
 {
-	uint32_t	cur_level;
+	bool		cur_level;
 	int		i;
 
 	for (i = 0; i < GPIOTHS_DHT_TIMEOUT; i++) {
-		GPIOBUS_PIN_GET(bus, dev, 0, &cur_level);
+		gpio_pin_is_active(sc->pin, &cur_level);
 		if (cur_level == lev) {
 			if (time != NULL)
 				*time = i;
@@ -116,92 +138,53 @@ gpioths_dht_timeuntil(device_t bus, device_t dev, uint32_t lev, uint32_t *time)
 	return (ETIMEDOUT);
 }
 
-static int
-gpioths_dht_initread(device_t bus, device_t dev)
+static void
+gpioths_dht_initread(struct gpioths_softc *sc)
 {
-	int	err;
-
-	err = GPIOBUS_PIN_SETFLAGS(bus, dev, 0, GPIO_PIN_OUTPUT);
-	if (err != 0) {
-		device_printf(dev, "err(GPIOBUS_PIN_SETFLAGS, OUT) = %d\n", err);
-		return (err);
-	}
-	DELAY(1);
-
-	err = GPIOBUS_PIN_SET(bus, dev, 0, GPIO_PIN_LOW);
-	if (err != 0) {
-		device_printf(dev, "err(GPIOBUS_PIN_SET, LOW) = %d\n", err);
-		return (err);
-	}
 
 	/*
-	 * According to specifications we need to wait no more than 18ms
-	 * to start data transfer
+	 * According to specifications we need to drive the data line low for at
+	 * least 20ms then drive it high, to wake up the chip and signal it to
+	 * send a measurement. After sending this start signal, we switch the
+	 * pin back to input so the device can begin talking to us.
 	 */
-	DELAY(GPIOTHS_DHT_STARTCYCLE);
-	err = GPIOBUS_PIN_SET(bus, dev, 0, GPIO_PIN_HIGH);
-	if (err != 0) {
-		device_printf(dev, "err(GPIOBUS_PIN_SET, HIGH) = %d\n", err);
-		return (err);
-	}
-
-	DELAY(1);
-	err = GPIOBUS_PIN_SETFLAGS(bus, dev, 0, GPIO_PIN_INPUT) ;
-	if (err != 0) {
-		device_printf(dev, "err(GPIOBUS_PIN_SETFLAGS, IN) = %d\n", err);
-		return (err);
-	}
-
-	DELAY(1);
-	return (0);
+	gpio_pin_setflags(sc->pin, GPIO_PIN_OUTPUT);
+	gpio_pin_set_active(sc->pin, false);
+	pause_sbt("gpioths", ustosbt(GPIOTHS_DHT_STARTCYCLE), C_PREL(2), 0);
+	gpio_pin_set_active(sc->pin, true);
+	gpio_pin_setflags(sc->pin, GPIO_PIN_INPUT);
 }
 
 static int
-gpioths_dht_readbytes(device_t bus, device_t dev)
+gpioths_dht_readbytes(struct gpioths_softc *sc)
 {
-	struct gpioths_softc	*sc;
 	uint32_t		 calibrations[GPIOTHS_DHT_CYCLES];
 	uint32_t		 intervals[GPIOTHS_DHT_CYCLES];
 	uint32_t		 err, avglen, value;
 	uint8_t			 crc, calc;
 	int			 i, negmul, offset, size, tmphi, tmplo;
 
-	sc = device_get_softc(dev);
-
-	err = gpioths_dht_initread(bus,dev);
+	gpioths_dht_initread(sc);
+	
+	err = gpioths_dht_timeuntil(sc, false, NULL);
 	if (err) {
-		device_printf(dev, "gpioths_dht_initread error = %d\n", err);
-		goto error;
-	}
-
-	err = gpioths_dht_timeuntil(bus, dev, GPIO_PIN_LOW, NULL);
-	if (err) {
-		device_printf(dev, "err(START) = %d\n", err);
+		device_printf(sc->dev, "err(START) = %d\n", err);
 		goto error;
 	}
 
 	/* reading - 41 cycles */
 	for (i = 0; i < GPIOTHS_DHT_CYCLES; i++) {
-		err = gpioths_dht_timeuntil(bus, dev, GPIO_PIN_HIGH,
-		          &calibrations[i]);
+		err = gpioths_dht_timeuntil(sc, true, &calibrations[i]);
 		if (err) {
-			device_printf(dev, "err(CAL, %d) = %d\n", i, err);
+			device_printf(sc->dev, "err(CAL, %d) = %d\n", i, err);
 			goto error;
 		}
-		err = gpioths_dht_timeuntil(bus, dev, GPIO_PIN_LOW,
-			  &intervals[i]);
+		err = gpioths_dht_timeuntil(sc, false, &intervals[i]);
 		if (err) {
-			device_printf(dev, "err(INTERVAL, %d) = %d\n", i, err);
+			device_printf(sc->dev, "err(INTERVAL, %d) = %d\n", i, err);
 			goto error;
 		}
 	}
-
-	err = GPIOBUS_PIN_SETFLAGS(bus, dev, 0, GPIO_PIN_INPUT);
-	if (err != 0) {
-		device_printf(dev, "err(FINAL_SETFLAGS, IN) = %d\n", err);
-		goto error;
-	}
-	DELAY(1);
 
 	/* Calculate average data calibration cycle length */
 	avglen = 0;
@@ -271,8 +254,8 @@ gpioths_dht_readbytes(device_t bus, device_t dev)
 	 * the upper bits of its 16-bit humidity.  A DHT11/12 should not report
 	 * a value lower than 20.  To allow for the possibility that a device
 	 * could report a value slightly out of its sensitivity range, we split
-	 * the difference and say if the value is greater than 10 it cannot be a
-	 * DHT22 (that would be a humidity over 256%).
+	 * the difference and say if the value is greater than 10 it must be a
+	 * DHT11/12 (that would be a humidity over 256% on a DHT21/22).
 	 */
 #define	DK_OFFSET 2731 /* Offset between K and C, in decikelvins. */
 	if ((value >> 24) > 10) {
@@ -304,16 +287,16 @@ error:
 }
 
 static void
-gpioths_poll(void *arg)
+gpioths_poll(void *arg, int pending __unused)
 {
 	struct gpioths_softc	*sc;
-	device_t		 dev;
 
-	dev = (device_t)arg;
-	sc = device_get_softc(dev);
+	sc = (struct gpioths_softc *)arg;
 
-	gpioths_dht_readbytes(device_get_parent(dev), dev);
-	callout_schedule(&sc->callout, GPIOTHS_POLLTIME * hz);
+	gpioths_dht_readbytes(sc);
+	if (!sc->detaching)
+		taskqueue_enqueue_timeout_sbt(taskqueue_thread, &sc->task,
+		    GPIOTHS_POLLTIME * SBT_1S, 0, C_PREL(3));
 }
 
 static int
@@ -322,6 +305,7 @@ gpioths_attach(device_t dev)
 	struct gpioths_softc	*sc;
 	struct sysctl_ctx_list	*ctx;
 	struct sysctl_oid	*tree;
+	int err;
 
 	sc = device_get_softc(dev);
 	ctx = device_get_sysctl_ctx(dev);
@@ -329,11 +313,59 @@ gpioths_attach(device_t dev)
 
 	sc->dev = dev;
 
+	TIMEOUT_TASK_INIT(taskqueue_thread, &sc->task, 0, gpioths_poll, sc);
+
+#ifdef FDT
+	/* Try to configure our pin from fdt data on fdt-based systems. */
+	err = gpio_pin_get_by_ofw_idx(dev, ofw_bus_get_node(dev), PIN_IDX,
+	    &sc->pin);
+#else
+	err = ENOENT;
+#endif
+	/*
+	 * If we didn't get configured by fdt data and our parent is gpiobus,
+	 * see if we can be configured by the bus (allows hinted attachment even
+	 * on fdt-based systems).
+	 */
+	if (err != 0 &&
+	    strcmp("gpiobus", device_get_name(device_get_parent(dev))) == 0)
+		err = gpio_pin_get_by_child_index(dev, PIN_IDX, &sc->pin);
+
+	/* If we didn't get configured by either method, whine and punt. */
+	if (err != 0) {
+		device_printf(sc->dev,
+		    "cannot acquire gpio pin (config error)\n");
+		return (err);
+	}
+
+	/*
+	 * Ensure we have control of our pin, and preset the data line to its
+	 * idle condition (high).  Leave the line in input mode, relying on the
+	 * external pullup to keep the line high while idle.
+	 */
+	err = gpio_pin_setflags(sc->pin, GPIO_PIN_OUTPUT);
+	if (err != 0) {
+		device_printf(dev, "gpio_pin_setflags(OUT) = %d\n", err);
+		return (err);
+	}
+	err = gpio_pin_set_active(sc->pin, true);
+	if (err != 0) {
+		device_printf(dev, "gpio_pin_set_active(false) = %d\n", err);
+		return (err);
+	}
+	err = gpio_pin_setflags(sc->pin, GPIO_PIN_INPUT);
+	if (err != 0) {
+		device_printf(dev, "gpio_pin_setflags(IN) = %d\n", err);
+		return (err);
+	}
+
 	/* 
 	 * Do an initial read so we have correct values for reporting before
-	 * registering the sysctls that can access those values.
+	 * registering the sysctls that can access those values.  This also
+	 * schedules the periodic polling the driver does every few seconds to
+	 * update the sysctl variables.
 	 */
-	gpioths_dht_readbytes(device_get_parent(dev), dev);
+	gpioths_poll(sc, 0);
 
 	sysctl_add_oid(ctx, SYSCTL_CHILDREN(tree), OID_AUTO, "temperature",				\
 	    CTLFLAG_RD | CTLTYPE_INT | CTLFLAG_MPSAFE,
@@ -346,9 +378,6 @@ gpioths_attach(device_t dev)
 	    CTLFLAG_RD, &sc->fails, 0,
 	    "failures since last successful read");
 
-	callout_init(&sc->callout, 1);
-	callout_reset(&sc->callout, GPIOTHS_POLLTIME * hz, gpioths_poll, dev);
-
 	return (0);
 }
 
@@ -358,8 +387,10 @@ gpioths_detach(device_t dev)
 	struct gpioths_softc	*sc;
 
 	sc = device_get_softc(dev);
-
-	callout_drain(&sc->callout);
+	gpio_pin_release(sc->pin);
+	sc->detaching = true;
+	while (taskqueue_cancel_timeout(taskqueue_thread, &sc->task, NULL) != 0)
+		taskqueue_drain_timeout(taskqueue_thread, &sc->task);
 
 	return (0);
 }
@@ -377,5 +408,10 @@ static device_method_t gpioths_methods[] = {
 static devclass_t gpioths_devclass;
 
 DEFINE_CLASS_0(gpioths, gpioths_driver, gpioths_methods, sizeof(struct gpioths_softc));
+
+#ifdef FDT
+DRIVER_MODULE(gpioths, simplebus, gpioths_driver, gpioths_devclass, 0, 0);
+#endif
+
 DRIVER_MODULE(gpioths, gpiobus, gpioths_driver, gpioths_devclass, 0, 0);
 MODULE_DEPEND(gpioths, gpiobus, 1, 1, 1);

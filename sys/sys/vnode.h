@@ -653,17 +653,15 @@ int	vaccess_acl_posix1e(enum vtype type, uid_t file_uid,
 	    struct ucred *cred, int *privused);
 void	vattr_null(struct vattr *vap);
 int	vcount(struct vnode *vp);
-#define	vdrop(vp)	_vdrop((vp), 0)
-#define	vdropl(vp)	_vdrop((vp), 1)
-void	_vdrop(struct vnode *, bool);
+void	vdrop(struct vnode *);
+void	vdropl(struct vnode *);
 int	vflush(struct mount *mp, int rootrefs, int flags, struct thread *td);
 int	vget(struct vnode *vp, int flags, struct thread *td);
 enum vgetstate	vget_prep(struct vnode *vp);
 int	vget_finish(struct vnode *vp, int flags, enum vgetstate vs);
 void	vgone(struct vnode *vp);
-#define	vhold(vp)	_vhold((vp), 0)
-#define	vholdl(vp)	_vhold((vp), 1)
-void	_vhold(struct vnode *, bool);
+void	vhold(struct vnode *);
+void	vholdl(struct vnode *);
 void	vholdnz(struct vnode *);
 void	vinactive(struct vnode *, struct thread *);
 int	vinvalbuf(struct vnode *vp, int save, int slpflag, int slptimeo);
@@ -764,11 +762,14 @@ int	vop_stdgetpages(struct vop_getpages_args *);
 int	vop_stdinactive(struct vop_inactive_args *);
 int	vop_stdioctl(struct vop_ioctl_args *);
 int	vop_stdneed_inactive(struct vop_need_inactive_args *);
-int	vop_stdislocked(struct vop_islocked_args *);
 int	vop_stdkqfilter(struct vop_kqfilter_args *);
 int	vop_stdlock(struct vop_lock1_args *);
-int	vop_stdputpages(struct vop_putpages_args *);
 int	vop_stdunlock(struct vop_unlock_args *);
+int	vop_stdislocked(struct vop_islocked_args *);
+int	vop_lock(struct vop_lock1_args *);
+int	vop_unlock(struct vop_unlock_args *);
+int	vop_islocked(struct vop_islocked_args *);
+int	vop_stdputpages(struct vop_putpages_args *);
 int	vop_nopoll(struct vop_poll_args *);
 int	vop_stdaccess(struct vop_access_args *ap);
 int	vop_stdaccessx(struct vop_accessx_args *ap);
