@@ -34,6 +34,7 @@
 
 # Thread stuck in vmwait seen:
 # https://people.freebsd.org/~pho/stress/log/jeff138.txt
+# Fixed by r355771
 
 . ../default.cfg
 [ `id -u ` -ne 0 ] && echo "Must be root!" && exit 1
