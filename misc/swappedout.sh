@@ -31,6 +31,9 @@
 # Processes stay in "swapped out" state even after swapoff
 # Broken by r254304.
 
+# "panic: page 0xfffffe00070e7d30 is neither wired nor queued":
+# https://people.freebsd.org/~pho/stress/log/swappedout-3.txt
+
 [ `id -u ` -ne 0 ] && echo "Must be root!" && exit 1
 
 (cd ../testcases/swap; ./swap -t 2m -i 20 -v) > /dev/null
