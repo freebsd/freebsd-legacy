@@ -39,6 +39,8 @@
 #		panic: 43 vncache entries remaining			20111220
 # backingstore3.sh
 #		g_vfs_done():md6a[WRITE(offset=...)]error = 28		20111230
+# collapse.sh	panic: freeing mapped page 0xfffffe0028ed1d50		20200106
+# contigmalloc2.sh	CAM stuck in wmwait seen			20200112
 # devfs4.sh	WiP							20181031
 # fexecve.sh	WiP
 # fsync.sh	panic: Journal overflow					20190208
@@ -76,7 +78,6 @@
 # quota3.sh	panic: softdep_deallocate_dependencies: unrecovered ...	20111222
 # quota6.sh	panic: softdep_deallocate_dependencies: unrecovered ...	20130206
 # quota7.sh	panic: dqflush: stray dquot				20120221
-# rename14.sh	WiP							20190616
 # sctp.sh	WiP							20190809
 # sctp2.sh	WiP							20190809
 # sctp3.sh	WiP							20190809
@@ -143,7 +144,7 @@ alllist=$sdir/list		# -o list
 alllog=$sdir/log		# Tests run
 alloutput=$sdir/output		# Output from current test
 allexcess=$sdir/excessive	# Tests with excessive runtime
-allelapsed=$sdir/elapsed		# Test runtime
+allelapsed=$sdir/elapsed	# Test runtime
 loops=0				# Times to run the tests
 rev=`uname -a | awk '{print $7}' | sed 's/://'`
 rev="`uname -a | sed 's#.*/compile/##; s/ .*//'` $rev"
@@ -222,7 +223,8 @@ touch $alllast $alllog
 chmod 640 $alllast $alllog
 find ../testcases -perm -1 \( -name "*.debug" -o -name "*.full" \) -delete
 tail -2000 $alllog > ${alllog}.new; mv ${alllog}.new $alllog
-tail -5000 $allelapsed > ${allelapsed}.new; mv ${allelapsed}.new $allelapsed
+touch $allelapsed
+tail -10000 $allelapsed > ${allelapsed}.new; mv ${allelapsed}.new $allelapsed
 
 console=/dev/console
 printf "\r\n" > $console &
@@ -304,15 +306,18 @@ while true; do
 		[ $all_debug ] && pre_debug
 		[ -f $i ] || loops=1	# break
 		sync; sleep .5; sync; sleep .5
+		grep -E "^USE_TIMEOUT=1" $i && TIMEOUT_ONE=1 || unset TIMEOUT_ONE
 		start=`date '+%s'`
 		(
-		 	[ $USE_TIMEOUT ] &&
-			    timeout -k 1m 1h ./$i 2>&1 ||
-			    ./$i 2>&1
+		 	if [ $USE_TIMEOUT ] || [ $TIMEOUT_ONE ]; then
+				timeout -k 1m 1h ./$i
+			else
+				./$i
+			fi
 			e=$?
 			[ $e -ne 0 ] &&
 			    echo "FAIL $i exit code $e"
-		) | tee $alloutput
+		) 2>&1 | tee $alloutput
 		ts=`date '+%Y%m%d %T'`
 		grep -qw FAIL $alloutput &&
 		    echo "$ts $rev $i" >> $allfaillog &&
@@ -331,6 +336,7 @@ while true; do
 			echo "swap still running"
 			sleep 2
 		done
+		[ $USE_SWAPOFF ] && { swapoff -a; swapon -a; }
 		[ $all_debug ] && post_debug
 		[ $minutes ] && [ $((`date +%s` - s1)) -ge $minutes ] && break 2
 	done
