@@ -285,6 +285,7 @@ newnfs_connect(struct nfsmount *nmp, struct nfssockreq *nrp,
 			CLNT_CONTROL(client, CLSET_INTERRUPTIBLE, &one);
 		if ((nmp->nm_flag & NFSMNT_RESVPORT))
 			CLNT_CONTROL(client, CLSET_PRIVPORT, &one);
+CLNT_CONTROL(client, CLSET_TLS, &one);
 		if (NFSHASSOFT(nmp)) {
 			if (nmp->nm_sotype == SOCK_DGRAM)
 				/*
