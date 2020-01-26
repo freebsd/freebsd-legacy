@@ -1,0 +1,72 @@
+.\" Copyright (c) 2008 Isilon Inc http://www.isilon.com/
+.\" Authors: Doug Rabson <dfr@rabson.org>
+.\" Developed with Red Inc: Alfred Perlstein <alfred@FreeBSD.org>
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+.\" ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+.\" IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+.\" ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+.\" FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+.\" LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+.\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+.\" SUCH DAMAGE.
+.\"
+.\" $FreeBSD$
+.\"
+.\" Modified from gssd.8 for rpctlscd.8 by Rick Macklem.
+.Dd January 21, 2020
+.Dt RPCTLSCD 8
+.Os
+.Sh NAME
+.Nm rpctlscd
+.Nd "Sun RPC over TLS Client Daemon"
+.Sh SYNOPSIS
+.Nm
+.Op Fl d
+.Op Fl v
+.Sh DESCRIPTION
+The
+.Nm
+program provides support for the client side of the kernel Sun RPC over TLS
+implementation.
+.Pp
+The options are as follows:
+.Bl -tag -width indent
+.It Fl d
+Run in debug mode.
+In this mode,
+.Nm
+will not fork when it starts.
+.It Fl v
+Run in verbose mode.
+In this mode,
+.Nm
+will log activity messages to syslog using LOG_INFO | LOG_DAEMON or to
+stderr, if the
+.Fl d
+option has also been specified.
+.El
+.Sh EXIT STATUS
+.Ex -std
+.Sh SEE ALSO
+.Xr openssl 3 ,
+.Xr syslog 3 ,
+.Xr mount_nfs 8 ,
+.Xr rpctlssd 8
+.Sh HISTORY
+The
+.Nm
+manual page first appeared in
+.Fx 13.0 .

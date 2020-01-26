@@ -72,6 +72,8 @@ SUBDIR=	adduser \
 	rarpd \
 	rmt \
 	rpcbind \
+	rpctlscd \
+	rpctlssd \
 	rpc.lockd \
 	rpc.statd \
 	rpc.umntall \
