@@ -733,6 +733,13 @@ clnt_vc_control(CLIENT *cl, u_int request, void *info)
 		}
 		break;
 
+	case CLSET_BLOCKRCV:
+		if (*(int *) info)
+			ct->ct_dontrcv = TRUE;
+		else
+			ct->ct_dontrcv = FALSE;
+		break;
+
 	default:
 		mtx_unlock(&ct->ct_lock);
 		return (FALSE);
@@ -859,6 +866,15 @@ clnt_vc_soupcall(struct socket *so, void *arg, int waitflag)
 	struct cf_conn *cd;
 
 	CTASSERT(sizeof(xid_plus_direction) == 2 * sizeof(uint32_t));
+
+	/* RPC-over-TLS needs to block reception during handshake upcall. */
+	mtx_lock(&ct->ct_lock);
+	if (ct->ct_dontrcv) {
+		mtx_unlock(&ct->ct_lock);
+		return (SU_OK);
+	}
+	mtx_unlock(&ct->ct_lock);
+
 	ct->ct_upcallrefs++;
 	uio.uio_td = curthread;
 	do {

@@ -732,6 +732,15 @@ svc_vc_recv(SVCXPRT *xprt, struct rpc_msg *msg,
 		}
 
 		/*
+		 * If receiving is disabled so that a TLS handshake can be
+		 * done by the rpctlssd daemon, return FALSE here.
+		 */
+		if (xprt->xp_dontrcv) {
+			sx_xunlock(&xprt->xp_lock);
+			return (FALSE);
+		}
+
+		/*
 		 * The socket upcall calls xprt_active() which will eventually
 		 * cause the server to call us here. We attempt to
 		 * read as much as possible from the socket and put

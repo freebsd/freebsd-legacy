@@ -48,6 +48,7 @@ __FBSDID("$FreeBSD$");
 #include <rpc/rpc.h>
 #include <rpc/rpc_com.h>
 #include <rpc/krpc.h>
+#include <rpc/rpcsec_tls.h>
 
 static enum clnt_stat clnt_reconnect_call(CLIENT *, struct rpc_callextra *,
     rpcproc_t, struct mbuf *, struct mbuf **, struct timeval);
@@ -193,6 +194,24 @@ clnt_reconnect_connect(CLIENT *cl)
 		newclient = clnt_vc_create(so,
 		    (struct sockaddr *) &rc->rc_addr, rc->rc_prog, rc->rc_vers,
 		    rc->rc_sendsz, rc->rc_recvsz, rc->rc_intr);
+		if (rc->rc_tls != 0 && newclient != NULL) {
+printf("at rpctls_connect\n");
+			stat = rpctls_connect(newclient, so);
+printf("aft rpctls_connect=%d\n", stat);
+			if (stat != RPC_SUCCESS) {
+				if (stat != RPC_SYSTEMERROR)
+					stat = rpc_createerr.cf_stat =
+					    RPC_TLSCONNECT;
+				else
+					stat = rpc_createerr.cf_stat = stat;
+				rpc_createerr.cf_error.re_errno = 0;
+				CLNT_CLOSE(newclient);
+				CLNT_RELEASE(newclient);
+				newclient = NULL;
+				td->td_ucred = oldcred;
+				goto out;
+			}
+		}
 	}
 	td->td_ucred = oldcred;
 
@@ -470,6 +489,10 @@ clnt_reconnect_control(CLIENT *cl, u_int request, void *info)
 		xprt = (SVCXPRT *)info;
 		xprt_register(xprt);
 		rc->rc_backchannel = info;
+		break;
+
+	case CLSET_TLS:
+		rc->rc_tls = 1;
 		break;
 
 	default:

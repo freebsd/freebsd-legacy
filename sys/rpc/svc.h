@@ -175,6 +175,7 @@ typedef struct __rpc_svcxprt {
 	int		xp_upcallset;	/* socket upcall is set up */
 	uint32_t	xp_snd_cnt;	/* # of bytes to send to socket */
 	uint32_t	xp_snt_cnt;	/* # of bytes sent to socket */
+	bool_t		xp_dontrcv;	/* Do not receive on the socket */
 #else
 	int		xp_fd;
 	u_short		xp_port;	 /* associated port number */

@@ -78,6 +78,7 @@ struct rc_data {
 	CLIENT*			rc_client; /* underlying RPC client */
 	struct rpc_err		rc_err;
 	void			*rc_backchannel;
+	int			rc_tls;	/* Enable TLS on connection */
 };
 
 struct ct_data {
@@ -101,6 +102,7 @@ struct ct_data {
 	struct ct_request_list ct_pending;
 	int		ct_upcallrefs;	/* Ref cnt of upcalls in prog. */
 	SVCXPRT		*ct_backchannelxprt; /* xprt for backchannel */
+	bool_t		ct_dontrcv;	/* TRUE to block receiving */
 };
 
 struct cf_conn {  /* kept in xprt->xp_p1 for actual connection */

@@ -104,6 +104,9 @@ _authenticate(struct svc_req *rqst, struct rpc_msg *msg)
 			return (AUTH_REJECTEDCRED);
 		dummy = _svcauth_rpcsec_gss(rqst, msg);
 		return (dummy);
+	case AUTH_TLS:
+		dummy = _svcauth_rpcsec_tls(rqst, msg);
+		return (dummy);
 	default:
 		break;
 	}
