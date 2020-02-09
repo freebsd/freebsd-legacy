@@ -56,7 +56,7 @@ main(int argc __unused, char **argv)
 
 	sz = 16 * 4096;
 
-	(void)snprintf(template, sizeof(template), "test.XXXXXX");
+	(void)snprintf(template, sizeof(template), "fexecve.XXXXXX");
 	fd = mkstemp(template);
 	if (fd < 0)
 		err(1, "mkstemp");
@@ -91,6 +91,6 @@ main(int argc __unused, char **argv)
 EOF
 cc -o /tmp/fexecve -Wall -Wextra -O2 /tmp/fexecve.c || exit 1
 echo "Expect: fexecve: fexecve: Input/output error"
-/tmp/fexecve
+(cd /tmp; /tmp/fexecve)
 
-rm -f /tmp/fexecve /tmp/fexecve.c
+rm -f /tmp/fexecve /tmp/fexecve.c /tmp/fexecve.??????
