@@ -30,7 +30,10 @@
 
 [ `id -u ` -ne 0 ] && echo "Must be root!" && exit 1
 
-# Test with snapshot file unlinked before unmount
+# Test with snapshot file unlinked before unmount.
+
+# "panic: snapacct_ufs2: bad block" seen:
+# https://people.freebsd.org/~pho/stress/log/snap4.txt
 
 . ../default.cfg
 
@@ -41,7 +44,7 @@ rm -f /tmp/.snap/stress2
 trap "rm -f /tmp/.snap/stress2" 0
 
 start=`date '+%s'`
-while [ `date '+%s'` -lt $((start + 1800)) ]; do
+while [ `date '+%s'` -lt $((start + 1200)) ]; do
    mksnap_ffs /tmp /tmp/.snap/stress2
    mdconfig -a -t vnode -f /tmp/.snap/stress2 -u $mdstart -o readonly
    mount -o ro /dev/md$mdstart $mntpoint
