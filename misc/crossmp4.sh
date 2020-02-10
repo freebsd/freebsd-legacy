@@ -46,6 +46,7 @@ usermem=`sysctl -n hw.usermem`
 [ `swapinfo | wc -l` -eq 1 ] && usermem=$((usermem/100*80))
 size=$((usermem / 1024 / 1024))
 
+CONT=/tmp/crossmp4.continue
 mounts=$N		# Number of parallel scripts
 
 if [ $# -eq 0 ]; then
@@ -72,9 +73,9 @@ if [ $# -eq 0 ]; then
 	mdconfig -d -u $mdstart
 	exit 0
 else
-	touch /tmp/crossmp.continue
+	touch $CONT
 	if [ $1 = find ]; then
-		while [ -f /tmp/crossmp.continue ]; do
+		while [ -f $CONT ]; do
 			find ${mntpoint}* -type f > /dev/null 2>&1
 		done
 	else
@@ -103,6 +104,6 @@ else
 			done
 			wait
 		done
-		rm -f /tmp/crossmp.continue
+		rm -f $CONT
 	fi
 fi
