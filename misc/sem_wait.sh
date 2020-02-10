@@ -56,6 +56,8 @@ static sem_t *semaphore;
 static void *
 test(void) {
 
+	setproctitle("%s", __func__);
+	alarm(300);
 	for (;;) {
 		if (sem_wait(semaphore) == -1)
 			err(1, "sem_wait");
@@ -70,6 +72,8 @@ main(void) {
 	size_t len;
 	time_t start;
 
+	setproctitle("%s", __func__);
+	alarm(300);
 	len = PAGE_SIZE;
 	if ((semaphore = mmap(NULL, len, PROT_READ | PROT_WRITE,
 	    MAP_ANON | MAP_SHARED, -1, 0)) == MAP_FAILED)
@@ -101,6 +105,7 @@ main(void) {
 }
 EOF
 mycc -o /tmp/sem_wait -Wall -Wextra -O2 /tmp/sem_wait.c || exit 1
-/tmp/sem_wait; s=$?
+timeout 6m /tmp/sem_wait; s=$?
+[ $s -eq 124 ] && echo "Timed out"
 rm -f /tmp/sem_wait /tmp/sem_wait.c
 exit $s
