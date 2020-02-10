@@ -83,7 +83,7 @@ for i in `jot 30`; do
 	for j in `jot 10`; do
 		wait
 	done
-	[ $((`date '+%s'` - start)) -gt 1800 ] && break
+	[ $((`date '+%s'` - start)) -gt 1200 ] && break
 done
 
 if ls -l $dir/file.0* 2>&1 | egrep "file.0[0-9]" | grep -q "No such file"; then
@@ -122,7 +122,7 @@ pm(void)
 	int fd, n;
 	int space = sizeof(buf);
 	struct stat statb;
-	long base;
+	off_t base;
 	struct dirent *dp;
 	char *bp = buf;
 

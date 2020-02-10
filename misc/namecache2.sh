@@ -183,7 +183,7 @@ main(void)
 			nanosleep(&period, 0);
 			return 0;
 		}
-		if (time(NULL) - start > 1800) {
+		if (time(NULL) - start > 1200) {
 			fprintf(stderr, "Test timed out.\n");
 			break;
 		}
