@@ -41,7 +41,7 @@ rm -f /tmp/.snap/stress2
 trap "rm -f /tmp/.snap/stress2" 0
 
 start=`date '+%s'`
-while [ `date '+%s'` -lt $((start + 1800)) ]; do
+while [ `date '+%s'` -lt $((start + 1200)) ]; do
    date '+%T'
    mksnap_ffs /tmp /tmp/.snap/stress2
    mdconfig -a -t vnode -f /tmp/.snap/stress2 -u $mdstart -o readonly
