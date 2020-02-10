@@ -62,8 +62,9 @@ export LOAD=70
 export TESTPROGS=`cd ..; find testcases/ -perm -1 -type f | \
     egrep -v "/run/"`
 
-(cd ..; ./run.sh $TESTPROGS)
+(cd ..; ./testcases/run/run $TESTPROGS)
 
+zfs umount stress2_tank/test
 zfs destroy -r stress2_tank
 zpool destroy stress2_tank
 
