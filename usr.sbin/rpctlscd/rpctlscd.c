@@ -221,20 +221,18 @@ rpctlscd_verbose_out("rpctlsd_connect s=%d\n", s);
 	if (s < 0)
 		return (FALSE);
 
-	if (testnossl == 0) {
-		/* Do a TLS connect handshake. */
-		ssl = rpctls_connect(rpctls_ctx, s);
-		if (ssl == NULL)
-			rpctlscd_verbose_out("rpctlsd_connect: can't do TLS "
-			    "handshake\n");
-		else {
-			/* Read the 478 bytes of junk off the socket. */
-			siz = 478;
-			ret = 1;
-			while (siz > 0 && ret > 0) {
-				ret = recv(s, &buf[478 - siz], siz, 0);
-				siz -= ret;
-			}
+	/* Do a TLS connect handshake. */
+	ssl = rpctls_connect(rpctls_ctx, s);
+	if (ssl == NULL)
+		rpctlscd_verbose_out("rpctlsd_connect: can't do TLS "
+		    "handshake\n");
+	if (testnossl != 0 && ssl != NULL) {
+		/* Read the 478 bytes of junk off the socket. */
+		siz = 478;
+		ret = 1;
+		while (siz > 0 && ret > 0) {
+			ret = recv(s, &buf[478 - siz], siz, 0);
+			siz -= ret;
 		}
 	}
 
