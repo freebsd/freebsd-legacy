@@ -44,10 +44,13 @@ __FBSDID("$FreeBSD$");
 #ifndef APPLEKEXT
 #include "opt_inet.h"
 #include "opt_inet6.h"
+#include "opt_kern_tls.h"
 
 #include <fs/nfs/nfsport.h>
 
 #include <sys/extattr.h>
+
+#include <rpc/krpc.h>
 
 #include <security/mac/mac_framework.h>
 
@@ -84,6 +87,9 @@ extern volatile int nfsrv_devidcnt;
 extern int nfscl_debuglevel;
 extern struct nfsdevicehead nfsrv_devidhead;
 extern struct nfsstatsv1 nfsstatsv1;
+#ifdef KERN_TLS
+extern u_int ktls_maxlen;
+#endif
 
 SYSCTL_DECL(_vfs_nfs);
 SYSCTL_INT(_vfs_nfs, OID_AUTO, enable_uidtostring, CTLFLAG_RW,
@@ -96,6 +102,10 @@ SYSCTL_INT(_vfs_nfs, OID_AUTO, pnfsmirror, CTLFLAG_RD,
 int nfs_maxcopyrange = 10 * 1024 * 1024;
 SYSCTL_INT(_vfs_nfs, OID_AUTO, maxcopyrange, CTLFLAG_RW,
     &nfs_maxcopyrange, 0, "Max size of a Copy so RPC times reasonable");
+
+bool nfs_use_ext_pgs = false;
+SYSCTL_BOOL(_vfs_nfs, OID_AUTO, use_ext_pgs, CTLFLAG_RW, &nfs_use_ext_pgs,
+    0, "Set true to use TCP");
 
 /*
  * This array of structures indicates, for V4:
@@ -229,6 +239,11 @@ static void nfsrv_removeuser(struct nfsusrgrp *usrp, int isuser);
 static int nfsrv_getrefstr(struct nfsrv_descript *, u_char **, u_char **,
     int *, int *);
 static void nfsrv_refstrbigenough(int, u_char **, u_char **, int *);
+static int nfsm_copyfrommbuf(struct nfsrv_descript *, char *, enum uio_seg,
+    int);
+static int nfsm_copyfrommbuf_extpgs(struct nfsrv_descript *, char *,
+    enum uio_seg, int);
+static struct mbuf *nfsm_splitatpgno(struct mbuf *, int, int);
 
 static struct {
 	int	op;
@@ -319,7 +334,7 @@ static int nfs_bigrequest[NFSV42_NPROCS] = {
 APPLESTATIC void
 nfscl_reqstart(struct nfsrv_descript *nd, int procnum, struct nfsmount *nmp,
     u_int8_t *nfhp, int fhlen, u_int32_t **opcntpp, struct nfsclsession *sep,
-    int vers, int minorvers)
+    int vers, int minorvers, bool use_ext)
 {
 	struct mbuf *mb;
 	u_int32_t *tl;
@@ -352,17 +367,32 @@ nfscl_reqstart(struct nfsrv_descript *nd, int procnum, struct nfsmount *nmp,
 	}
 	nd->nd_procnum = procnum;
 	nd->nd_repstat = 0;
+	nd->nd_maxextsiz = 16384;
+	if (use_ext && PMAP_HAS_DMAP != 0) {
+		nd->nd_flag |= ND_EXTPG;
+#ifdef KERN_TLS
+		nd->nd_maxextsiz = min(TLS_MAX_MSG_SIZE_V10_2,
+		    ktls_maxlen);
+#endif
+	}
 
 	/*
 	 * Get the first mbuf for the request.
 	 */
-	if (nfs_bigrequest[procnum])
-		NFSMCLGET(mb, M_WAITOK);
-	else
-		NFSMGET(mb);
-	mbuf_setlen(mb, 0);
-	nd->nd_mreq = nd->nd_mb = mb;
-	nd->nd_bpos = NFSMTOD(mb, caddr_t);
+	if ((nd->nd_flag & ND_EXTPG) != 0) {
+		mb = mb_alloc_ext_plus_pages(PAGE_SIZE, M_WAITOK, false,
+		    mb_free_mext_pgs);
+		nd->nd_mreq = nd->nd_mb = mb;
+		nfsm_set(nd, true);
+	} else {
+		if (nfs_bigrequest[procnum])
+			NFSMCLGET(mb, M_WAITOK);
+		else
+			NFSMGET(mb);
+		mb->m_len = 0;
+		nd->nd_mreq = nd->nd_mb = mb;
+		nd->nd_bpos = mtod(mb, char *);
+	}
 	
 	/*
 	 * And fill the first file handle into the request.
@@ -609,15 +639,11 @@ nfscl_fillsattr(struct nfsrv_descript *nd, struct vattr *vap,
 int
 nfsm_mbufuio(struct nfsrv_descript *nd, struct uio *uiop, int siz)
 {
-	char *mbufcp, *uiocp;
+	char *uiocp;
 	int xfer, left, len;
-	mbuf_t mp;
 	long uiosiz, rem;
 	int error = 0;
 
-	mp = nd->nd_md;
-	mbufcp = nd->nd_dpos;
-	len = NFSMTOD(mp, caddr_t) + mbuf_len(mp) - mbufcp;
 	rem = NFSM_RNDUP(siz) - siz;
 	while (siz > 0) {
 		if (uiop->uio_iovcnt <= 0 || uiop->uio_iov == NULL) {
@@ -630,35 +656,21 @@ nfsm_mbufuio(struct nfsrv_descript *nd, struct uio *uiop, int siz)
 			left = siz;
 		uiosiz = left;
 		while (left > 0) {
-			while (len == 0) {
-				mp = mbuf_next(mp);
-				if (mp == NULL) {
-					error = EBADRPC;
-					goto out;
-				}
-				mbufcp = NFSMTOD(mp, caddr_t);
-				len = mbuf_len(mp);
-				KASSERT(len >= 0,
-				    ("len %d, corrupted mbuf?", len));
-			}
-			xfer = (left > len) ? len : left;
-#ifdef notdef
-			/* Not Yet.. */
-			if (uiop->uio_iov->iov_op != NULL)
-				(*(uiop->uio_iov->iov_op))
-				(mbufcp, uiocp, xfer);
+			if ((nd->nd_md->m_flags & (M_EXT | M_NOMAP)) ==
+			    (M_EXT | M_NOMAP))
+				xfer = nfsm_copyfrommbuf_extpgs(nd, uiocp,
+				    uiop->uio_segflg, left);
 			else
-#endif
-			if (uiop->uio_segflg == UIO_SYSSPACE)
-				NFSBCOPY(mbufcp, uiocp, xfer);
-			else
-				copyout(mbufcp, CAST_USER_ADDR_T(uiocp), xfer);
+				xfer = nfsm_copyfrommbuf(nd, uiocp,
+				    uiop->uio_segflg, left);
 			left -= xfer;
-			len -= xfer;
-			mbufcp += xfer;
 			uiocp += xfer;
 			uiop->uio_offset += xfer;
 			uiop->uio_resid -= xfer;
+			if (left > 0 && !nfsm_shiftnext(nd, &len)) {
+				error = EBADRPC;
+				goto out;
+			}
 		}
 		if (uiop->uio_iov->iov_len <= siz) {
 			uiop->uio_iovcnt--;
@@ -670,14 +682,8 @@ nfsm_mbufuio(struct nfsrv_descript *nd, struct uio *uiop, int siz)
 		}
 		siz -= uiosiz;
 	}
-	nd->nd_dpos = mbufcp;
-	nd->nd_md = mp;
-	if (rem > 0) {
-		if (len < rem)
-			error = nfsm_advance(nd, rem, len);
-		else
-			nd->nd_dpos += rem;
-	}
+	if (rem > 0)
+		error = nfsm_advance(nd, rem, -1);
 
 out:
 	NFSEXITCODE2(error, nd);
@@ -694,59 +700,94 @@ out:
 APPLESTATIC void *
 nfsm_dissct(struct nfsrv_descript *nd, int siz, int how)
 {
-	mbuf_t mp2;
+	struct mbuf *mp2;
+	struct mbuf_ext_pgs *pgs;
 	int siz2, xfer;
 	caddr_t p;
 	int left;
 	caddr_t retp;
 
 	retp = NULL;
-	left = NFSMTOD(nd->nd_md, caddr_t) + mbuf_len(nd->nd_md) - nd->nd_dpos;
+	if ((nd->nd_md->m_flags & (M_EXT | M_NOMAP)) ==
+	    (M_EXT | M_NOMAP))
+		left = nd->nd_dextpgsiz;
+	else
+		left = mtod(nd->nd_md, char *) + nd->nd_md->m_len -
+		    nd->nd_dpos;
 	while (left == 0) {
-		nd->nd_md = mbuf_next(nd->nd_md);
-		if (nd->nd_md == NULL)
-			return (retp);
-		left = mbuf_len(nd->nd_md);
-		nd->nd_dpos = NFSMTOD(nd->nd_md, caddr_t);
+		if ((nd->nd_md->m_flags & (M_EXT | M_NOMAP)) ==
+		    (M_EXT | M_NOMAP) && nd->nd_dextpg <
+		    nd->nd_md->m_ext.ext_pgs->npgs - 1) {
+			pgs = nd->nd_md->m_ext.ext_pgs;
+			nd->nd_dextpg++;
+			nd->nd_dpos = (char *)(void *)
+			    PHYS_TO_DMAP(pgs->pa[nd->nd_dextpg]);
+			left = nd->nd_dextpgsiz = mbuf_ext_pg_len(pgs,
+			    nd->nd_dextpg, 0);
+		} else if (!nfsm_shiftnext(nd, &left))
+			return (NULL);
 	}
 	if (left >= siz) {
 		retp = nd->nd_dpos;
 		nd->nd_dpos += siz;
-	} else if (mbuf_next(nd->nd_md) == NULL) {
-		return (retp);
+		if ((nd->nd_md->m_flags & (M_EXT | M_NOMAP)) ==
+		    (M_EXT | M_NOMAP))
+			nd->nd_dextpgsiz -= siz;
 	} else if (siz > ncl_mbuf_mhlen) {
 		panic("nfs S too big");
 	} else {
+		/* Make sure an ext_pgs mbuf is at the last page. */
+		if ((nd->nd_md->m_flags & (M_EXT | M_NOMAP)) ==
+		    (M_EXT | M_NOMAP)) {
+			if (nd->nd_dextpg <
+			    nd->nd_md->m_ext.ext_pgs->npgs - 1) {
+				mp2 = nfsm_splitatpgno(nd->nd_md,
+				    nd->nd_dextpg, how);
+				if (mp2 == NULL)
+					return (NULL);
+			}
+			nd->nd_md->m_ext.ext_pgs->last_pg_len -=
+			    left;
+		}
+		if (nd->nd_md->m_next == NULL)
+			return (NULL);
+
+		/* Allocate a new mbuf for the "siz" bytes of data. */
 		MGET(mp2, MT_DATA, how);
 		if (mp2 == NULL)
 			return (NULL);
-		mbuf_setnext(mp2, mbuf_next(nd->nd_md));
-		mbuf_setnext(nd->nd_md, mp2);
-		mbuf_setlen(nd->nd_md, mbuf_len(nd->nd_md) - left);
-		nd->nd_md = mp2;
-		retp = p = NFSMTOD(mp2, caddr_t);
-		NFSBCOPY(nd->nd_dpos, p, left);	/* Copy what was left */
+
+		/*
+		 * Link the new mp2 mbuf into the list then copy left
+		 * bytes from the mbuf before it and siz - left bytes
+		 * from the mbuf after it.
+		 */
+		mp2->m_next = nd->nd_md->m_next;
+		nd->nd_md->m_next = mp2;
+		nd->nd_md->m_len -= left;
+		retp = p = mtod(mp2, char *);
+		memcpy(p, nd->nd_dpos, left);	/* Copy what was left */
 		siz2 = siz - left;
 		p += left;
-		mp2 = mbuf_next(mp2);
+		mp2->m_len = siz;
+		nd->nd_md = mp2->m_next;
 		/* Loop around copying up the siz2 bytes */
 		while (siz2 > 0) {
-			if (mp2 == NULL)
+			if (nd->nd_md == NULL)
 				return (NULL);
-			xfer = (siz2 > mbuf_len(mp2)) ? mbuf_len(mp2) : siz2;
-			if (xfer > 0) {
-				NFSBCOPY(NFSMTOD(mp2, caddr_t), p, xfer);
-				NFSM_DATAP(mp2, xfer);
-				mbuf_setlen(mp2, mbuf_len(mp2) - xfer);
-				p += xfer;
-				siz2 -= xfer;
-			}
+			nfsm_set(nd, false);
+			if ((nd->nd_md->m_flags & (M_EXT | M_NOMAP)) ==
+			    (M_EXT | M_NOMAP))
+				xfer = nfsm_copyfrommbuf_extpgs(nd, p,
+				    UIO_SYSSPACE, siz2);
+			else
+				xfer = nfsm_copyfrommbuf(nd, p,
+				    UIO_SYSSPACE, siz2);
+			p += xfer;
+			siz2 -= xfer;
 			if (siz2 > 0)
-				mp2 = mbuf_next(mp2);
+				nd->nd_md = nd->nd_md->m_next;
 		}
-		mbuf_setlen(nd->nd_md, siz);
-		nd->nd_md = mp2;
-		nd->nd_dpos = NFSMTOD(mp2, caddr_t);
 	}
 	return (retp);
 }
@@ -760,7 +801,7 @@ nfsm_dissct(struct nfsrv_descript *nd, int siz, int how)
 APPLESTATIC int
 nfsm_advance(struct nfsrv_descript *nd, int offs, int left)
 {
-	int error = 0;
+	int error = 0, xfer;
 
 	if (offs == 0)
 		goto out;
@@ -777,24 +818,41 @@ nfsm_advance(struct nfsrv_descript *nd, int offs, int left)
 	/*
 	 * If left == -1, calculate it here.
 	 */
-	if (left == -1)
-		left = NFSMTOD(nd->nd_md, caddr_t) + mbuf_len(nd->nd_md) -
-		    nd->nd_dpos;
+	if (left == -1) {
+		if ((nd->nd_md->m_flags & (M_EXT | M_NOMAP)) ==
+		    (M_EXT | M_NOMAP))
+			left = nd->nd_dextpgsiz;
+		else
+			left = mtod(nd->nd_md, char *) +
+			    nd->nd_md->m_len - nd->nd_dpos;
+	}
 
 	/*
 	 * Loop around, advancing over the mbuf data.
 	 */
 	while (offs > left) {
-		offs -= left;
-		nd->nd_md = mbuf_next(nd->nd_md);
-		if (nd->nd_md == NULL) {
+		if ((nd->nd_md->m_flags & (M_EXT | M_NOMAP)) ==
+		    (M_EXT | M_NOMAP) && nd->nd_dextpg <
+		    nd->nd_md->m_ext.ext_pgs->npgs - 1) {
+			xfer = nfsm_copyfrommbuf_extpgs(nd, NULL,
+			    UIO_SYSSPACE, offs);
+			offs -= xfer;
+		} else
+			offs -= left;
+		left = 0;
+		if (offs > 0 && !nfsm_shiftnext(nd, &left)) {
 			error = EBADRPC;
 			goto out;
 		}
-		left = mbuf_len(nd->nd_md);
-		nd->nd_dpos = NFSMTOD(nd->nd_md, caddr_t);
 	}
-	nd->nd_dpos += offs;
+	if (offs > 0) {
+		if ((nd->nd_md->m_flags & (M_EXT | M_NOMAP)) ==
+		    (M_EXT | M_NOMAP))
+			nfsm_copyfrommbuf_extpgs(nd, NULL,
+			    UIO_SYSSPACE, offs);
+		else
+			nd->nd_dpos += offs;
+	}
 
 out:
 	NFSEXITCODE(error);
@@ -821,22 +879,38 @@ nfsm_strtom(struct nfsrv_descript *nd, const char *cp, int siz)
 	bytesize = NFSX_UNSIGNED + siz + rem;
 	m2 = nd->nd_mb;
 	cp2 = nd->nd_bpos;
-	left = M_TRAILINGSPACE(m2);
+	if ((nd->nd_flag & ND_EXTPG) != 0)
+		left = nd->nd_bextpgsiz;
+	else
+		left = M_TRAILINGSPACE(m2);
 
+	KASSERT(((m2->m_flags & (M_EXT | M_NOMAP)) ==
+	    (M_EXT | M_NOMAP) && (nd->nd_flag & ND_EXTPG) != 0) ||
+	    ((m2->m_flags & (M_EXT | M_NOMAP)) !=
+	    (M_EXT | M_NOMAP) && (nd->nd_flag & ND_EXTPG) == 0),
+	    ("nfsm_strtom: ext_pgs and non-ext_pgs mbufs mixed"));
 	/*
 	 * Loop around copying the string to mbuf(s).
 	 */
 	while (siz > 0) {
 		if (left == 0) {
-			if (siz > ncl_mbuf_mlen)
-				NFSMCLGET(m1, M_WAITOK);
-			else
-				NFSMGET(m1);
-			mbuf_setlen(m1, 0);
-			mbuf_setnext(m2, m1);
-			m2 = m1;
-			cp2 = NFSMTOD(m2, caddr_t);
-			left = M_TRAILINGSPACE(m2);
+			if ((nd->nd_flag & ND_EXTPG) != 0) {
+				m2 = nfsm_add_ext_pgs(m2,
+				    nd->nd_maxextsiz, &nd->nd_bextpg);
+				cp2 = (char *)(void *)PHYS_TO_DMAP(
+				    m2->m_ext.ext_pgs->pa[nd->nd_bextpg]);
+				nd->nd_bextpgsiz = left = PAGE_SIZE;
+			} else {
+				if (siz > ncl_mbuf_mlen)
+					NFSMCLGET(m1, M_WAITOK);
+				else
+					NFSMGET(m1);
+				m1->m_len = 0;
+				cp2 = mtod(m1, char *);
+				left = M_TRAILINGSPACE(m1);
+				m2->m_next = m1;
+				m2 = m1;
+			}
 		}
 		if (left >= siz)
 			xfer = siz;
@@ -844,18 +918,31 @@ nfsm_strtom(struct nfsrv_descript *nd, const char *cp, int siz)
 			xfer = left;
 		NFSBCOPY(cp, cp2, xfer);
 		cp += xfer;
-		mbuf_setlen(m2, mbuf_len(m2) + xfer);
+		cp2 += xfer;
+		m2->m_len += xfer;
 		siz -= xfer;
 		left -= xfer;
+		if ((nd->nd_flag & ND_EXTPG) != 0) {
+			nd->nd_bextpgsiz -= xfer;
+			m2->m_ext.ext_pgs->last_pg_len += xfer;
+		}
 		if (siz == 0 && rem) {
 			if (left < rem)
 				panic("nfsm_strtom");
-			NFSBZERO(cp2 + xfer, rem);
-			mbuf_setlen(m2, mbuf_len(m2) + rem);
+			NFSBZERO(cp2, rem);
+			m2->m_len += rem;
+			cp2 += rem;
+			if ((nd->nd_flag & ND_EXTPG) != 0) {
+				nd->nd_bextpgsiz -= rem;
+				m2->m_ext.ext_pgs->last_pg_len += rem;
+			}
 		}
 	}
 	nd->nd_mb = m2;
-	nd->nd_bpos = NFSMTOD(m2, caddr_t) + mbuf_len(m2);
+	if ((nd->nd_flag & ND_EXTPG) != 0)
+		nd->nd_bpos = cp2;
+	else
+		nd->nd_bpos = mtod(m2, char *) + m2->m_len;
 	return (bytesize);
 }
 
@@ -1008,66 +1095,46 @@ nfsaddr2_match(NFSSOCKADDR_T nam1, NFSSOCKADDR_T nam2)
 
 
 /*
- * Trim the stuff already dissected off the mbuf list.
- */
-APPLESTATIC void
-newnfs_trimleading(nd)
-	struct nfsrv_descript *nd;
-{
-	mbuf_t m, n;
-	int offs;
-
-	/*
-	 * First, free up leading mbufs.
-	 */
-	if (nd->nd_mrep != nd->nd_md) {
-		m = nd->nd_mrep;
-		while (mbuf_next(m) != nd->nd_md) {
-			if (mbuf_next(m) == NULL)
-				panic("nfsm trim leading");
-			m = mbuf_next(m);
-		}
-		mbuf_setnext(m, NULL);
-		mbuf_freem(nd->nd_mrep);
-	}
-	m = nd->nd_md;
-
-	/*
-	 * Now, adjust this mbuf, based on nd_dpos.
-	 */
-	offs = nd->nd_dpos - NFSMTOD(m, caddr_t);
-	if (offs == mbuf_len(m)) {
-		n = m;
-		m = mbuf_next(m);
-		if (m == NULL)
-			panic("nfsm trim leading2");
-		mbuf_setnext(n, NULL);
-		mbuf_freem(n);
-	} else if (offs > 0) {
-		mbuf_setlen(m, mbuf_len(m) - offs);
-		NFSM_DATAP(m, offs);
-	} else if (offs < 0)
-		panic("nfsm trimleading offs");
-	nd->nd_mrep = m;
-	nd->nd_md = m;
-	nd->nd_dpos = NFSMTOD(m, caddr_t);
-}
-
-/*
  * Trim trailing data off the mbuf list being built.
  */
 APPLESTATIC void
-newnfs_trimtrailing(nd, mb, bpos)
-	struct nfsrv_descript *nd;
-	mbuf_t mb;
-	caddr_t bpos;
+nfsm_trimtrailing(struct nfsrv_descript *nd, struct mbuf *mb, char *bpos,
+    int bextpg, int bextpgsiz)
 {
+	struct mbuf_ext_pgs *pgs;
+	vm_page_t pg;
+	int fullpgsiz, i;
+	char *ppos;
 
-	if (mbuf_next(mb)) {
-		mbuf_freem(mbuf_next(mb));
-		mbuf_setnext(mb, NULL);
+	if (mb->m_next != NULL) {
+		m_freem(mb->m_next);
+		mb->m_next = NULL;
 	}
-	mbuf_setlen(mb, bpos - NFSMTOD(mb, caddr_t));
+	if ((mb->m_flags & (M_EXT | M_NOMAP)) == (M_EXT | M_NOMAP)) {
+		pgs = mb->m_ext.ext_pgs;
+		/* First, get rid of any pages after this position. */
+		for (i = pgs->npgs - 1; i > bextpg; i--) {
+			pg = PHYS_TO_VM_PAGE(pgs->pa[i]);
+			vm_page_unwire_noq(pg);
+			vm_page_free(pg);
+		}
+		pgs->npgs = bextpg + 1;
+		if (bextpg == 0)
+			fullpgsiz = PAGE_SIZE - pgs->first_pg_off;
+		else
+			fullpgsiz = PAGE_SIZE;
+		pgs->last_pg_len = fullpgsiz - bextpgsiz;
+		mb->m_len = mbuf_ext_pg_len(pgs, 0, pgs->first_pg_off);
+		for (i = 1; i < pgs->npgs; i++)
+			mb->m_len += mbuf_ext_pg_len(pgs, i, 0);
+		ppos = (char *)(void *)PHYS_TO_DMAP(pgs->pa[bextpg]);
+		ppos += pgs->last_pg_len;
+		if (ppos != bpos)
+			printf("EEK trimtrail\n");
+		nd->nd_bextpgsiz = bextpgsiz;
+		nd->nd_bextpg = bextpg;
+	} else
+		mb->m_len = bpos - mtod(mb, char *);
 	nd->nd_mb = mb;
 	nd->nd_bpos = bpos;
 }
@@ -2421,45 +2488,27 @@ nfsv4_wanted(struct nfsv4lock *lp)
 APPLESTATIC int
 nfsrv_mtostr(struct nfsrv_descript *nd, char *str, int siz)
 {
-	char *cp;
-	int xfer, len;
-	mbuf_t mp;
-	int rem, error = 0;
+	int rem, error = 0, xfer;
 
-	mp = nd->nd_md;
-	cp = nd->nd_dpos;
-	len = NFSMTOD(mp, caddr_t) + mbuf_len(mp) - cp;
 	rem = NFSM_RNDUP(siz) - siz;
 	while (siz > 0) {
-		if (len > siz)
-			xfer = siz;
+		if ((nd->nd_md->m_flags & (M_EXT | M_NOMAP)) ==
+		    (M_EXT | M_NOMAP))
+			xfer = nfsm_copyfrommbuf_extpgs(nd, str,
+			    UIO_SYSSPACE, siz);
 		else
-			xfer = len;
-		NFSBCOPY(cp, str, xfer);
+			xfer = nfsm_copyfrommbuf(nd, str,
+			    UIO_SYSSPACE, siz);
 		str += xfer;
 		siz -= xfer;
-		if (siz > 0) {
-			mp = mbuf_next(mp);
-			if (mp == NULL) {
-				error = EBADRPC;
-				goto out;
-			}
-			cp = NFSMTOD(mp, caddr_t);
-			len = mbuf_len(mp);
-		} else {
-			cp += xfer;
-			len -= xfer;
+		if (siz > 0 && !nfsm_shiftnext(nd, &xfer)) {
+			error = EBADRPC;
+			goto out;
 		}
 	}
 	*str = '\0';
-	nd->nd_dpos = cp;
-	nd->nd_md = mp;
-	if (rem > 0) {
-		if (len < rem)
-			error = nfsm_advance(nd, rem, len);
-		else
-			nd->nd_dpos += rem;
-	}
+	if (rem > 0)
+		error = nfsm_advance(nd, rem, -1);
 
 out:
 	NFSEXITCODE2(error, nd);
@@ -2550,7 +2599,7 @@ nfsv4_fillattr(struct nfsrv_descript *nd, struct mount *mp, vnode_t vp,
 				if (error == 0)
 					error = VOP_GETACL(vp, ACL_TYPE_NFS4,
 					    naclp, cred, p);
-				NFSVOPUNLOCK(vp);
+				NFSVOPUNLOCK(vp, 0);
 			} else
 				error = NFSERR_PERM;
 			if (error != 0) {
@@ -2570,7 +2619,7 @@ nfsv4_fillattr(struct nfsrv_descript *nd, struct mount *mp, vnode_t vp,
 		if (NFSVOPLOCK(vp, LK_SHARED) == 0) {
 			error = VOP_GETEXTATTR(vp, EXTATTR_NAMESPACE_USER,
 			    "xxx", NULL, &atsiz, cred, p);
-			NFSVOPUNLOCK(vp);
+			NFSVOPUNLOCK(vp, 0);
 			if (error != EOPNOTSUPP)
 				xattrsupp = true;
 		}
@@ -4439,21 +4488,31 @@ nfsrvd_rephead(struct nfsrv_descript *nd)
 {
 	mbuf_t mreq;
 
-	/*
-	 * If this is a big reply, use a cluster.
-	 */
-	if ((nd->nd_flag & ND_GSSINITREPLY) == 0 &&
-	    nfs_bigreply[nd->nd_procnum]) {
-		NFSMCLGET(mreq, M_WAITOK);
-		nd->nd_mreq = mreq;
-		nd->nd_mb = mreq;
+	if ((nd->nd_flag & ND_EXTPG) != 0) {
+		mreq = mb_alloc_ext_plus_pages(PAGE_SIZE, M_WAITOK, false,
+		    mb_free_mext_pgs);
+		nd->nd_mreq = nd->nd_mb = mreq;
+		nd->nd_bpos = (char *)(void *)
+		    PHYS_TO_DMAP(mreq->m_ext.ext_pgs->pa[0]);
+		nd->nd_bextpg = 0;
+		nd->nd_bextpgsiz = PAGE_SIZE;
 	} else {
-		NFSMGET(mreq);
-		nd->nd_mreq = mreq;
-		nd->nd_mb = mreq;
+		/*
+		 * If this is a big reply, use a cluster.
+		 */
+		if ((nd->nd_flag & ND_GSSINITREPLY) == 0 &&
+		    nfs_bigreply[nd->nd_procnum]) {
+			NFSMCLGET(mreq, M_WAITOK);
+			nd->nd_mreq = mreq;
+			nd->nd_mb = mreq;
+		} else {
+			NFSMGET(mreq);
+			nd->nd_mreq = mreq;
+			nd->nd_mb = mreq;
+		}
+		nd->nd_bpos = mtod(mreq, char *);
+		mreq->m_len = 0;
 	}
-	nd->nd_bpos = NFSMTOD(mreq, caddr_t);
-	mbuf_setlen(mreq, 0);
 
 	if ((nd->nd_flag & ND_GSSINITREPLY) == 0)
 		NFSM_BUILD(nd->nd_errp, int *, NFSX_UNSIGNED);
@@ -4826,5 +4885,290 @@ nfsv4_findmirror(struct nfsmount *nmp)
 		}
 	}
 	return (ds);
+}
+
+/*
+ * Fill in the fields of "struct nfsrv_descript" for a new ext_pgs mbuf.
+ * The build argument is true for build and false for dissect.
+ */
+int
+nfsm_set(struct nfsrv_descript *nd, bool build)
+{
+	struct mbuf *m;
+	struct mbuf_ext_pgs *pgs;
+	int rlen;
+
+	if (build)
+		m = nd->nd_mb;
+	else
+		m = nd->nd_md;
+	if ((m->m_flags & (M_EXT | M_NOMAP)) == (M_EXT | M_NOMAP)) {
+		if (build) {
+			pgs = m->m_ext.ext_pgs;
+			nd->nd_bpos = (char *)(void *)
+			    PHYS_TO_DMAP(pgs->pa[0]);
+			nd->nd_bpos += pgs->first_pg_off;
+			nd->nd_bextpg = 0;
+			/* For build, set the size that can be filled. */
+			rlen = nd->nd_bextpgsiz = PAGE_SIZE -
+			    pgs->first_pg_off;
+		} else {
+			pgs = m->m_ext.ext_pgs;
+			nd->nd_dpos = (char *)(void *)
+			    PHYS_TO_DMAP(pgs->pa[0]);
+			nd->nd_dpos += pgs->first_pg_off;
+			nd->nd_dextpg = 0;
+			/* For dissect, set the size already filled. */
+			rlen = nd->nd_dextpgsiz = mbuf_ext_pg_len(pgs, 0,
+			    pgs->first_pg_off);
+		}
+	} else if (build) {
+		nd->nd_bpos = mtod(m, char *);
+		rlen = m->m_len;
+	} else {
+		nd->nd_dpos = mtod(m, char *);
+		rlen = m->m_len;
+	}
+	return (rlen);
+}
+
+/*
+ * Copy up to "len" bytes from the mbuf into "cp" and adjust the
+ * mbuf accordingly.
+ * If cp == NULL, do not do the actual copy, but adjust the mbuf.
+ * Return the number of bytes actually copied.
+ * Adjust m_data and m_len so that a future calculation of what
+ * is left using mtod() will work correctly.
+ */
+static int
+nfsm_copyfrommbuf(struct nfsrv_descript *nd, char *cp, enum uio_seg segflg,
+    int len)
+{
+	struct mbuf *m;
+	int xfer;
+
+	m = nd->nd_md;
+	xfer = mtod(m, char *) + m->m_len - nd->nd_dpos;
+	xfer = min(xfer, len);
+	if (xfer > 0) {
+		if (cp != NULL) {
+			if (segflg == UIO_SYSSPACE)
+				memcpy(cp, nd->nd_dpos, xfer);
+			else
+				copyout(nd->nd_dpos, cp, xfer);
+		}
+		nd->nd_dpos += xfer;
+		m->m_data += xfer;
+		m->m_len -= xfer;
+	}
+	return (xfer);
+}
+
+/*
+ * Copy up to "len" bytes from the mbuf into "cp" and adjust the
+ * mbuf accordingly.
+ * If cp == NULL, do not do the actual copy, but adjust the mbuf.
+ * Return the number of bytes actually copied.
+ * Same as above, but for an ext_pgs mbuf.
+ */
+static int
+nfsm_copyfrommbuf_extpgs(struct nfsrv_descript *nd, char *cp,
+    enum uio_seg segflg, int len)
+{
+	struct mbuf_ext_pgs *pgs;
+	int tlen, xfer;
+
+	pgs = nd->nd_md->m_ext.ext_pgs;
+	tlen = 0;
+	/* Copy from the page(s) into cp. */
+	do {
+		xfer = nd->nd_dextpgsiz;
+		xfer = min(xfer, len);
+		if (cp != NULL && xfer > 0) {
+			if (segflg == UIO_SYSSPACE)
+				memcpy(cp, nd->nd_dpos, xfer);
+			else
+				copyout(nd->nd_dpos, cp, xfer);
+			cp += xfer;
+		}
+		tlen += xfer;
+		len -= xfer;
+		nd->nd_dextpgsiz -= xfer;
+		nd->nd_dpos += xfer;
+		if (nd->nd_dextpgsiz == 0 && len > 0 &&
+		    nd->nd_dextpg < pgs->npgs - 1) {
+			nd->nd_dextpg++;
+			nd->nd_dpos = (char *)(void *)
+			    PHYS_TO_DMAP(pgs->pa[nd->nd_dextpg]);
+			nd->nd_dextpgsiz = mbuf_ext_pg_len(pgs,
+			    nd->nd_dextpg, 0);
+		}
+	} while (len > 0 && nd->nd_dextpgsiz > 0);
+	return (tlen);
+}
+
+/*
+ * Split an ext_pgs mbuf into two ext_pgs mbufs on a page boundary.
+ */
+static struct mbuf *
+nfsm_splitatpgno(struct mbuf *mp, int pgno, int how)
+{
+	struct mbuf *m;
+	struct mbuf_ext_pgs *pgs, *pgs0;
+	int i, j, tlen;
+
+	KASSERT((mp->m_flags & (M_EXT | M_NOMAP)) ==
+	    (M_EXT | M_NOMAP), ("nfsm_splitatpgno: mp not ext_pgs"));
+	pgs = mp->m_ext.ext_pgs;
+	KASSERT(pgno < pgs->npgs - 1, ("nfsm_splitatpgno:"
+	    " at the last page"));
+	m = mb_alloc_ext_pgs(how, false, mb_free_mext_pgs);
+	if (m == NULL)
+		return (m);
+	pgs0 = m->m_ext.ext_pgs;
+
+	/* Move the pages beyond pgno to the new mbuf. */
+	for (i = pgno + 1, j = 0; i < pgs->npgs; i++, j++)
+		pgs0->pa[j] = pgs->pa[i];
+	pgs0->npgs = j;
+	pgs0->last_pg_len = pgs->last_pg_len;
+	pgs->npgs = pgno + 1;
+	pgs->last_pg_len = PAGE_SIZE;
+	if (pgno == 0)
+		pgs->last_pg_len -= pgs->first_pg_off;
+
+	/* Now set m_len for both mbufs. */
+	tlen = mbuf_ext_pg_len(pgs, 0, pgs->first_pg_off);
+	for (i = 1; i < pgs->npgs; i++)
+		tlen += mbuf_ext_pg_len(pgs, i, 0);
+	mp->m_len = tlen;
+
+	/* The new mbuf has first_pg_off == 0. */
+	tlen = 0;
+	for (i = 0; i < pgs0->npgs; i++)
+		tlen += mbuf_ext_pg_len(pgs0, i, 0);
+	m->m_len = tlen;
+
+	/* Link the new mbuf after mp. */
+	m->m_next = mp->m_next;
+	mp->m_next = m;
+	return (mp);
+}
+
+/*
+ * Shift to the next mbuf in the list list and update the nd fields.
+ * Return true if successful, false otherwise.
+ */
+bool
+nfsm_shiftnext(struct nfsrv_descript *nd, int *leftp)
+{
+
+	nd->nd_md = nd->nd_md->m_next;
+	if (nd->nd_md == NULL)
+		return (false);
+	*leftp = nfsm_set(nd, false);
+	return (true);
+}
+
+/*
+ * Grow a ext_pgs mbuf list.  Either allocate another page or add
+ * an mbuf to the list.
+ */
+struct mbuf *
+nfsm_add_ext_pgs(struct mbuf *m, int maxextsiz, int *bextpg)
+{
+	struct mbuf_ext_pgs *pgs;
+	struct mbuf *mp;
+	vm_page_t pg;
+
+	pgs = m->m_ext.ext_pgs;
+	if ((pgs->npgs + 1) * PAGE_SIZE > maxextsiz) {
+		mp = mb_alloc_ext_plus_pages(PAGE_SIZE, M_WAITOK,
+		    false, mb_free_mext_pgs);
+		*bextpg = 0;
+		m->m_next = mp;
+	} else {
+		do {
+			pg = vm_page_alloc(NULL, 0, VM_ALLOC_NORMAL |
+			    VM_ALLOC_NOOBJ | VM_ALLOC_NODUMP |
+			    VM_ALLOC_WIRED);
+			if (pg == NULL)
+				vm_wait(NULL);
+		} while (pg == NULL);
+		pgs->pa[pgs->npgs] = VM_PAGE_TO_PHYS(pg);
+		*bextpg = pgs->npgs;
+		pgs->npgs++;
+		pgs->last_pg_len = 0;
+		mp = m;
+	}
+	return (mp);
+}
+
+/*
+ * Trim the ext_pgs mbuf to the current dissect position.
+ */
+void
+nfsm_trimatpos_extpgs(struct nfsrv_descript *nd)
+{
+	struct mbuf_ext_pgs *pgs;
+	vm_page_t pg;
+	int i, j;
+
+	pgs = nd->nd_md->m_ext.ext_pgs;
+	for (i = 0; i < nd->nd_dextpg; i++) {
+		pg = PHYS_TO_VM_PAGE(pgs->pa[0]);
+		vm_page_unwire_noq(pg);
+		vm_page_free(pg);
+		nd->nd_md->m_len -= mbuf_ext_pg_len(pgs, i,
+		    pgs->first_pg_off);
+		pgs->first_pg_off = 0;
+		for (j = 0; j < pgs->npgs - 1; j++)
+			pgs->pa[j] = pgs->pa[j + 1];
+		pgs->npgs--;
+	}
+	nd->nd_dextpg = 0;
+	if (nd->nd_dextpgsiz > 0) {
+		j = mbuf_ext_pg_len(pgs, 0, pgs->first_pg_off);
+		j -= nd->nd_dextpgsiz;
+		pgs->first_pg_off += j;
+		nd->nd_md->m_len -= j;
+		if (nd->nd_dextpg == pgs->npgs - 1)
+			pgs->last_pg_len -= j;
+	}
+}
+
+/*
+ * Trim the ext_pgs mbuf back to "tlen" bytes in length.
+ */
+void
+nfsm_trimback_extpgs(struct mbuf *m, int len)
+{
+	struct mbuf_ext_pgs *pgs;
+	vm_page_t pg;
+	int i, j, pgno, tlen;
+
+	pgs = m->m_ext.ext_pgs;
+	pgno = 0;
+	tlen = len;
+	while (len > 0 && pgno < pgs->npgs) {
+		if (pgno == 0)
+			i = mbuf_ext_pg_len(pgs, pgno,
+			    pgs->first_pg_off);
+		else
+			i = mbuf_ext_pg_len(pgs, pgno, 0);
+		if (len <= i) {
+			/* Free pages past pgno. */
+			for (j = pgno + 1; j < pgs->npgs; j++) {
+				pg = PHYS_TO_VM_PAGE(pgs->pa[j]);
+				vm_page_unwire_noq(pg);
+				vm_page_free(pg);
+			}
+			pgs->npgs = pgno + 1;
+			pgs->last_pg_len = len;
+		}
+		len -= i;
+		pgno++;
+	}
+	m->m_len = tlen;
 }
 

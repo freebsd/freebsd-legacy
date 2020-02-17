@@ -645,7 +645,12 @@ struct nfsrv_descript {
 	NFSSOCKADDR_T		nd_nam;		/* and socket addr */
 	NFSSOCKADDR_T		nd_nam2;	/* return socket addr */
 	caddr_t			nd_dpos;	/* Current dissect pos */
+	int			nd_dextpg;	/* Current ext_pgs page */
+	int			nd_dextpgsiz;	/* Bytes left in page */
 	caddr_t			nd_bpos;	/* Current build pos */
+	int			nd_bextpg;	/* Current ext_pgs page */
+	int			nd_bextpgsiz;	/* Bytes left in page */
+	int			nd_maxextsiz;	/* Max ext_pgs mbuf size */
 	u_int64_t		nd_flag;	/* nd_flag */
 	u_int16_t		nd_procnum;	/* RPC # */
 	u_int32_t		nd_repstat;	/* Reply status */
@@ -711,6 +716,8 @@ struct nfsrv_descript {
 #define	ND_SAVEDCURSTATEID	0x100000000
 #define	ND_HASSLOTID		0x200000000
 #define	ND_NFSV42		0x400000000
+#define	ND_EXTPG		0x800000000
+#define	ND_TLS			0x1000000000
 
 /*
  * ND_GSS should be the "or" of all GSS type authentications.

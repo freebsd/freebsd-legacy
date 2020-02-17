@@ -285,7 +285,8 @@ newnfs_connect(struct nfsmount *nmp, struct nfssockreq *nrp,
 			CLNT_CONTROL(client, CLSET_INTERRUPTIBLE, &one);
 		if ((nmp->nm_flag & NFSMNT_RESVPORT))
 			CLNT_CONTROL(client, CLSET_PRIVPORT, &one);
-CLNT_CONTROL(client, CLSET_TLS, &one);
+		if (NFSHASTLS(nmp))
+			CLNT_CONTROL(client, CLSET_TLS, &one);
 		if (NFSHASSOFT(nmp)) {
 			if (nmp->nm_sotype == SOCK_DGRAM)
 				/*
@@ -897,9 +898,11 @@ tryagain:
 	 * These could cause pointer alignment problems, so copy them to
 	 * well aligned mbufs.
 	 */
+#ifdef notnow
 	newnfs_realign(&nd->nd_mrep, M_WAITOK);
+#endif
 	nd->nd_md = nd->nd_mrep;
-	nd->nd_dpos = NFSMTOD(nd->nd_md, caddr_t);
+	nfsm_set(nd, false);
 	nd->nd_repstat = 0;
 	if (nd->nd_procnum != NFSPROC_NULL &&
 	    nd->nd_procnum != NFSV4PROC_CBNULL) {

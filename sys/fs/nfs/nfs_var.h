@@ -312,21 +312,21 @@ void nfsrc_trimcache(uint64_t, uint32_t, int);
 
 /* nfs_commonsubs.c */
 void nfscl_reqstart(struct nfsrv_descript *, int, struct nfsmount *,
-    u_int8_t *, int, u_int32_t **, struct nfsclsession *, int, int);
+    u_int8_t *, int, u_int32_t **, struct nfsclsession *, int, int, bool);
 void nfsm_stateidtom(struct nfsrv_descript *, nfsv4stateid_t *, int);
 void nfscl_fillsattr(struct nfsrv_descript *, struct vattr *,
       vnode_t, int, u_int32_t);
 void newnfs_init(void);
 int nfsaddr_match(int, union nethostaddr *, NFSSOCKADDR_T);
 int nfsaddr2_match(NFSSOCKADDR_T, NFSSOCKADDR_T);
+struct mbuf *nfsm_add_ext_pgs(struct mbuf *, int, int *);
 int nfsm_strtom(struct nfsrv_descript *, const char *, int);
 int nfsm_mbufuio(struct nfsrv_descript *, struct uio *, int);
 int nfsm_fhtom(struct nfsrv_descript *, u_int8_t *, int, int);
 int nfsm_advance(struct nfsrv_descript *, int, int);
 void *nfsm_dissct(struct nfsrv_descript *, int, int);
-void newnfs_trimleading(struct nfsrv_descript *);
-void newnfs_trimtrailing(struct nfsrv_descript *, mbuf_t,
-    caddr_t);
+void nfsm_trimtrailing(struct nfsrv_descript *, mbuf_t,
+    caddr_t, int, int);
 void newnfs_copycred(struct nfscred *, struct ucred *);
 void newnfs_copyincred(struct ucred *, struct nfscred *);
 int nfsrv_dissectacl(struct nfsrv_descript *, NFSACL_T *, int *,
@@ -361,10 +361,14 @@ int nfsv4_sequencelookup(struct nfsmount *, struct nfsclsession *, int *,
 void nfsv4_freeslot(struct nfsclsession *, int);
 struct ucred *nfsrv_getgrpscred(struct ucred *);
 struct nfsdevice *nfsv4_findmirror(struct nfsmount *);
+int nfsm_set(struct nfsrv_descript *, bool);
+bool nfsm_shiftnext(struct nfsrv_descript *, int *);
+void nfsm_trimatpos_extpgs(struct nfsrv_descript *);
+void nfsm_trimback_extpgs(struct mbuf *, int);
 
 /* nfs_clcomsubs.c */
 void nfsm_uiombuf(struct nfsrv_descript *, struct uio *, int);
-struct mbuf *nfsm_uiombuflist(struct uio *, int, struct mbuf **, char **);
+struct mbuf *nfsm_uiombuflist(int, int, struct uio *, int, struct mbuf **, char **);
 nfsuint64 *nfscl_getcookie(struct nfsnode *, off_t off, int);
 u_int8_t *nfscl_getmyip(struct nfsmount *, struct in6_addr *, int *);
 int nfsm_getfh(struct nfsrv_descript *, struct nfsfh **);
@@ -390,7 +394,7 @@ int nfsv4_fillattr(struct nfsrv_descript *, struct mount *, vnode_t, NFSACL_T *,
     struct vattr *, fhandle_t *, int, nfsattrbit_t *,
     struct ucred *, NFSPROC_T *, int, int, int, int, uint64_t, struct statfs *);
 void nfsrv_fillattr(struct nfsrv_descript *, struct nfsvattr *);
-void nfsrv_adj(mbuf_t, int, int);
+struct mbuf *nfsrv_adj(struct mbuf *, int, int);
 void nfsrv_postopattr(struct nfsrv_descript *, int, struct nfsvattr *);
 int nfsd_errmap(struct nfsrv_descript *);
 void nfsv4_uidtostr(uid_t, u_char **, int *);
@@ -679,12 +683,12 @@ int nfsvno_namei(struct nfsrv_descript *, struct nameidata *,
     vnode_t, int, struct nfsexstuff *, NFSPROC_T *, vnode_t *);
 void nfsvno_setpathbuf(struct nameidata *, char **, u_long **);
 void nfsvno_relpathbuf(struct nameidata *);
-int nfsvno_readlink(vnode_t, struct ucred *, NFSPROC_T *, mbuf_t *,
+int nfsvno_readlink(vnode_t, struct ucred *, int, NFSPROC_T *, mbuf_t *,
     mbuf_t *, int *);
-int nfsvno_read(vnode_t, off_t, int, struct ucred *, NFSPROC_T *,
+int nfsvno_read(vnode_t, off_t, int, struct ucred *, int, NFSPROC_T *,
     mbuf_t *, mbuf_t *);
-int nfsvno_write(vnode_t, off_t, int, int *, mbuf_t, char *, struct ucred *,
-    NFSPROC_T *);
+int nfsvno_write(vnode_t, off_t, int, int *, mbuf_t, char *, int, int,
+    struct ucred *, NFSPROC_T *);
 int nfsvno_createsub(struct nfsrv_descript *, struct nameidata *,
     vnode_t *, struct nfsvattr *, int *, int32_t *, NFSDEV_T,
     struct nfsexstuff *);
@@ -747,9 +751,9 @@ int nfsvno_seek(struct nfsrv_descript *, struct vnode *, u_long, off_t *, int,
     bool *, struct ucred *, NFSPROC_T *);
 int nfsvno_allocate(struct vnode *, off_t, off_t, struct ucred *, NFSPROC_T *);
 int nfsvno_getxattr(struct vnode *, char *, uint32_t, struct ucred *,
-    struct thread *, struct mbuf **, struct mbuf **, int *);
+    uint64_t, int, struct thread *, struct mbuf **, struct mbuf **, int *);
 int nfsvno_setxattr(struct vnode *, char *, int, struct mbuf *, char *,
-    struct ucred *, struct thread *);
+    int, int, struct ucred *, struct thread *);
 int nfsvno_rmxattr(struct nfsrv_descript *, struct vnode *, char *,
     struct ucred *, struct thread *);
 int nfsvno_listxattr(struct vnode *, uint64_t, struct ucred *, struct thread *,

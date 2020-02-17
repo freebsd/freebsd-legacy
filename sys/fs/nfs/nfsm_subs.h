@@ -57,6 +57,11 @@
  * Replace most of the macro with an inline function, to minimize
  * the machine code. The inline functions in lower case can be called
  * directly, bypassing the macro.
+ * For ND_EXTPG, if there is not enough contiguous space left in
+ * the mbuf page, allocate a regular mbuf.  The data in these regular
+ * mbufs will need to be copied into pages later, since the data must
+ * be filled pages.  This should only happen after a write request or
+ * read reply has been filled into the mbuf list.
  */
 static __inline void *
 nfsm_build(struct nfsrv_descript *nd, int siz)
@@ -64,14 +69,28 @@ nfsm_build(struct nfsrv_descript *nd, int siz)
 	void *retp;
 	struct mbuf *mb2;
 
-	if (siz > M_TRAILINGSPACE(nd->nd_mb)) {
+	if ((nd->nd_flag & ND_EXTPG) == 0 &&
+	    siz > M_TRAILINGSPACE(nd->nd_mb)) {
 		NFSMCLGET(mb2, M_NOWAIT);
 		if (siz > MLEN)
 			panic("build > MLEN");
-		mbuf_setlen(mb2, 0);
-		nd->nd_bpos = NFSMTOD(mb2, caddr_t);
+		mb2->m_len = 0;
+		nd->nd_bpos = mtod(mb2, char *);
 		nd->nd_mb->m_next = mb2;
 		nd->nd_mb = mb2;
+	} else if ((nd->nd_flag & ND_EXTPG) != 0) {
+		if (siz > nd->nd_bextpgsiz) {
+			mb2 = mb_alloc_ext_plus_pages(PAGE_SIZE, M_WAITOK,
+			    false, mb_free_mext_pgs);
+			nd->nd_bpos = (char *)(void *)
+			    PHYS_TO_DMAP(mb2->m_ext.ext_pgs->pa[0]);
+			nd->nd_bextpg = 0;
+			nd->nd_bextpgsiz = PAGE_SIZE - siz;
+			nd->nd_mb->m_next = mb2;
+			nd->nd_mb = mb2;
+		} else
+			nd->nd_bextpgsiz -= siz;
+		nd->nd_mb->m_ext.ext_pgs->last_pg_len += siz;
 	}
 	retp = (void *)(nd->nd_bpos);
 	nd->nd_mb->m_len += siz;
@@ -87,12 +106,22 @@ nfsm_dissect(struct nfsrv_descript *nd, int siz)
 	int tt1; 
 	void *retp;
 
-	tt1 = NFSMTOD(nd->nd_md, caddr_t) + nd->nd_md->m_len - nd->nd_dpos; 
-	if (tt1 >= siz) { 
-		retp = (void *)nd->nd_dpos; 
-		nd->nd_dpos += siz; 
-	} else { 
-		retp = nfsm_dissct(nd, siz, M_WAITOK); 
+	if ((nd->nd_md->m_flags & (M_EXT | M_NOMAP)) ==
+	    (M_EXT | M_NOMAP)) {
+		if (nd->nd_dextpgsiz >= siz) {
+			retp = (void *)nd->nd_dpos;
+			nd->nd_dpos += siz;
+			nd->nd_dextpgsiz -= siz;
+		} else
+			retp = nfsm_dissct(nd, siz, M_WAITOK);
+	} else {
+		tt1 = mtod(nd->nd_md, char *) + nd->nd_md->m_len -
+		    nd->nd_dpos; 
+		if (tt1 >= siz) { 
+			retp = (void *)nd->nd_dpos; 
+			nd->nd_dpos += siz; 
+		} else 
+			retp = nfsm_dissct(nd, siz, M_WAITOK); 
 	}
 	return (retp);
 }
@@ -103,12 +132,22 @@ nfsm_dissect_nonblock(struct nfsrv_descript *nd, int siz)
 	int tt1; 
 	void *retp;
 
-	tt1 = NFSMTOD(nd->nd_md, caddr_t) + nd->nd_md->m_len - nd->nd_dpos; 
-	if (tt1 >= siz) { 
-		retp = (void *)nd->nd_dpos; 
-		nd->nd_dpos += siz; 
-	} else { 
-		retp = nfsm_dissct(nd, siz, M_NOWAIT); 
+	if ((nd->nd_md->m_flags & (M_EXT | M_NOMAP)) ==
+	    (M_EXT | M_NOMAP)) {
+		if (nd->nd_dextpgsiz >= siz) {
+			retp = (void *)nd->nd_dpos;
+			nd->nd_dpos += siz;
+			nd->nd_dextpgsiz -= siz;
+		} else
+			retp = nfsm_dissct(nd, siz, M_NOWAIT);
+	} else {
+		tt1 = mtod(nd->nd_md, char *) + nd->nd_md->m_len -
+		    nd->nd_dpos; 
+		if (tt1 >= siz) { 
+			retp = (void *)nd->nd_dpos; 
+			nd->nd_dpos += siz; 
+		} else 
+			retp = nfsm_dissct(nd, siz, M_NOWAIT); 
 	}
 	return (retp);
 }
