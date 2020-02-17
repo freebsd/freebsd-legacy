@@ -1270,62 +1270,96 @@ static short *nfsrv_v4errmap[] = {
 };
 
 /*
- * A fiddled version of m_adj() that ensures null fill to a long
- * boundary and only trims off the back end
+ * Trim tlen bytes off the end of the mbuf list and then ensure
+ * the end of the last mbuf is nul filled to a long boundary,
+ * as indicated by the value of "nul".
+ * Return the last mbuf in the updated list and free and mbufs
+ * that follow it in the original list.
+ * This is somewhat different than the old nfsrv_adj() with
+ * support for ext_pgs mbufs.  It frees the remaining mbufs
+ * instead of setting them 0 length, since lists of ext_pgs
+ * mbufs are all expected to be non-empty.
  */
-APPLESTATIC void
-nfsrv_adj(mbuf_t mp, int len, int nul)
+struct mbuf *
+nfsrv_adj(struct mbuf *mp, int len, int nul)
 {
-	mbuf_t m;
-	int count, i;
+	struct mbuf *m, *m2;
+	struct mbuf_ext_pgs *pgs;
+	vm_page_t pg;
+	int i, lastlen, pgno, plen, tlen, trim;
+	uint16_t off;
 	char *cp;
 
 	/*
-	 * Trim from tail.  Scan the mbuf chain,
-	 * calculating its length and finding the last mbuf.
-	 * If the adjustment only affects this mbuf, then just
-	 * adjust and return.  Otherwise, rescan and truncate
-	 * after the remaining size.
+	 * Find the last mbuf after adjustment and
+	 * how much it needs to be adjusted by.
 	 */
-	count = 0;
+	tlen = 0;
 	m = mp;
 	for (;;) {
-		count += mbuf_len(m);
-		if (mbuf_next(m) == NULL)
+		tlen += m->m_len;
+		if (m->m_next == NULL)
 			break;
-		m = mbuf_next(m);
+		m = m->m_next;
 	}
-	if (mbuf_len(m) > len) {
-		mbuf_setlen(m, mbuf_len(m) - len);
-		if (nul > 0) {
-			cp = NFSMTOD(m, caddr_t) + mbuf_len(m) - nul;
-			for (i = 0; i < nul; i++)
-				*cp++ = '\0';
+
+	/* m is now the last mbuf and tlen the total length. */
+	if (len >= m->m_len) {
+		/* Need to trim away the last mbuf(s). */
+		i = tlen - len;
+		m = mp;
+		for (;;) {
+			if (m->m_len >= i)
+				break;
+			i -= m->m_len;
+			m = m->m_next;
 		}
-		return;
-	}
-	count -= len;
-	if (count < 0)
-		count = 0;
-	/*
-	 * Correct length for chain is "count".
-	 * Find the mbuf with last data, adjust its length,
-	 * and toss data from remaining mbufs on chain.
-	 */
-	for (m = mp; m; m = mbuf_next(m)) {
-		if (mbuf_len(m) >= count) {
-			mbuf_setlen(m, count);
-			if (nul > 0) {
-				cp = NFSMTOD(m, caddr_t) + mbuf_len(m) - nul;
-				for (i = 0; i < nul; i++)
-					*cp++ = '\0';
+		lastlen = i;
+	} else
+		lastlen = m->m_len - len;
+
+	/* Adjust the last mbuf. */
+	if ((m->m_flags & (M_EXT | M_NOMAP)) ==
+	    (M_EXT | M_NOMAP)) {
+		pgs = m->m_ext.ext_pgs;
+		pgno = pgs->npgs - 1;
+		off = (pgno == 0) ? pgs->first_pg_off : 0;
+		plen = mbuf_ext_pg_len(pgs, pgno, off);
+		if (m->m_len > lastlen) {
+			/* Trim this mbuf. */
+			trim = m->m_len - lastlen;
+			while (trim >= plen) {
+				/* Free page. */
+				pg = PHYS_TO_VM_PAGE(pgs->pa[pgno]);
+				vm_page_unwire_noq(pg);
+				vm_page_free(pg);
+				trim -= plen;
+				pgs->npgs--;
+				pgno--;
+				off = (pgno == 0) ? pgs->first_pg_off : 0;
+				plen = mbuf_ext_pg_len(pgs, pgno, off);
 			}
-			break;
+			plen -= trim;
+			pgs->last_pg_len = plen;
+			m->m_len = lastlen;
 		}
-		count -= mbuf_len(m);
+		cp = (char *)(void *)PHYS_TO_DMAP(pgs->pa[pgno]);
+		cp += off + plen - nul;
+	} else {
+		m->m_len = lastlen;
+		cp = mtod(m, char *) + m->m_len - nul;
 	}
-	for (m = mbuf_next(m); m; m = mbuf_next(m))
-		mbuf_setlen(m, 0);
+
+	/* Write the nul bytes. */
+	for (i = 0; i < nul; i++)
+		*cp++ = '\0';
+
+	/* Free up any mbufs past "m". */
+	m2 = m->m_next;
+	m->m_next = NULL;
+	if (m2 != NULL)
+		m_freem(m2);
+	return (m);
 }
 
 /*
@@ -1837,8 +1871,9 @@ APPLESTATIC int
 nfsrv_parsename(struct nfsrv_descript *nd, char *bufp, u_long *hashp,
     NFSPATHLEN_T *outlenp)
 {
+	struct mbuf_ext_pgs *pgs;
+	vm_page_t pg;
 	char *fromcp, *tocp, val = '\0';
-	mbuf_t md;
 	int i;
 	int rem, len, error = 0, pubtype = 0, outlen = 0, percent = 0;
 	char digit;
@@ -1853,177 +1888,194 @@ nfsrv_parsename(struct nfsrv_descript *nd, char *bufp, u_long *hashp,
 	 * Otherwise, get the component name.
 	 */
 	if ((nd->nd_flag & ND_NFSV4) && nd->nd_procnum == NFSV4OP_LOOKUPP) {
-	    *tocp++ = '.';
-	    hash += ((u_char)'.');
-	    *tocp++ = '.';
-	    hash += ((u_char)'.');
-	    outlen = 2;
+		*tocp++ = '.';
+		hash += ((u_char)'.');
+		*tocp++ = '.';
+		hash += ((u_char)'.');
+		outlen = 2;
 	} else {
-	    /*
-	     * First, get the name length.
-	     */
-	    NFSM_DISSECT(tl, u_int32_t *, NFSX_UNSIGNED);
-	    len = fxdr_unsigned(int, *tl);
-	    if (len > NFS_MAXNAMLEN) {
-		nd->nd_repstat = NFSERR_NAMETOL;
-		error = 0;
-		goto nfsmout;
-	    } else if (len <= 0) {
-		nd->nd_repstat = NFSERR_INVAL;
-		error = 0;
-		goto nfsmout;
-	    }
-
-	    /*
-	     * Now, copy the component name into the buffer.
-	     */
-	    fromcp = nd->nd_dpos;
-	    md = nd->nd_md;
-	    rem = NFSMTOD(md, caddr_t) + mbuf_len(md) - fromcp;
-	    for (i = 0; i < len; i++) {
-		while (rem == 0) {
-			md = mbuf_next(md);
-			if (md == NULL) {
-				error = EBADRPC;
-				goto nfsmout;
-			}
-			fromcp = NFSMTOD(md, caddr_t);
-			rem = mbuf_len(md);
-		}
-		if (*fromcp == '\0') {
-			nd->nd_repstat = EACCES;
+		/*
+		 * First, get the name length.
+		 */
+		NFSM_DISSECT(tl, u_int32_t *, NFSX_UNSIGNED);
+		len = fxdr_unsigned(int, *tl);
+		if (len > NFS_MAXNAMLEN) {
+			nd->nd_repstat = NFSERR_NAMETOL;
+			error = 0;
+			goto nfsmout;
+		} else if (len <= 0) {
+			nd->nd_repstat = NFSERR_INVAL;
 			error = 0;
 			goto nfsmout;
 		}
+
 		/*
-		 * For lookups on the public filehandle, do some special
-		 * processing on the name. (The public file handle is the
-		 * root of the public file system for this server.)
+		 * Now, copy the component name into the buffer.
 		 */
-		if (nd->nd_flag & ND_PUBLOOKUP) {
-			/*
-			 * If the first char is ASCII, it is a canonical
-			 * path, otherwise it is a native path. (RFC2054
-			 * doesn't actually state what it is if the first
-			 * char isn't ASCII or 0x80, so I assume native.)
-			 * pubtype == 1 -> native path
-			 * pubtype == 2 -> canonical path
-			 */
-			if (i == 0) {
-				if (*fromcp & 0x80) {
-					/*
-					 * Since RFC2054 doesn't indicate
-					 * that a native path of just 0x80
-					 * isn't allowed, I'll replace the
-					 * 0x80 with '/' instead of just
-					 * throwing it away.
-					 */
-					*fromcp = '/';
-					pubtype = 1;
+		fromcp = nd->nd_dpos;
+		if ((nd->nd_md->m_flags & (M_EXT | M_NOMAP)) ==
+		    (M_EXT | M_NOMAP))
+			rem = nd->nd_dextpgsiz;
+		else
+			rem = mtod(nd->nd_md, char *) + nd->nd_md->m_len -
+			    fromcp;
+		for (i = 0; i < len; i++) {
+			while (rem == 0) {
+				if ((nd->nd_md->m_flags & (M_EXT | M_NOMAP)) ==
+				    (M_EXT | M_NOMAP) && nd->nd_dextpg <
+				    nd->nd_md->m_ext.ext_pgs->npgs - 1) {
+					pgs = nd->nd_md->m_ext.ext_pgs;
+					pg = PHYS_TO_VM_PAGE(
+					    pgs->pa[nd->nd_dextpg]);
+					vm_page_unwire_noq(pg);
+					vm_page_free(pg);
+					for (i = nd->nd_bextpg;
+					    i < pgs->npgs - 1; i++)
+						pgs->pa[i] = pgs->pa[i + 1];
+					pgs->npgs--;
+					if (nd->nd_dextpg == 0)
+						pgs->first_pg_off = 0;
+					fromcp = nd->nd_dpos = (char *)(void *)
+					    PHYS_TO_DMAP(pgs->pa[nd->nd_dextpg]);
+					rem = nd->nd_dextpgsiz =
+					    mbuf_ext_pg_len(pgs, nd->nd_dextpg, 0);
 				} else {
-					pubtype = 2;
+					if (!nfsm_shiftnext(nd, &rem)) {
+						error = EBADRPC;
+						goto nfsmout;
+					}
+					fromcp = nd->nd_dpos;
 				}
 			}
-			/*
-			 * '/' only allowed in a native path
-			 */
-			if (*fromcp == '/' && pubtype != 1) {
+			if (*fromcp == '\0') {
 				nd->nd_repstat = EACCES;
 				error = 0;
 				goto nfsmout;
 			}
-
 			/*
-			 * For the special case of 2 hex digits after a
-			 * '%' in an absolute path, calculate the value.
-			 * percent == 1 -> indicates "get first hex digit"
-			 * percent == 2 -> indicates "get second hex digit"
+			 * For lookups on the public filehandle, do some special
+			 * processing on the name. (The public file handle is the
+			 * root of the public file system for this server.)
 			 */
-			if (percent > 0) {
-				digit = nfsrv_hexdigit(*fromcp, &error);
-				if (error) {
+			if (nd->nd_flag & ND_PUBLOOKUP) {
+				/*
+				 * If the first char is ASCII, it is a canonical
+				 * path, otherwise it is a native path. (RFC2054
+				 * doesn't actually state what it is if the first
+				 * char isn't ASCII or 0x80, so I assume native.)
+				 * pubtype == 1 -> native path
+				 * pubtype == 2 -> canonical path
+				 */
+				if (i == 0) {
+					if (*fromcp & 0x80) {
+						/*
+						 * Since RFC2054 doesn't indicate
+						 * that a native path of just 0x80
+						 * isn't allowed, I'll replace the
+						 * 0x80 with '/' instead of just
+						 * throwing it away.
+						 */
+						*fromcp = '/';
+						pubtype = 1;
+					} else {
+						pubtype = 2;
+					}
+				}
+				/*
+				 * '/' only allowed in a native path
+				 */
+				if (*fromcp == '/' && pubtype != 1) {
 					nd->nd_repstat = EACCES;
 					error = 0;
 					goto nfsmout;
 				}
-				if (percent == 1) {
-					val = (digit << 4);
-					percent = 2;
-				} else {
-					val += digit;
-					percent = 0;
-					*tocp++ = val;
-					hash += ((u_char)val);
-					outlen++;
-				}
-			} else {
-				if (*fromcp == '%' && pubtype == 2) {
-					/*
-					 * Must be followed by 2 hex digits
-					 */
-					if ((len - i) < 3) {
+
+				/*
+				 * For the special case of 2 hex digits after a
+				 * '%' in an absolute path, calculate the value.
+				 * percent == 1 -> indicates "get first hex digit"
+				 * percent == 2 -> indicates "get second hex digit"
+				 */
+				if (percent > 0) {
+					digit = nfsrv_hexdigit(*fromcp, &error);
+					if (error) {
 						nd->nd_repstat = EACCES;
 						error = 0;
 						goto nfsmout;
 					}
-					percent = 1;
+					if (percent == 1) {
+						val = (digit << 4);
+						percent = 2;
+					} else {
+						val += digit;
+						percent = 0;
+						*tocp++ = val;
+						hash += ((u_char)val);
+						outlen++;
+					}
 				} else {
-					*tocp++ = *fromcp;
-					hash += ((u_char)*fromcp);
-					outlen++;
+					if (*fromcp == '%' && pubtype == 2) {
+						/*
+						 * Must be followed by 2 hex digits
+						 */
+						if ((len - i) < 3) {
+							nd->nd_repstat = EACCES;
+							error = 0;
+							goto nfsmout;
+						}
+						percent = 1;
+					} else {
+						*tocp++ = *fromcp;
+						hash += ((u_char)*fromcp);
+						outlen++;
+					}
 				}
+			} else {
+				/*
+				 * Normal, non lookup on public, name.
+				 */
+				if (*fromcp == '/') {
+					if (nd->nd_flag & ND_NFSV4)
+						nd->nd_repstat = NFSERR_BADNAME;
+					else
+						nd->nd_repstat = EACCES;
+					error = 0;
+					goto nfsmout;
+				}
+				hash += ((u_char)*fromcp);
+				*tocp++ = *fromcp;
+				outlen++;
 			}
-		} else {
-			/*
-			 * Normal, non lookup on public, name.
-			 */
-			if (*fromcp == '/') {
-				if (nd->nd_flag & ND_NFSV4)
-					nd->nd_repstat = NFSERR_BADNAME;
-				else
-					nd->nd_repstat = EACCES;
-				error = 0;
-				goto nfsmout;
-			}
-			hash += ((u_char)*fromcp);
-			*tocp++ = *fromcp;
-			outlen++;
+			fromcp++;
+			rem--;
 		}
-		fromcp++;
-		rem--;
-	    }
-	    nd->nd_md = md;
-	    nd->nd_dpos = fromcp;
-	    i = NFSM_RNDUP(len) - len;
-	    if (i > 0) {
-		if (rem >= i) {
-			nd->nd_dpos += i;
-		} else {
+		nd->nd_dpos = fromcp;
+		i = NFSM_RNDUP(len) - len;
+		if (i > 0) {
 			error = nfsm_advance(nd, i, rem);
 			if (error)
 				goto nfsmout;
 		}
-	    }
 
-	    /*
-	     * For v4, don't allow lookups of '.' or '..' and
-	     * also check for non-utf8 strings.
-	     */
-	    if (nd->nd_flag & ND_NFSV4) {
-		if ((outlen == 1 && bufp[0] == '.') ||
-		    (outlen == 2 && bufp[0] == '.' &&
-		     bufp[1] == '.')) {
-		    nd->nd_repstat = NFSERR_BADNAME;
-		    error = 0;
-		    goto nfsmout;
+		/*
+		 * For v4, don't allow lookups of '.' or '..' and
+		 * also check for non-utf8 strings.
+		 */
+		if (nd->nd_flag & ND_NFSV4) {
+			if ((outlen == 1 && bufp[0] == '.') ||
+			    (outlen == 2 && bufp[0] == '.' &&
+			     bufp[1] == '.')) {
+				nd->nd_repstat = NFSERR_BADNAME;
+				error = 0;
+				goto nfsmout;
+			}
+			if (enable_checkutf8 == 1 &&
+			    nfsrv_checkutf8((u_int8_t *)bufp, outlen)) {
+				nd->nd_repstat = NFSERR_INVAL;
+				error = 0;
+				goto nfsmout;
+			}
 		}
-		if (enable_checkutf8 == 1 &&
-		    nfsrv_checkutf8((u_int8_t *)bufp, outlen)) {
-		    nd->nd_repstat = NFSERR_INVAL;
-		    error = 0;
-		    goto nfsmout;
-		}
-	    }
 	}
 	*tocp = '\0';
 	*outlenp = (size_t)outlen;

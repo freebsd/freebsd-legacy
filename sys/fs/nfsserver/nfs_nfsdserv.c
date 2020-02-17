@@ -68,6 +68,7 @@ extern u_long sb_max_adj;
 extern int nfsrv_pnfsatime;
 extern int nfsrv_maxpnfsmirror;
 extern int nfs_maxcopyrange;
+extern bool nfs_use_ext_pgs;
 #endif	/* !APPLEKEXT */
 
 static int	nfs_async = 0;
@@ -665,6 +666,8 @@ nfsrvd_readlink(struct nfsrv_descript *nd, __unused int isdgram,
 	int getret = 1, len;
 	struct nfsvattr nva;
 	struct thread *p = curthread;
+	struct mbuf_ext_pgs *pgs;
+	uint16_t off;
 
 	if (nd->nd_repstat) {
 		nfsrv_postopattr(nd, getret, &nva);
@@ -676,9 +679,14 @@ nfsrvd_readlink(struct nfsrv_descript *nd, __unused int isdgram,
 		else
 			nd->nd_repstat = EINVAL;
 	}
-	if (!nd->nd_repstat)
-		nd->nd_repstat = nfsvno_readlink(vp, nd->nd_cred, p,
-		    &mp, &mpend, &len);
+	if (nd->nd_repstat == 0) {
+		if ((nd->nd_flag & ND_EXTPG) != 0)
+			nd->nd_repstat = nfsvno_readlink(vp, nd->nd_cred,
+			    nd->nd_maxextsiz, p, &mp, &mpend, &len);
+		else
+			nd->nd_repstat = nfsvno_readlink(vp, nd->nd_cred,
+			    0, p, &mp, &mpend, &len);
+	}
 	if (nd->nd_flag & ND_NFSV3)
 		getret = nfsvno_getattr(vp, &nva, nd, p, 1, NULL);
 	vput(vp);
@@ -688,9 +696,21 @@ nfsrvd_readlink(struct nfsrv_descript *nd, __unused int isdgram,
 		goto out;
 	NFSM_BUILD(tl, u_int32_t *, NFSX_UNSIGNED);
 	*tl = txdr_unsigned(len);
-	mbuf_setnext(nd->nd_mb, mp);
-	nd->nd_mb = mpend;
-	nd->nd_bpos = NFSMTOD(mpend, caddr_t) + mbuf_len(mpend);
+	if (mp != NULL) {
+		nd->nd_mb->m_next = mp;
+		nd->nd_mb = mpend;
+		if ((mpend->m_flags & (M_EXT | M_NOMAP)) ==
+		    (M_EXT | M_NOMAP)) {
+			pgs = mpend->m_ext.ext_pgs;
+			nd->nd_bextpg = pgs->npgs - 1;
+			nd->nd_bpos = (char *)(void *)
+			    PHYS_TO_DMAP(pgs->pa[nd->nd_bextpg]);
+			off = (nd->nd_bextpg == 0) ? pgs->first_pg_off : 0;
+			nd->nd_bpos += off + pgs->last_pg_len;
+			nd->nd_bextpgsiz = PAGE_SIZE - pgs->last_pg_len - off;
+		} else
+			nd->nd_bpos = mtod(mpend, char *) + mpend->m_len;
+	}
 
 out:
 	NFSEXITCODE2(0, nd);
@@ -714,6 +734,8 @@ nfsrvd_read(struct nfsrv_descript *nd, __unused int isdgram,
 	nfsv4stateid_t stateid;
 	nfsquad_t clientid;
 	struct thread *p = curthread;
+	struct mbuf_ext_pgs *pgs;
+	uint16_t poff;
 
 	if (nd->nd_repstat) {
 		nfsrv_postopattr(nd, getret, &nva);
@@ -835,8 +857,18 @@ nfsrvd_read(struct nfsrv_descript *nd, __unused int isdgram,
 		cnt = reqlen;
 	m3 = NULL;
 	if (cnt > 0) {
-		nd->nd_repstat = nfsvno_read(vp, off, cnt, nd->nd_cred, p,
-		    &m3, &m2);
+		/*
+		 * If the cnt is larger than MCLBYTES, use ext_pgs if
+		 * possible.
+		 * Always use ext_pgs if ND_EXTPG is set.
+		 */
+		if ((nd->nd_flag & ND_EXTPG) != 0 || (PMAP_HAS_DMAP != 0 &&
+		    ((nd->nd_flag & ND_TLS) != 0 || nfs_use_ext_pgs)))
+			nd->nd_repstat = nfsvno_read(vp, off, cnt, nd->nd_cred,
+			    nd->nd_maxextsiz, p, &m3, &m2);
+		else
+			nd->nd_repstat = nfsvno_read(vp, off, cnt, nd->nd_cred,
+			    0, p, &m3, &m2);
 		if (!(nd->nd_flag & ND_NFSV4)) {
 			getret = nfsvno_getattr(vp, &nva, nd, p, 1, NULL);
 			if (!nd->nd_repstat)
@@ -869,9 +901,20 @@ nfsrvd_read(struct nfsrv_descript *nd, __unused int isdgram,
 	}
 	*tl = txdr_unsigned(cnt);
 	if (m3) {
-		mbuf_setnext(nd->nd_mb, m3);
+		nd->nd_mb->m_next = m3;
 		nd->nd_mb = m2;
-		nd->nd_bpos = NFSMTOD(m2, caddr_t) + mbuf_len(m2);
+		if ((m2->m_flags & (M_EXT | M_NOMAP)) ==
+		    (M_EXT | M_NOMAP)) {
+			nd->nd_flag |= ND_EXTPG;
+			pgs = m2->m_ext.ext_pgs;
+			nd->nd_bextpg = pgs->npgs - 1;
+			nd->nd_bpos = (char *)(void *)
+			    PHYS_TO_DMAP(pgs->pa[nd->nd_bextpg]);
+			poff = (nd->nd_bextpg == 0) ? pgs->first_pg_off : 0;
+			nd->nd_bpos += poff + pgs->last_pg_len;
+			nd->nd_bextpgsiz = PAGE_SIZE - pgs->last_pg_len - poff;
+		} else
+			nd->nd_bpos = mtod(m2, char *) + m2->m_len;
 	}
 
 out:
@@ -1014,7 +1057,8 @@ nfsrvd_write(struct nfsrv_descript *nd, __unused int isdgram,
 	 */
 	if (retlen > 0) {
 		nd->nd_repstat = nfsvno_write(vp, off, retlen, &stable,
-		    nd->nd_md, nd->nd_dpos, nd->nd_cred, p);
+		    nd->nd_md, nd->nd_dpos, nd->nd_dextpg, nd->nd_dextpgsiz,
+		    nd->nd_cred, p);
 		error = nfsm_advance(nd, NFSM_RNDUP(retlen), -1);
 		if (error)
 			goto nfsmout;
@@ -5509,6 +5553,8 @@ nfsrvd_getxattr(struct nfsrv_descript *nd, __unused int isdgram,
 	int error, len;
 	char *name;
 	struct thread *p = curthread;
+	struct mbuf_ext_pgs *pgs;
+	uint16_t off;
 
 	error = 0;
 	if (nfs_rootfhset == 0 || nfsd_checkrootexp(nd) != 0) {
@@ -5528,8 +5574,9 @@ nfsrvd_getxattr(struct nfsrv_descript *nd, __unused int isdgram,
 	name = malloc(len + 1, M_TEMP, M_WAITOK);
 	nd->nd_repstat = nfsrv_mtostr(nd, name, len);
 	if (nd->nd_repstat == 0)
-		nd->nd_repstat = nfsvno_getxattr(vp, name, nd->nd_maxresp,
-		    nd->nd_cred, p, &mp, &mpend, &len);
+		nd->nd_repstat = nfsvno_getxattr(vp, name,
+		    nd->nd_maxresp, nd->nd_cred, nd->nd_flag,
+		    nd->nd_maxextsiz, p, &mp, &mpend, &len);
 	if (nd->nd_repstat == ENOATTR)
 		nd->nd_repstat = NFSERR_NOXATTR;
 	else if (nd->nd_repstat == EOPNOTSUPP)
@@ -5537,9 +5584,22 @@ nfsrvd_getxattr(struct nfsrv_descript *nd, __unused int isdgram,
 	if (nd->nd_repstat == 0) {
 		NFSM_BUILD(tl, uint32_t *, NFSX_UNSIGNED);
 		*tl = txdr_unsigned(len);
-		mbuf_setnext(nd->nd_mb, mp);
-		nd->nd_mb = mpend;
-		nd->nd_bpos = NFSMTOD(mpend, caddr_t) + mbuf_len(mpend);
+		if (mp != NULL) {
+			nd->nd_mb->m_next = mp;
+			nd->nd_mb = mpend;
+			if ((mpend->m_flags & (M_EXT | M_NOMAP)) ==
+			    (M_EXT | M_NOMAP)) {
+				nd->nd_flag |= ND_EXTPG;
+				pgs = mpend->m_ext.ext_pgs;
+				nd->nd_bextpg = pgs->npgs - 1;
+				nd->nd_bpos = (char *)(void *)
+				    PHYS_TO_DMAP(pgs->pa[nd->nd_bextpg]);
+				off = (nd->nd_bextpg == 0) ? pgs->first_pg_off : 0;
+				nd->nd_bpos += off + pgs->last_pg_len;
+				nd->nd_bextpgsiz = PAGE_SIZE - pgs->last_pg_len - off;
+			} else
+				nd->nd_bpos = mtod(mpend, char *) + mpend->m_len;
+		}
 	}
 	free(name, M_TEMP);
 
@@ -5621,7 +5681,8 @@ nfsrvd_setxattr(struct nfsrv_descript *nd, __unused int isdgram,
 	nd->nd_repstat = nfsvno_getattr(vp, &ova, nd, p, 1, &attrbits);
 	if (nd->nd_repstat == 0) {
 		nd->nd_repstat = nfsvno_setxattr(vp, name, len, nd->nd_md,
-		    nd->nd_dpos, nd->nd_cred, p);
+		    nd->nd_dpos, nd->nd_dextpg, nd->nd_dextpgsiz, nd->nd_cred,
+		    p);
 		if (nd->nd_repstat == ENXIO)
 			nd->nd_repstat = NFSERR_XATTR2BIG;
 	}

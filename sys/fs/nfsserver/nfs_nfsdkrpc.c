@@ -38,6 +38,7 @@ __FBSDID("$FreeBSD$");
 
 #include "opt_inet6.h"
 #include "opt_kgssapi.h"
+#include "opt_kern_tls.h"
 
 #include <fs/nfs/nfsport.h>
 
@@ -110,6 +111,9 @@ extern time_t nfsdev_time;
 extern int nfsrv_writerpc[NFS_NPROCS];
 extern volatile int nfsrv_devidcnt;
 extern struct nfsv4_opflag nfsv4_opflag[NFSV42_NOPS];
+#ifdef KERN_TLS
+extern u_int ktls_maxlen;
+#endif
 
 /*
  * NFS server system calls
@@ -158,9 +162,11 @@ nfssvc_program(struct svc_req *rqst, SVCXPRT *xprt)
 	 */
 	nd.nd_mrep = rqst->rq_args;
 	rqst->rq_args = NULL;
+#ifdef notnow
 	newnfs_realign(&nd.nd_mrep, M_WAITOK);
+#endif
 	nd.nd_md = nd.nd_mrep;
-	nd.nd_dpos = mtod(nd.nd_md, caddr_t);
+	nfsm_set(&nd, false);
 	nd.nd_nam = svc_getrpccaller(rqst);
 	nd.nd_nam2 = rqst->rq_addr;
 	nd.nd_mreq = NULL;
@@ -269,6 +275,14 @@ nfssvc_program(struct svc_req *rqst, SVCXPRT *xprt)
 			}
 		}
 
+		if (xprt->xp_tls)
+			nd.nd_flag |= ND_TLS;
+		nd.nd_maxextsiz = 16384;
+#ifdef KERN_TLS
+		if (xprt->xp_tls)
+			nd.nd_maxextsiz = min(TLS_MAX_MSG_SIZE_V10_2,
+			    ktls_maxlen);
+#endif
 		cacherep = nfs_proc(&nd, rqst->rq_xid, xprt, &rp);
 		NFSLOCKV4ROOTMUTEX();
 		nfsv4_relref(&nfsd_suspend_lock);
