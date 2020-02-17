@@ -32,6 +32,8 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
+#include "opt_kern_tls.h"
+
 #include <sys/param.h>
 #include <sys/capsicum.h>
 #include <sys/file.h>
@@ -51,6 +53,10 @@ __FBSDID("$FreeBSD$");
 #include <rpc/rpc.h>
 #include <rpc/rpc_com.h>
 #include <rpc/rpcsec_tls.h>
+
+#include <vm/vm.h>
+#include <vm/pmap.h>
+#include <vm/vm_param.h>
 
 #include "rpctlscd.h"
 #include "rpctlssd.h"
@@ -103,7 +109,6 @@ rpctls_init(void *dummy)
 	rpctls_null_verf.oa_flavor = AUTH_NULL;
 	rpctls_null_verf.oa_base = RPCTLS_START_STRING;
 	rpctls_null_verf.oa_length = strlen(RPCTLS_START_STRING);
-printf("RPCTLS init done\n");
 }
 SYSINIT(rpctls_init, SI_SUB_KMEM, SI_ORDER_ANY, rpctls_init, NULL);
 
@@ -115,7 +120,7 @@ sys_gssd_syscall(struct thread *td, struct gssd_syscall_args *uap)
 	struct file *fp;
 	struct socket *so;
 	char path[MAXPATHLEN], *pathp;
-	int fd, error, retry_count = 5;
+	int fd = -1, error, retry_count = 5;
 	CLIENT *cl, *oldcl;
 	bool ssd;
         
@@ -215,13 +220,22 @@ printf("cl=%p oldcl=%p\n", cl, oldcl);
 	}
 	} else if (path[0] == 'C') {
 printf("In connect\n");
-		KASSERT(rpctls_connect_so != NULL,
-		    ("rpctlsc syscall so != NULL"));
-		KASSERT(rpctls_connect_fd == -1,
-		    ("rpctlsc syscall fd not -1"));
-		error = falloc(td, &fp, &fd, 0);
-printf("falloc=%d fd=%d\n", error, fd);
+		error = EINVAL;
+#ifdef KERN_TLS
+		if (PMAP_HAS_DMAP != 0)
+			error = 0;
+#endif
 		if (error == 0) {
+			mtx_lock(&rpctls_connect_lock);
+			if (rpctls_connect_so == NULL ||
+			    rpctls_connect_fd != -1)
+				error = EINVAL;
+			mtx_unlock(&rpctls_connect_lock);
+		}
+		if (error == 0)
+			error = falloc(td, &fp, &fd, 0);
+		if (error == 0) {
+printf("falloc=%d fd=%d\n", error, fd);
 			mtx_lock(&rpctls_connect_lock);
 			so = rpctls_connect_so;
 			rpctls_connect_so = NULL;
@@ -256,13 +270,22 @@ printf("aft kern_close\n");
 			printf("rpctlsc fd -1\n");
 	} else if (path[0] == 'E') {
 printf("In srvconnect\n");
-		KASSERT(rpctls_server_so != NULL,
-		    ("rpctlss syscall so != NULL"));
-		KASSERT(rpctls_server_fd == -1,
-		    ("rpctlss syscall fd not -1"));
-		error = falloc(td, &fp, &fd, 0);
-printf("srv falloc=%d fd=%d\n", error, fd);
+		error = EINVAL;
+#ifdef KERN_TLS
+		if (PMAP_HAS_DMAP != 0)
+			error = 0;
+#endif
 		if (error == 0) {
+			mtx_lock(&rpctls_server_lock);
+			if (rpctls_server_so == NULL ||
+			    rpctls_server_fd != -1)
+				error = EINVAL;
+			mtx_unlock(&rpctls_server_lock);
+		}
+		if (error == 0)
+			error = falloc(td, &fp, &fd, 0);
+		if (error == 0) {
+printf("srv falloc=%d fd=%d\n", error, fd);
 			mtx_lock(&rpctls_server_lock);
 			so = rpctls_server_so;
 			rpctls_server_so = NULL;
@@ -349,7 +372,7 @@ printf("In rpctls_connect\n");
 	cl = rpctls_connect_client();
 printf("connect_client=%p\n", cl);
 	if (cl == NULL)
-		return (RPC_TLSCONNECT);
+		return (RPC_AUTHERROR);
 
 	/* First, do the AUTH_TLS NULL RPC. */
 	memset(&ext, 0, sizeof(ext));
@@ -361,6 +384,8 @@ printf("authtls=%p\n", ext.rc_auth);
 	    NULL, (xdrproc_t)xdr_void, NULL, utimeout);
 printf("aft NULLRPC=%d\n", stat);
 	AUTH_DESTROY(ext.rc_auth);
+	if (stat == RPC_AUTHERROR)
+		return (stat);
 	if (stat != RPC_SUCCESS)
 		return (RPC_SYSTEMERROR);
 
@@ -467,6 +492,13 @@ printf("authtls proc=%d\n", rqst->rq_proc);
 	if (rqst->rq_proc != NULLPROC)
 		return (AUTH_REJECTEDCRED);
 
+	if (PMAP_HAS_DMAP == 0)
+		return (AUTH_REJECTEDCRED);
+
+#ifndef KERN_TLS
+	return (AUTH_REJECTEDCRED);
+#endif
+
 	/*
 	 * Disable reception for the krpc so that the TLS handshake can
 	 * be done on the socket in the rpctlssd daemon.
@@ -487,7 +519,7 @@ printf("authtls: null reply=%d\n", call_stat);
 		xprt->xp_dontrcv = FALSE;
 		sx_xunlock(&xprt->xp_lock);
 		xprt_active(xprt);	/* Harmless if already active. */
-		return (AUTH_FAILED);
+		return (AUTH_REJECTEDCRED);
 	}
 
 	/* Do an upcall to do the TLS handshake. */
@@ -496,12 +528,14 @@ printf("authtls: null reply=%d\n", call_stat);
 	/* Re-enable reception on the socket within the krpc. */
 	sx_xlock(&xprt->xp_lock);
 	xprt->xp_dontrcv = FALSE;
+	if (stat == RPC_SUCCESS)
+		xprt->xp_tls = TRUE;
 	sx_xunlock(&xprt->xp_lock);
 	xprt_active(xprt);		/* Harmless if already active. */
 printf("authtls: aft handshake stat=%d\n", stat);
 
 	if (stat != RPC_SUCCESS)
-		return (AUTH_FAILED);
+		return (AUTH_REJECTEDCRED);
 	return (RPCSEC_GSS_NODISPATCH);
 }
 
