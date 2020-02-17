@@ -37,6 +37,7 @@
 __FBSDID("$FreeBSD$");
 
 #include "opt_kgssapi.h"
+#include "opt_kern_tls.h"
 
 #include <fs/nfs/nfsport.h>
 
@@ -54,6 +55,10 @@ static int nfs_cbproc(struct nfsrv_descript *, u_int32_t);
 extern u_long sb_max_adj;
 extern int nfs_numnfscbd;
 extern int nfscl_debuglevel;
+extern bool nfs_use_ext_pgs;
+#ifdef KERN_TLS
+extern u_int ktls_maxlen;
+#endif
 
 /*
  * NFS client system calls for handling callbacks.
@@ -108,6 +113,15 @@ nfscb_program(struct svc_req *rqst, SVCXPRT *xprt)
 		mac_cred_associate_nfsd(nd.nd_cred);
 #endif
 #endif
+		if ((xprt->xp_tls || nfs_use_ext_pgs) && PMAP_HAS_DMAP != 0) {
+			nd.nd_flag |= ND_EXTPG;
+			nd.nd_maxextsiz = 16384;
+#ifdef KERN_TLS
+			if (xprt->xp_tls)
+				nd.nd_maxextsiz = min(TLS_MAX_MSG_SIZE_V10_2,
+				    ktls_maxlen);
+#endif
+		}
 		cacherep = nfs_cbproc(&nd, rqst->rq_xid);
 	} else {
 		NFSMGET(nd.nd_mreq);
