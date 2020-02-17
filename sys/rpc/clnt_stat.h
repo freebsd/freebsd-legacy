@@ -73,11 +73,7 @@ enum clnt_stat {
 	RPC_STALERACHANDLE = 25,
 	RPC_CANTCONNECT = 26,		/* couldn't make connection (cots) */
 	RPC_XPRTFAILED = 27,		/* received discon from remote (cots) */
-	RPC_CANTCREATESTREAM = 28,	/* can't push rpc module (cots) */
-	/*
-	 * TLS errors
-	 */
-	RPC_TLSCONNECT = 29		/* can't do TLS handshake */
+	RPC_CANTCREATESTREAM = 28	/* can't push rpc module (cots) */
 };
 
 #ifdef __cplusplus

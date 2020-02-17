@@ -57,9 +57,12 @@ __FBSDID("$FreeBSD$");
  * Now go hang yourself.
  */
 
+#include "opt_kern_tls.h"
+
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
+#include <sys/ktls.h>
 #include <sys/lock.h>
 #include <sys/malloc.h>
 #include <sys/mbuf.h>
@@ -81,6 +84,10 @@ __FBSDID("$FreeBSD$");
 #include <rpc/rpc.h>
 #include <rpc/rpc_com.h>
 #include <rpc/krpc.h>
+
+#ifdef KERN_TLS
+extern u_int ktls_maxlen;
+#endif
 
 struct cmessage {
         struct cmsghdr cmsg;
@@ -303,7 +310,7 @@ clnt_vc_call(
 	uint32_t xid;
 	struct mbuf *mreq = NULL, *results;
 	struct ct_request *cr;
-	int error, trycnt;
+	int error, maxextsiz, trycnt;
 
 	cr = malloc(sizeof(struct ct_request), M_RPC, M_WAITOK);
 
@@ -409,6 +416,17 @@ call_again:
 	TAILQ_INSERT_TAIL(&ct->ct_pending, cr, cr_link);
 	mtx_unlock(&ct->ct_lock);
 
+	if (ct->ct_tls) {
+		/*
+		 * Copy the mbuf chain to a chain of ext_pgs mbuf(s)
+		 * as required by KERN_TLS.
+		 */
+		maxextsiz = TLS_MAX_MSG_SIZE_V10_2;
+#ifdef KERN_TLS
+		maxextsiz = min(maxextsiz, ktls_maxlen);
+#endif
+		mreq = _rpc_copym_into_ext_pgs(mreq, maxextsiz);
+	}
 	/*
 	 * sosend consumes mreq.
 	 */
@@ -424,6 +442,7 @@ call_again:
 		TAILQ_REMOVE(&ct->ct_pending, cr, cr_link);
 		/* Sleep for 1 clock tick before trying the sosend() again. */
 		msleep(&fake_wchan, &ct->ct_lock, 0, "rpclpsnd", 1);
+printf("TRY AGAIN!!\n");
 		goto call_again;
 	}
 
@@ -729,8 +748,14 @@ clnt_vc_control(CLIENT *cl, u_int request, void *info)
 		xprt = (SVCXPRT *)info;
 		if (ct->ct_backchannelxprt == NULL) {
 			xprt->xp_p2 = ct;
+			if (ct->ct_tls)
+				xprt->xp_tls = TRUE;
 			ct->ct_backchannelxprt = xprt;
 		}
+		break;
+
+	case CLSET_TLS:
+		ct->ct_tls = TRUE;
 		break;
 
 	case CLSET_BLOCKRCV:

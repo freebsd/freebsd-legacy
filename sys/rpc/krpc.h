@@ -42,6 +42,7 @@
 void clnt_bck_svccall(void *, struct mbuf *, uint32_t);
 enum clnt_stat clnt_bck_call(CLIENT *, struct rpc_callextra *, rpcproc_t,
     struct mbuf *, struct mbuf **, struct timeval, SVCXPRT *);
+struct mbuf *_rpc_copym_into_ext_pgs(struct mbuf *, int);
 
 /*
  * A pending RPC request which awaits a reply. Requests which have
@@ -102,6 +103,7 @@ struct ct_data {
 	struct ct_request_list ct_pending;
 	int		ct_upcallrefs;	/* Ref cnt of upcalls in prog. */
 	SVCXPRT		*ct_backchannelxprt; /* xprt for backchannel */
+	bool_t		ct_tls;		/* Enable RPC-over-TLS support. */
 	bool_t		ct_dontrcv;	/* TRUE to block receiving */
 };
 

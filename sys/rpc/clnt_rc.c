@@ -199,11 +199,7 @@ printf("at rpctls_connect\n");
 			stat = rpctls_connect(newclient, so);
 printf("aft rpctls_connect=%d\n", stat);
 			if (stat != RPC_SUCCESS) {
-				if (stat != RPC_SYSTEMERROR)
-					stat = rpc_createerr.cf_stat =
-					    RPC_TLSCONNECT;
-				else
-					stat = rpc_createerr.cf_stat = stat;
+				stat = rpc_createerr.cf_stat = stat;
 				rpc_createerr.cf_error.re_errno = 0;
 				CLNT_CLOSE(newclient);
 				CLNT_RELEASE(newclient);
@@ -228,6 +224,8 @@ printf("aft rpctls_connect=%d\n", stat);
 	CLNT_CONTROL(newclient, CLSET_RETRY_TIMEOUT, &rc->rc_retry);
 	CLNT_CONTROL(newclient, CLSET_WAITCHAN, rc->rc_waitchan);
 	CLNT_CONTROL(newclient, CLSET_INTERRUPTIBLE, &rc->rc_intr);
+	if (rc->rc_tls != 0)
+		CLNT_CONTROL(newclient, CLSET_TLS, &one);
 	if (rc->rc_backchannel != NULL)
 		CLNT_CONTROL(newclient, CLSET_BACKCHANNEL, rc->rc_backchannel);
 	stat = RPC_SUCCESS;

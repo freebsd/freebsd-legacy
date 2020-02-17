@@ -64,6 +64,11 @@ __FBSDID("$FreeBSD$");
 #include <rpc/rpcsec_gss.h>
 
 #include <rpc/rpc_com.h>
+#include <rpc/krpc.h>
+
+#include <vm/vm.h>
+#include <vm/pmap.h>
+#include <vm/vm_param.h>
 
 extern	u_long sb_max_adj;	/* not defined in socketvar.h */
 
@@ -866,6 +871,100 @@ out:
 		free(sa, M_SONAME);
 
 	return (error);
+}
+
+/*
+ * Make sure an mbuf list is made up entirely of ext_pgs mbufs.
+ * This is needed for sosend() when KERN_TLS is being used.
+ * (There might also be a performance improvement for certain
+ *  network interfaces that handle ext_pgs mbufs efficiently.)
+ * It expects at least one non-ext_pgs mbuf followed by zero
+ * or more ext_pgs mbufs.  It does not handle the case where
+ * non-ext_pgs mbuf(s) follow ext_pgs ones.
+ * It also performs sanity checks on the resultant list.
+ * The "mp" argument list is consumed.
+ * The "maxextsiz" argument is the upper bound on the data
+ * size for each mbuf (usually 16K for KERN_TLS).
+ */
+struct mbuf *
+_rpc_copym_into_ext_pgs(struct mbuf *mp, int maxextsiz)
+{
+	struct mbuf *m, *m2, *m3, *mhead;
+	int tlen;
+
+	KASSERT((mp->m_flags & (M_EXT | M_NOMAP)) !=
+	    (M_EXT | M_NOMAP), ("_rpc_copym_into_ext_pgs:"
+	    " first mbuf is an ext_pgs"));
+	/*
+	 * Find the last non-ext_pgs mbuf and the total
+	 * length of the non-ext_pgs mbuf(s).
+	 * The first mbuf must always be a non-ext_pgs
+	 * mbuf.
+	 */
+	tlen = mp->m_len;
+	m2 = mp;
+	for (m = mp->m_next; m != NULL; m = m->m_next) {
+		if ((m->m_flags & (M_EXT | M_NOMAP)) ==
+		    (M_EXT | M_NOMAP))
+			break;
+		tlen += m->m_len;
+		m2 = m;
+	}
+
+	/*
+	 * Copy the non-ext_pgs mbuf(s) into an ext_pgs
+	 * mbuf list.
+	 */
+	m2->m_next = NULL;
+	mhead = mb_copym_ext_pgs(mp, tlen, maxextsiz, M_WAITOK,
+	    true, mb_free_mext_pgs, &m2);
+
+	/*
+	 * Link the ext_pgs list onto the newly copied
+	 * list and free up the non-ext_pgs mbuf(s).
+	 */
+	mhead->m_pkthdr.len = mp->m_pkthdr.len;
+	m2->m_next = m;
+	m_freem(mp);
+
+	/*
+	 * Sanity check the resultant mbuf list.  Check for and
+	 * remove any 0 length mbufs in the list, since the
+	 * KERN_TLS code does not expect any 0 length mbuf(s)
+	 * in the list.
+	 */
+	m3 = NULL;
+	m2 = mhead;
+	tlen = 0;
+	while (m2 != NULL) {
+		KASSERT(m2->m_len >= 0, ("_rpc_copym_into_ext_pgs:"
+		    " negative m_len"));
+		KASSERT((m2->m_flags & (M_EXT | M_NOMAP)) ==
+		    (M_EXT | M_NOMAP), ("_rpc_copym_into_ext_pgs:"
+			    " non-nomap mbuf in list"));
+		if (m2->m_len == 0) {
+			if (m3 != NULL)
+				m3->m_next = m2->m_next;
+			else
+				m = m2->m_next;
+			m2->m_next = NULL;
+			m_free(m2);
+			if (m3 != NULL)
+				m2 = m3->m_next;
+			else
+				m2 = m;
+		} else {
+			MBUF_EXT_PGS_ASSERT_SANITY(
+			    m2->m_ext.ext_pgs);
+			m3 = m2;
+			tlen += m2->m_len;
+			m2 = m2->m_next;
+		}
+	}
+	KASSERT(tlen == mhead->m_pkthdr.len,
+	    ("_rpc_copym_into_ext_pgs: tlen=%d pkthdrlen=%d",
+	    tlen, mhead->m_pkthdr.len));
+	return (mhead);
 }
 
 /*
