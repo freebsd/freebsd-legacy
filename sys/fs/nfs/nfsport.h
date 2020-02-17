@@ -53,6 +53,7 @@
 #include <sys/filedesc.h>
 #include <sys/jail.h>
 #include <sys/kernel.h>
+#include <sys/ktls.h>
 #include <sys/lockf.h>
 #include <sys/malloc.h>
 #include <sys/mbuf.h>
@@ -115,6 +116,10 @@
 #include <ufs/ufs/ufsmount.h>
 #include <vm/uma.h>
 #include <vm/vm.h>
+#include <vm/pmap.h>
+#include <vm/vm_page.h>
+#include <vm/vm_pageout.h>
+#include <vm/vm_param.h>
 #include <vm/vm_object.h>
 #include <vm/vm_extern.h>
 #include <nfs/nfssvc.h>
@@ -1057,6 +1062,7 @@ bool ncl_pager_setsize(struct vnode *vp, u_quad_t *nsizep);
 #define	NFSHASOPENMODE(n)	((n)->nm_state & NFSSTA_OPENMODE)
 #define	NFSHASONEOPENOWN(n)	(((n)->nm_flag & NFSMNT_ONEOPENOWN) != 0 &&	\
 				    (n)->nm_minorvers > 0)
+#define	NFSHASTLS(n)		(((n)->nm_newflag & NFSMNT_TLS) != 0)
 
 /*
  * Gets the stats field out of the mount structure.
