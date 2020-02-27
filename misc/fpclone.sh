@@ -81,6 +81,7 @@ EOF2
 #include <sys/systm.h>
 #include <sys/kernel.h>
 #include <sys/module.h>
+#include <sys/mutex.h>
 #include <sys/conf.h>
 #include <sys/uio.h>
 #include <sys/malloc.h>
