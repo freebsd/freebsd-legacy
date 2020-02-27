@@ -35,7 +35,8 @@
 . ../default.cfg
 
 # Uses mke2fs from sysutils/e2fsprogs
-[ -z "`type mke2fs 2>/dev/null`" ] && echo "mke2fs not found" && exit 0
+[ -z "`type mke2fs 2>/dev/null`" ] &&
+    echo "Skipping test as mke2fs not installed" && exit 0
 
 mount | grep "$mntpoint" | grep -q md$mdstart && umount $mntpoint
 mdconfig -l | grep -q md$mdstart &&  mdconfig -d -u $mdstart
@@ -43,11 +44,10 @@ mdconfig -l | grep -q md$mdstart &&  mdconfig -d -u $mdstart
 mdconfig -a -t swap -s 1g -u $mdstart
 mke2fs -m 0 /dev/md$mdstart > /dev/null
 
-mount -t ext2fs /dev/md$mdstart /mnt
+mount -t ext2fs /dev/md$mdstart $mntpoint
 chmod 777 $mntpoint
 
 export runRUNTIME=10m
-export swapLOAD=0	# Temp workaround for unrelated OOM issue.
 export RUNDIR=$mntpoint/stressX
 
 su $testuser -c 'cd ..; ./run.sh marcus.cfg'
