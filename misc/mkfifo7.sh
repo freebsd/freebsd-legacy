@@ -50,7 +50,7 @@ cd $mntpoint
 s=$?
 cd $odir
 
-while mount | grep "on $mntpoint " | grep -q tmpfs/md; do
+while mount | grep "on $mntpoint " | grep -q tmpfs; do
 	umount $mntpoint || sleep 1
 done
 rm -rf /tmp/mkfifo7
