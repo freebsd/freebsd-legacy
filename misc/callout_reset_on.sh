@@ -328,7 +328,7 @@ for i in `jot 40`; do
 	for j in `jot $N`; do
 		wait
 	done
-	[ $((`date '+%s'` - start)) -gt 1800 ] && break
+	[ $((`date '+%s'` - start)) -gt 1200 ] && break
 done
 rm -f /tmp/crwriter /tmp/crlogger ./barrier.*
 exit 0
