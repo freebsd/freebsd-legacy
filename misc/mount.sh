@@ -73,6 +73,7 @@ newfs $newfs_flags md${mdstart}$part > /dev/null
 
 # The test:
 
+echo "Expect: mount: /dev/md5a: Device busy"
 mount -r /dev/md${mdstart}$part $mntpoint
 mount -r /dev/md${mdstart}$part $mntpoint
 umount $mntpoint
