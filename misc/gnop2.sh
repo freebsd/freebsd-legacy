@@ -53,11 +53,13 @@ test() {
 	mount | grep $mntpoint | grep -q /dev/md && umount -f $mntpoint
 	[ -c /dev/md$mdstart ] &&  mdconfig -d -u $mdstart
 
-	mdconfig -a -t swap -s 2g -u $mdstart || exit 1
+	set -e
+	mdconfig -a -t swap -s 2g -u $mdstart
 	gnop create -S $1 /dev/md$mdstart
 	newfs $newfs_flags /dev/md$mdstart.nop > /dev/null
 	mount /dev/md$mdstart.nop $mntpoint
 	chmod 777 $mntpoint
+	set +e
 
 	dd if=/dev/zero of=$mntpoint/file bs=1k count=333 2>&1 | \
 	    egrep -v "records|transferred"
