@@ -32,6 +32,10 @@
 
 # A 8k sector size test using buildworld.
 
+# "panic: DI already started" seen:
+# https://people.freebsd.org/~pho/stress/log/kostik1017.txt
+# Fixed by r322175
+
 . ../default.cfg
 
 gigs=9
@@ -45,11 +49,13 @@ gnop status || exit 1
 mount | grep $mntpoint | grep -q /dev/md && umount -f $mntpoint
 [ -c /dev/md$mdstart ] &&  mdconfig -d -u $mdstart
 
-mdconfig -a -t swap -s ${gigs}g -u $mdstart || exit 1
+set -e
+mdconfig -a -t swap -s ${gigs}g -u $mdstart
 gnop create -S 8k /dev/md$mdstart
 newfs $newfs_flags /dev/md$mdstart.nop > /dev/null
 mount /dev/md$mdstart.nop $mntpoint
 chmod 777 $mntpoint
+set +e
 
 start=`date '+%s'`
 (cd /usr; tar --exclude compile -cf - src) | (cd $mntpoint; tar xf -)
