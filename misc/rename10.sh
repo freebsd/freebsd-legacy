@@ -52,7 +52,9 @@ newfs $newfs_flags md${mdstart}$part > /dev/null
 mount /dev/md${mdstart}$part $mntpoint
 avail=`df -k $mntpoint | tail -1 | awk '{print $4}'`
 
-(cd $mntpoint; /tmp/rename10)
+cd $mntpoint
+/tmp/rename10; s=$?
+cd $here
 
 for i in `jot 3`; do
 	sync
@@ -72,10 +74,10 @@ while mount | grep "on $mntpoint " | grep -q /dev/md; do
 	[ $n -gt 5 ] && { umount -f $mntpoint; break; }
 done
 
-checkfs /dev/md${mdstart}$part
+checkfs /dev/md${mdstart}$part || s=$?
 rm -f /tmp/rename10
 mdconfig -d -u $mdstart
-exit 0
+exit $s
 EOF
 #include <err.h>
 #include <fcntl.h>
@@ -171,8 +173,10 @@ main() {
 	renamer();
 
 	for (i = 0; i < PARALLEL; i++) {
-		kill(pids[i], SIGINT);
-		kill(spids[i], SIGINT);
+		if (kill(pids[i], SIGINT) == -1)
+			err(1, "kill(%d)", pids[i]);
+		if (kill(spids[i], SIGINT) == -1)
+			err(1, "kill(%d)", spids[i]);
 	}
 	for (i = 0; i < PARALLEL * 2; i++)
 		wait(NULL);
