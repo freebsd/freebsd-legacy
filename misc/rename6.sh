@@ -81,7 +81,8 @@ const char *logfile = "test.log";
 void
 cleanup()
 {
-	kill(spid, SIGINT);
+	if (kill(spid, SIGINT) == -1 && errno != ESRCH)
+		err(1, "kill(%d)", spid);
 }
 
 static void
