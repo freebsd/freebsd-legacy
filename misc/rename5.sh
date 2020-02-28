@@ -65,10 +65,10 @@ while mount | grep -q md${mdstart}$part; do
 	umount $mntpoint || sleep 1
 done
 
-checkfs /dev/md${mdstart}$part
+checkfs /dev/md${mdstart}$part; s=$?
 
 mdconfig -d -u $mdstart
-exit 0
+exit $s
 EOF
 #include <sys/stat.h>
 #include <sys/wait.h>
