@@ -30,6 +30,9 @@
 
 # No problems seen with SU. Panics with SU+J, just like suj30.sh
 
+# Triggers "known LOR in SU code" when crossmp8.sh is run first:
+# https://people.freebsd.org/~pho/stress/log/rename12.txt.
+
 [ `id -u ` -ne 0 ] && echo "Must be root!" && exit 1
 
 . ../default.cfg
@@ -71,10 +74,10 @@ while mount | grep "on $mntpoint " | grep -q /dev/md; do
 	umount $mntpoint || sleep 1
 done
 
-checkfs /dev/md${mdstart}$part
+checkfs /dev/md${mdstart}$part; s=$?
 mdconfig -d -u $mdstart
 rm -rf /tmp/rename12
-exit 0
+exit $s
 EOF
 #include <sys/stat.h>
 #include <sys/types.h>
