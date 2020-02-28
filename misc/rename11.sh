@@ -59,10 +59,10 @@ while mount | grep "on $mntpoint " | grep -q /dev/md; do
 	umount $mntpoint || sleep 1
 done
 
-checkfs /dev/md${mdstart}$part
+checkfs /dev/md${mdstart}$part; s=$?
 mdconfig -d -u $mdstart
 rm -rf /tmp/rename11
-exit 0
+exit $s
 EOF
 #include <err.h>
 #include <fcntl.h>
