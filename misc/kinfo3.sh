@@ -46,12 +46,13 @@ start=`date '+%s'`
 while [ $((`date '+%s'` - start)) -lt 1200 ]; do
 	pids=""
 	for i in `jot 5`; do
-		/tmp/kinfo3 &
+		timeout 5m /tmp/kinfo3 &
 		pids="$pids $!"
 	done
 	for pid in $pids; do
 		wait $pid
-		[ $? -ne 0 ] && s=1
+		r=$?
+		[ $r -ne 0 ] && { s=1; echo "Exit code $r"; break; }
 	done
 done
 
