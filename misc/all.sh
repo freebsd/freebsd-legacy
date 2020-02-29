@@ -40,9 +40,8 @@
 # backingstore3.sh
 #		g_vfs_done():md6a[WRITE(offset=...)]error = 28		20111230
 # collapse.sh	panic: freeing mapped page 0xfffffe0028ed1d50		20200106
-# contigmalloc2.sh	CAM stuck in wmwait seen			20200112
+# dd.sh		CAM stuck in vmwait					20200116
 # devfs4.sh	WiP							20181031
-# fexecve.sh	WiP
 # fsync.sh	panic: Journal overflow					20190208
 # fuse.sh	Memory corruption seen in log file kostik734.txt	20141114
 # fuse2.sh	Deadlock seen						20121129
@@ -65,23 +64,23 @@
 # memguard.sh	Waiting for fix commit
 # memguard2.sh	Waiting for fix commit
 # memguard3.sh	Waiting for fix commit
-# mkfifo8.sh	WiP							20190629
 # mlockall2.sh	Unrecoverable OOM killing seen				20190203
 # newfs4.sh	watchdog fired. newbuf					20190225
 # nfs10.sh	Double fault						20151013
 # nfs13.sh	mount_nfs hangs in mntref				20191007
 # nfs16.sh	panic: Failed to register NFS lock locally - error=11	20160608
 # oom2.sh	Hang in pfault						20180324
+# overcommit2.sh
+#		CAM stuck in vmwait seen				20200112
 # pfl3.sh	panic: handle_written_inodeblock: live inodedep		20190211
 # pageout.sh	panic: handle_written_filepage: not started		20190218
 # quota2.sh	panic: dqflush: stray dquot				20120221
 # quota3.sh	panic: softdep_deallocate_dependencies: unrecovered ...	20111222
 # quota6.sh	panic: softdep_deallocate_dependencies: unrecovered ...	20130206
 # quota7.sh	panic: dqflush: stray dquot				20120221
-# sctp.sh	WiP							20190809
-# sctp2.sh	WiP							20190809
+# rename14.sh	WiP							20200215
+# rename15.sh	WiP							20200215
 # sctp3.sh	WiP							20190809
-# setsockopt2.sh in_epoch panic						20191010
 # signal.sh	Timing issues. Needs fixing				20171116
 # snap4.sh	panic: snapacct_ufs2: bad block				20181014
 # snap6.sh	panic: softdep_deallocate_dependencies: unrecovered ...	20130630
@@ -90,8 +89,10 @@
 # suj34.sh	Various hangs and panics (SUJ + NULLFS issue)		20131210
 # swap4.sh	WiP							20171208
 # swapoff2.sh	swap_pager_force_pagein: read from swap failed		20171223
+# systrace.sh	WiP							20200227
+# systrace2.sh	WiP							20200227
+# syzkaller4.sh	WiP							20200210
 # ucom.sh	Stuck in tail -F					20180129
-# umount4.sh	Double fault seen					20191101
 # umountf7.sh	panic: handle_written_inodeblock: live inodedep ...	20190219
 # umountf9.sh	panic: handle_written_inodeblock: live inodedep ...	20170221
 # unionfs.sh	insmntque: non-locked vp: xx is not exclusive locked...	20130909
@@ -216,6 +217,7 @@ ping -c 2 -t 2 $BLASTHOST > /dev/null 2>&1 ||
     { echo "Note: Can not ping \$BLASTHOST: $BLASTHOST"; }
 echo "$loops" | grep -Eq "^[0-9]+$" ||
     { echo "The -l argument must be a positive number"; exit 1; }
+[ -s all.exclude ] && echo "Using all.exclude"
 
 rm -f $alllist
 find `dirname $alllast` -maxdepth 1 -name $alllast -mtime +12h -delete
