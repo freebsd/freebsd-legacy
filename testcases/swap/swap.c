@@ -46,37 +46,52 @@ __FBSDID("$FreeBSD$");
 #define MINLEFT (1024LL * 1024 * 1024)
 #endif
 
-static unsigned long size;
+static int64_t size;
 
 int
 setup(int nb)
 {
 	struct rlimit rlp;
-	int64_t  swapinfo;
-	unsigned long mem;
-	int pct;
+	int64_t  mem, swapinfo;
+	int mi, mx, pct;
+	char *cp;
 
 	if (nb == 0) {
 		mem = usermem();
 		swapinfo = swap();
 
 		pct = 0;
-		if (op->hog == 0)
-			pct = random_int(80, 100);
+		if (op->hog == 0) {
+			mi = 80;
+			mx = 100;
+		}
 
-		if (op->hog == 1)
-			pct = random_int(100, 110);
+		if (op->hog == 1) {
+			mi = 100;
+			mx = 110;
+		}
 
-		if (op->hog == 2)
-			pct = random_int(110, 120);
+		if (op->hog == 2) {
+			mi = 110;
+			mx = 120;
+		}
 
-		if (op->hog >= 3)
-			pct = random_int(120, 130);
+		if (op->hog >= 3) {
+			mi = 120;
+			mx = 130;
+		}
+		if ((cp = getenv("MAXSWAPPCT")) != NULL && *cp != '\0') {
+			mx = atoi(cp);
+			mi = mx - 10;
+		}
+		pct = random_int(mi, mx);
 
 		if (swapinfo == 0) {
 			pct = random_int(30, 50);
-			if (mem <= MINLEFT)
+			if (mem <= MINLEFT) {
+				putval(0);
 				_exit(1);
+			}
 			mem -= MINLEFT;
 			size = mem / 100 * pct;
 		} else {
@@ -93,16 +108,21 @@ setup(int nb)
 			err(1,"getrlimit");
 		rlp.rlim_cur -= 1024 * 1024;
 
-		if (size > (unsigned long)rlp.rlim_cur)
+		if (size > rlp.rlim_cur)
 			size = rlp.rlim_cur;
 		putval(size);
 
 
 		if (op->verbose > 1 && nb == 0)
-			printf("setup: pid %d, %d%%. Total %luMb\n",
-				getpid(), pct, size / 1024 / 1024 * op->incarnations);
+			printf("setup: pid %d, %d%%. Total %dMb, %d thread(s).\n",
+			    getpid(), pct, (int)(size / 1024 / 1024 *
+			    op->incarnations), op->incarnations);
 	} else
 		size = getval();
+
+	if (size == 0)
+		exit(1);
+
 	return (0);
 }
 
@@ -115,10 +135,12 @@ int
 test(void)
 {
 	time_t start;
-	unsigned long i, oldsize;
+	int64_t i, oldsize;
 	int page;
 	volatile char *c;
 
+	if (size == 0)
+		return (0);
 	oldsize = size;
 	c = malloc(size);
 	while (c == NULL && done_testing == 0) {
@@ -126,8 +148,8 @@ test(void)
 		c = malloc(size);
 	}
 	if (op->verbose > 1 && size != oldsize)
-		printf("Malloc size changed from %ld Mb to %ld Mb\n",
-			oldsize / 1024 / 1024, size / 1024 / 1024);
+		printf("Malloc size changed from %d Mb to %d Mb\n",
+		    (int)(oldsize / 1024 / 1024), (int)(size / 1024 / 102));
 	page = getpagesize();
 	start = time(NULL);	/* Livelock workaround */
 	while (done_testing == 0 &&
