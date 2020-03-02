@@ -58,6 +58,7 @@ reader(void) {
 	struct sockaddr_in inetaddr, inetpeer;
 	int n, t, *buf;
 
+	alarm(op->run_time + 30);
 	on = 1;
 	if ((tcpsock = socket(AF_INET, SOCK_STREAM, 0)) < 0)
 		err(1, "socket(), %s:%d", __FILE__, __LINE__);
@@ -107,6 +108,7 @@ writer(void) {
 	struct hostent *hostent;
 	int i, *buf, r;
 
+	alarm(op->run_time + 30);
 	on = 1;
 	for (i = 1; i < 5; i++) {
 		if ((tcpsock = socket(AF_INET, SOCK_STREAM, 0)) < 0)
