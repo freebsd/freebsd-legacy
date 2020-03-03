@@ -42,10 +42,16 @@
 # collapse.sh	panic: freeing mapped page 0xfffffe0028ed1d50		20200106
 # dd.sh		CAM stuck in vmwait					20200116
 # devfs4.sh	WiP							20181031
+# force.sh	WiP							20200303
+# force2.sh	WiP							20200303
+# force3.sh	WiP							20200303
+# force4.sh	Known issue						20200303
+# force5.sh	WiP							20200303
 # fsync.sh	panic: Journal overflow					20190208
 # fuse.sh	Memory corruption seen in log file kostik734.txt	20141114
 # fuse2.sh	Deadlock seen						20121129
 # fuse3.sh	Deadlock seen						20141120
+# getrandom2.sh	Known DoS issue						20200302
 # gjournal.sh	panic: Journal overflow					20190626
 # gjournal2.sh	panic: Journal overflow					20180125
 # gjournal3.sh	panic: Bio not on queue					20171225
