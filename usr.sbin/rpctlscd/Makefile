@@ -13,7 +13,7 @@ LIBADD=	ssl crypto
 
 CLEANFILES= rpctlscd_svc.c rpctlscd_xdr.c rpctlscd.h
 
-RPCSRC=	/usr/src/sys.dec13-2019/rpc/rpcsec_tls/rpctlscd.x
+RPCSRC=	${SRCTOP}/sys/rpc/rpcsec_tls/rpctlscd.x
 RPCGEN= RPCGEN_CPP=${CPP:Q} rpcgen -L -C -M
 
 rpctlscd_svc.c: ${RPCSRC} rpctlscd.h
