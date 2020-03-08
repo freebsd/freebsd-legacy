@@ -1679,6 +1679,8 @@ mb_copym_ext_pgs(struct mbuf *mp, int len, int mlen, int how, bool pkthdr,
 				m_freem(mout);
 				return (NULL);
 			}
+			KASSERT((mp->m_flags & M_NOMAP) == 0,
+			    ("mb_copym_ext_pgs: ext_pgs input mbuf"));
 			mbpos = mtod(mp, char *);
 			mblen = mp->m_len;
 			mp = mp->m_next;
@@ -1696,4 +1698,120 @@ mb_copym_ext_pgs(struct mbuf *mp, int len, int mlen, int how, bool pkthdr,
 	if (mlast != NULL)
 		*mlast = m;
 	return (mout);
+}
+
+/*
+ * Split an ext_pgs mbuf list into two lists at len bytes.
+ * Similar to m_split(), but for ext_pgs mbufs with
+ * anonymous pages.
+ */
+struct mbuf *
+mb_splitatpos_ext(struct mbuf *m0, int len, int how)
+{
+	struct mbuf *m, *mp;
+	struct mbuf_ext_pgs *pgs, *pgs0;
+	vm_page_t pg;
+	int i, j, left, pgno, plen, trim;
+	char *cp, *cp0;
+
+	/* Nothing to do. */
+	if (len == 0)
+		return (NULL);
+
+	/* Find the correct mbuf to split at. */
+	for (mp = m0; mp != NULL && len > mp->m_len; mp = mp->m_next)
+		len -= mp->m_len;
+	if (mp == NULL)
+		return (NULL);
+
+	/* If len == mp->m_len, we can just split the mbuf list. */
+	if (len == mp->m_len) {
+		m = mp->m_next;
+		mp->m_next = NULL;
+		return (m);
+	}
+
+	/* Find the page to split at. */
+	KASSERT((mp->m_flags & (M_EXT | M_NOMAP)) ==
+	    (M_EXT | M_NOMAP),
+	    ("mb_splitatpos_ext: m0 not ext_pgs"));
+	pgs = mp->m_ext.ext_pgs;
+	KASSERT((pgs->flags & MBUF_PEXT_FLAG_ANON) != 0,
+	    ("mb_splitatpos_ext: not anonymous pages"));
+	pgno = 0;
+	left = len;
+	do {
+		if (pgno == 0)
+			plen = mbuf_ext_pg_len(pgs, 0,
+			    pgs->first_pg_off);
+		else
+			plen = mbuf_ext_pg_len(pgs, pgno, 0);
+		if (left <= plen)
+			break;
+		left -= plen;
+		pgno++;
+	} while (pgno < pgs->npgs);
+	if (pgno == pgs->npgs)
+		panic("mb_splitatpos_ext");
+	mp->m_len = len;
+
+	m = mb_alloc_ext_pgs(how, false, mb_free_mext_pgs);
+	if (m == NULL)
+		return (NULL);
+	pgs0 = m->m_ext.ext_pgs;
+	pgs0->flags |= MBUF_PEXT_FLAG_ANON;
+
+	/*
+	 * If left < plen, allocate a new page for the new mbuf
+	 * and copy the data after left in the page to this new
+	 * page.
+	 */
+	if (left < plen) {
+		do {
+			pg = vm_page_alloc(NULL, 0, VM_ALLOC_NORMAL |
+			    VM_ALLOC_NOOBJ | VM_ALLOC_NODUMP |
+			    VM_ALLOC_WIRED);
+			if (pg == NULL) {
+				if (how == M_NOWAIT) {
+					m_free(m);
+					return (NULL);
+				}
+				vm_wait(NULL);
+			}
+		} while (pg == NULL);
+		pgs0->pa[0] = VM_PAGE_TO_PHYS(pg);
+		pgs0->npgs++;
+		trim = plen - left;
+		cp = (char *)(void *)PHYS_TO_DMAP(pgs->pa[pgno]);
+		cp0 = (char *)(void *)PHYS_TO_DMAP(pgs0->pa[0]);
+		if (pgno == 0)
+			cp += pgs->first_pg_off;
+		cp += left;
+		if (pgno == pgs->npgs - 1)
+			pgs0->last_pg_len = trim;
+		else {
+			pgs0->last_pg_len = pgs->last_pg_len;
+			pgs0->first_pg_off = PAGE_SIZE - trim;
+			cp0 += PAGE_SIZE - trim;
+		}
+		memcpy(cp0, cp, trim);
+		m->m_len = trim;
+	} else
+		pgs0->last_pg_len = pgs->last_pg_len;
+
+	/* Move the pages beyond pgno to the new mbuf. */
+	for (i = pgno + 1, j = pgs0->npgs; i < pgs->npgs; i++, j++) {
+		pgs0->pa[j] = pgs->pa[i];
+		/* Never moves page 0. */
+		m->m_len += mbuf_ext_pg_len(pgs, i, 0);
+	}
+	pgs0->npgs = j;
+	pgs->npgs = pgno + 1;
+
+	/* Can now update pgs->last_pg_len. */
+	pgs->last_pg_len = left;
+
+	m->m_next = mp->m_next;
+	mp->m_next = NULL;
+	return (m);
 }

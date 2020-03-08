@@ -703,6 +703,7 @@ struct mbuf	*mb_alloc_ext_pgs(int, bool, m_ext_free_t);
 struct mbuf	*mb_alloc_ext_plus_pages(int, int, bool, m_ext_free_t);
 struct mbuf	*mb_copym_ext_pgs(struct mbuf *, int, int, int, bool,
 		    m_ext_free_t, struct mbuf **);
+struct mbuf	*mb_splitatpos_ext(struct mbuf *, int, int);
 int		 mb_unmapped_compress(struct mbuf *m);
 struct mbuf 	*mb_unmapped_to_ext(struct mbuf *m);
 void		 mb_free_notready(struct mbuf *m, int count);
