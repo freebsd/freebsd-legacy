@@ -93,6 +93,8 @@ static struct opaque_auth rpctls_null_verf;
 
 static CLIENT		*rpctls_connect_client(void);
 static CLIENT		*rpctls_server_client(void);
+static enum clnt_stat	rpctls_server(struct socket *so,
+			    uint32_t *flags);
 
 static void
 rpctls_init(void *dummy)
@@ -425,11 +427,12 @@ printf("aft wakeup\n");
 }
 
 /* Do an upcall for a new server socket using TLS. */
-enum clnt_stat
-rpctls_server(struct socket *so)
+static enum clnt_stat
+rpctls_server(struct socket *so, uint32_t *flags)
 {
 	enum clnt_stat stat;
 	CLIENT *cl;
+	struct rpctlssd_connect_res res;
 	static bool rpctls_server_busy = false;
 
 printf("In rpctls_server\n");
@@ -449,8 +452,10 @@ printf("server_client=%p\n", cl);
 printf("rpctls_conect so=%p\n", so);
 
 	/* Do the server upcall. */
-	stat = rpctlssd_connect_1(NULL, NULL, cl);
-printf("aft server upcall=%d\n", stat);
+	stat = rpctlssd_connect_1(NULL, &res, cl);
+	if (stat == RPC_SUCCESS)
+		*flags = res.flags;
+printf("aft server upcall stat=%d flags=0x%x\n", stat, res.flags);
 	CLNT_RELEASE(cl);
 
 	/* Once the upcall is done, the daemon is done with the fp and so. */
@@ -477,6 +482,7 @@ _svcauth_rpcsec_tls(struct svc_req *rqst, struct rpc_msg *msg)
 	bool_t call_stat;
 	enum clnt_stat stat;
 	SVCXPRT *xprt;
+	uint32_t flags;
 	
 	/* Initialize reply. */
 	rqst->rq_verf = rpctls_null_verf;
@@ -523,19 +529,17 @@ printf("authtls: null reply=%d\n", call_stat);
 	}
 
 	/* Do an upcall to do the TLS handshake. */
-	stat = rpctls_server(rqst->rq_xprt->xp_socket);
+	stat = rpctls_server(rqst->rq_xprt->xp_socket, &flags);
 
 	/* Re-enable reception on the socket within the krpc. */
 	sx_xlock(&xprt->xp_lock);
 	xprt->xp_dontrcv = FALSE;
 	if (stat == RPC_SUCCESS)
-		xprt->xp_tls = TRUE;
+		xprt->xp_tls = flags;
 	sx_xunlock(&xprt->xp_lock);
 	xprt_active(xprt);		/* Harmless if already active. */
 printf("authtls: aft handshake stat=%d\n", stat);
 
-	if (stat != RPC_SUCCESS)
-		return (AUTH_REJECTEDCRED);
 	return (RPCSEC_GSS_NODISPATCH);
 }
 

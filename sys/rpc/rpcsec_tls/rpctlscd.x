@@ -25,9 +25,9 @@
  * SUCH DAMAGE.
  */
 
-/* Modified from gssd.x for the client side of RPC-over-TLS. */
-
 /* $FreeBSD$ */
+
+/* Modified from gssd.x for the client side of RPC-over-TLS. */
 
 program RPCTLSCD {
 	version RPCTLSCDVERS {
