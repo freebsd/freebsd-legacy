@@ -158,15 +158,22 @@ nfsm_uiombuf(struct nfsrv_descript *nd, struct uio *uiop, int siz)
 /*
  * copies a uio scatter/gather list to an mbuf chain.
  * This version returns the mbuf list and does not use "nd".
+ * It allocates mbuf(s) of NFSM_RNDUP(siz) and ensures that
+ * it is nul padded to a multiple of 4 bytes.
+ * Since mbufs are allocated by this function, they will
+ * always have space for an exact multiple of 4 bytes in
+ * each mbuf.  This implies that the nul padding can be
+ * safely done without checking for available space in
+ * the mbuf data area (or page for M_NOMAP mbufs).
  * NOTE: can ony handle iovcnt == 1
  */
 struct mbuf *
-nfsm_uiombuflist(int flag, int maxextsiz, struct uio *uiop, int siz,
+nfsm_uiombuflist(bool doextpgs, int maxextsiz, struct uio *uiop, int siz,
     struct mbuf **mbp, char **cpp)
 {
 	char *uiocp;
 	struct mbuf *mp, *mp2, *firstmp;
-	int xfer, left, mlen;
+	int i, left, mlen, rem, xfer;
 	int uiosiz, clflg, bextpg, bextpgsiz = 0;
 	char *mcp, *tcp;
 
@@ -176,7 +183,8 @@ nfsm_uiombuflist(int flag, int maxextsiz, struct uio *uiop, int siz,
 		clflg = 1;
 	else
 		clflg = 0;
-	if ((flag & ND_EXTPG) != 0) {
+	rem = NFSM_RNDUP(siz) - siz;
+	if (doextpgs) {
 		mp = mb_alloc_ext_plus_pages(PAGE_SIZE, M_WAITOK,
 		    false, mb_free_mext_pgs);
 		mcp = (char *)(void *)
@@ -199,12 +207,12 @@ nfsm_uiombuflist(int flag, int maxextsiz, struct uio *uiop, int siz,
 			left = siz;
 		uiosiz = left;
 		while (left > 0) {
-			if ((flag & ND_EXTPG) != 0)
+			if (doextpgs)
 				mlen = bextpgsiz;
 			else
 				mlen = M_TRAILINGSPACE(mp);
 			if (mlen == 0) {
-				if ((flag & ND_EXTPG) != 0) {
+				if (doextpgs) {
 					mp = nfsm_add_ext_pgs(mp, maxextsiz,
 					    &bextpg);
 					mcp = (char *)(void *)PHYS_TO_DMAP(
@@ -231,7 +239,7 @@ nfsm_uiombuflist(int flag, int maxextsiz, struct uio *uiop, int siz,
 			left -= xfer;
 			uiocp += xfer;
 			mcp += xfer;
-			if ((flag & ND_EXTPG) != 0) {
+			if (doextpgs) {
 				bextpgsiz -= xfer;
 				mp->m_ext.ext_pgs->last_pg_len += xfer;
 			}
@@ -243,6 +251,12 @@ nfsm_uiombuflist(int flag, int maxextsiz, struct uio *uiop, int siz,
 		uiop->uio_iov->iov_base = (void *)tcp;
 		uiop->uio_iov->iov_len -= uiosiz;
 		siz -= uiosiz;
+	}
+	for (i = 0; i < rem; i++) {
+		*mcp++ = '\0';
+		mp->m_len++;
+		if (doextpgs)
+			mp->m_ext.ext_pgs->last_pg_len++;
 	}
 	if (cpp != NULL)
 		*cpp = mcp;

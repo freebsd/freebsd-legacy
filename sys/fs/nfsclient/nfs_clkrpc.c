@@ -73,6 +73,7 @@ nfscb_program(struct svc_req *rqst, SVCXPRT *xprt)
 	struct nfsrv_descript nd;
 	int cacherep, credflavor;
 
+printf("cbprogram proc=%d\n", rqst->rq_proc);
 	memset(&nd, 0, sizeof(nd));
 	if (rqst->rq_proc != NFSPROC_NULL &&
 	    rqst->rq_proc != NFSV4PROC_CBCOMPOUND) {
@@ -92,7 +93,8 @@ nfscb_program(struct svc_req *rqst, SVCXPRT *xprt)
 	rqst->rq_args = NULL;
 	newnfs_realign(&nd.nd_mrep, M_WAITOK);
 	nd.nd_md = nd.nd_mrep;
-	nd.nd_dpos = mtod(nd.nd_md, caddr_t);
+printf("cbreq nd_md=%p offs=%d\n", nd.nd_md, rqst->rq_xprt->xp_mbufoffs);
+	nfsm_set(&nd, rqst->rq_xprt->xp_mbufoffs, false);
 	nd.nd_nam = svc_getrpccaller(rqst);
 	nd.nd_nam2 = rqst->rq_addr;
 	nd.nd_mreq = NULL;
@@ -265,6 +267,7 @@ nfscbd_nfsd(struct thread *td, struct nfsd_nfscbd_args *args)
 		nfscbd_pool->sp_minthreads = 4;
 		nfscbd_pool->sp_maxthreads = 4;
 			
+printf("CBpool\n");
 		svc_run(nfscbd_pool);
 
 		rpc_gss_clear_svc_name_call(NFS_CALLBCKPROG, NFSV4_CBVERS);

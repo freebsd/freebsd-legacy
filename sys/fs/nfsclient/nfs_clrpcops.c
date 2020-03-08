@@ -78,6 +78,9 @@ extern int nfs_pnfsiothreads;
 extern u_long sb_max_adj;
 extern int nfs_maxcopyrange;
 extern bool nfs_use_ext_pgs;
+#ifdef KERN_TLS
+extern u_int ktls_maxlen;
+#endif
 NFSCLSTATEMUTEX;
 int nfstest_outofseq = 0;
 int nfscl_assumeposixlocks = 1;
@@ -162,7 +165,6 @@ static int nfscl_dofflayoutio(vnode_t, struct uio *, int *, int *, int *,
     nfsv4stateid_t *, int, struct nfscldevinfo *, struct nfscllayout *,
     struct nfsclflayout *, uint64_t, uint64_t, int, int, struct mbuf *,
     struct nfsclwritedsdorpc *, struct ucred *, NFSPROC_T *);
-static struct mbuf *nfsm_copym(struct mbuf *, int, int);
 static int nfsrpc_readds(vnode_t, struct uio *, nfsv4stateid_t *, int *,
     struct nfsclds *, uint64_t, int, struct nfsfh *, int, int, int,
     struct ucred *, NFSPROC_T *);
@@ -5691,7 +5693,7 @@ nfscl_doiods(vnode_t vp, struct uio *uiop, int *iomode, int *must_commit,
 	struct nfscllayout *layp;
 	struct nfscldevinfo *dip;
 	struct nfsclflayout *rflp;
-	struct mbuf *m;
+	struct mbuf *m, *m2;
 	struct nfsclwritedsdorpc *drpc, *tdrpc;
 	nfsv4stateid_t stateid;
 	struct ucred *newcred;
@@ -5703,6 +5705,8 @@ nfscl_doiods(vnode_t vp, struct uio *uiop, int *iomode, int *must_commit,
 	size_t iovlen = 0;
 	off_t offs = 0;
 	ssize_t resid = 0;
+	int maxextsiz;
+	bool doextpgs;
 
 	if (!NFSHASPNFS(nmp) || nfscl_enablecallb == 0 || nfs_numnfscbd == 0 ||
 	    (np->n_flag & NNOLAYOUT) != 0)
@@ -5796,8 +5800,23 @@ nfscl_doiods(vnode_t vp, struct uio *uiop, int *iomode, int *must_commit,
 						iovbase =
 						    uiop->uio_iov->iov_base;
 						iovlen = uiop->uio_iov->iov_len;
-						m = nfsm_uiombuflist(0, 0, uiop, len,
-						    NULL, NULL);
+						doextpgs = false;
+						maxextsiz = 0;
+						if ((NFSHASTLS(nmp) ||
+						    (nfs_use_ext_pgs &&
+						    xfer > MCLBYTES)) &&
+						    PMAP_HAS_DMAP != 0) {
+							doextpgs = true;
+							maxextsiz = 16384;
+#ifdef KERN_TLS
+							maxextsiz = min(
+							    TLS_MAX_MSG_SIZE_V10_2,
+							    ktls_maxlen);
+#endif
+						}
+						m = nfsm_uiombuflist(doextpgs,
+						    maxextsiz, uiop, len, NULL,
+						    NULL);
 					}
 					tdrpc = drpc = malloc(sizeof(*drpc) *
 					    (mirrorcnt - 1), M_TEMP, M_WAITOK |
@@ -5805,6 +5824,12 @@ nfscl_doiods(vnode_t vp, struct uio *uiop, int *iomode, int *must_commit,
 				}
 			}
 			for (i = firstmirror; i < mirrorcnt && error == 0; i++){
+				if (m != NULL && i < mirrorcnt - 1)
+					m2 = m_copym(m, 0, M_COPYALL, M_WAITOK);
+				else {
+					m2 = m;
+					m = NULL;
+				}
 				if ((layp->nfsly_flags & NFSLY_FLEXFILE) != 0) {
 					dev = rflp->nfsfl_ffm[i].dev;
 					dip = nfscl_getdevinfo(nmp->nm_clp, dev,
@@ -5821,7 +5846,7 @@ nfscl_doiods(vnode_t vp, struct uio *uiop, int *iomode, int *must_commit,
 						    uiop, iomode, must_commit,
 						    &eof, &stateid, rwaccess,
 						    dip, layp, rflp, off, xfer,
-						    i, docommit, m, tdrpc,
+						    i, docommit, m2, tdrpc,
 						    newcred, p);
 					else
 						error = nfscl_doflayoutio(vp,
@@ -5830,12 +5855,13 @@ nfscl_doiods(vnode_t vp, struct uio *uiop, int *iomode, int *must_commit,
 						    dip, layp, rflp, off, xfer,
 						    docommit, newcred, p);
 					nfscl_reldevinfo(dip);
-				} else
+				} else {
+					m_freem(m2);
 					error = EIO;
+				}
 				tdrpc++;
 			}
-			if (m != NULL)
-				m_freem(m);
+			m_freem(m);
 			tdrpc = drpc;
 			timo = hz / 50;		/* Wait for 20msec. */
 			if (timo < 1)
@@ -5894,38 +5920,6 @@ nfscl_doiods(vnode_t vp, struct uio *uiop, int *iomode, int *must_commit,
 	nfscl_rellayout(layp, 0);
 	nfscl_relref(nmp);
 	return (error);
-}
-
-/*
- * Make a copy of the mbuf chain and add an mbuf for null padding, as required.
- */
-static struct mbuf *
-nfsm_copym(struct mbuf *m, int off, int xfer)
-{
-	struct mbuf *m2, *m3, *m4;
-	uint32_t *tl;
-	int rem;
-
-	m2 = m_copym(m, off, xfer, M_WAITOK);
-	rem = NFSM_RNDUP(xfer) - xfer;
-	if (rem > 0) {
-		/*
-		 * The zero padding to a multiple of 4 bytes is required by
-		 * the XDR. So that the mbufs copied by reference aren't
-		 * modified, add an mbuf with the zero'd bytes to the list.
-		 * rem will be a maximum of 3, so one zero'd uint32_t is
-		 * sufficient.
-		 */
-		m3 = m2;
-		while (m3->m_next != NULL)
-			m3 = m3->m_next;
-		NFSMGET(m4);
-		tl = NFSMTOD(m4, uint32_t *);
-		*tl = 0;
-		mbuf_setlen(m4, rem);
-		mbuf_setnext(m3, m4);
-	}
-	return (m2);
 }
 
 /*
@@ -6179,7 +6173,18 @@ nfscl_dofflayoutio(vnode_t vp, struct uio *uiop, int *iomode, int *must_commit,
 					NFSUNLOCKCLSTATE();
 				}
 			} else {
-				m = nfsm_copym(mp, rel_off, xfer);
+				/*
+				 * Split off the first xfer bytes of the mbuf
+				 * chain.
+				 */
+				m = mp;
+				if (xfer < len) {
+					if ((m->m_flags & M_NOMAP) != 0)
+						mp = mb_splitatpos_ext(m, xfer,
+						    M_WAITOK);
+					else
+						mp = m_split(m, xfer, M_WAITOK);
+				}
 				NFSCL_DEBUG(4, "mcopy reloff=%d xfer=%jd\n",
 				    rel_off, (uintmax_t)xfer);
 				/*
@@ -6198,6 +6203,8 @@ nfscl_dofflayoutio(vnode_t vp, struct uio *uiop, int *iomode, int *must_commit,
 					    xfer, fhp, m, dp->nfsdi_vers,
 					    dp->nfsdi_minorvers, tcred, p);
 				NFSCL_DEBUG(4, "nfsio_writedsmir=%d\n", error);
+				if (xfer == len)
+					mp = NULL;
 				if (error != 0 && error != EACCES && error !=
 				    ESTALE) {
 					NFSCL_DEBUG(4,
@@ -6216,6 +6223,7 @@ nfscl_dofflayoutio(vnode_t vp, struct uio *uiop, int *iomode, int *must_commit,
 		if ((dp->nfsdi_flags & NFSDI_TIGHTCOUPLED) == 0)
 			NFSFREECRED(tcred);
 	}
+	m_freem(mp);		/* In case errors occurred. */
 	NFSCL_DEBUG(4, "eo nfscl_dofflayoutio=%d\n", error);
 	return (error);
 }
