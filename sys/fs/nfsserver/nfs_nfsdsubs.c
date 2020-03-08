@@ -1319,8 +1319,7 @@ nfsrv_adj(struct mbuf *mp, int len, int nul)
 		lastlen = m->m_len - len;
 
 	/* Adjust the last mbuf. */
-	if ((m->m_flags & (M_EXT | M_NOMAP)) ==
-	    (M_EXT | M_NOMAP)) {
+	if ((m->m_flags & M_NOMAP) != 0) {
 		pgs = m->m_ext.ext_pgs;
 		pgno = pgs->npgs - 1;
 		off = (pgno == 0) ? pgs->first_pg_off : 0;
@@ -1913,16 +1912,15 @@ nfsrv_parsename(struct nfsrv_descript *nd, char *bufp, u_long *hashp,
 		 * Now, copy the component name into the buffer.
 		 */
 		fromcp = nd->nd_dpos;
-		if ((nd->nd_md->m_flags & (M_EXT | M_NOMAP)) ==
-		    (M_EXT | M_NOMAP))
+		if ((nd->nd_md->m_flags & M_NOMAP) != 0)
 			rem = nd->nd_dextpgsiz;
 		else
 			rem = mtod(nd->nd_md, char *) + nd->nd_md->m_len -
 			    fromcp;
 		for (i = 0; i < len; i++) {
 			while (rem == 0) {
-				if ((nd->nd_md->m_flags & (M_EXT | M_NOMAP)) ==
-				    (M_EXT | M_NOMAP) && nd->nd_dextpg <
+				if ((nd->nd_md->m_flags & M_NOMAP) != 0 &&
+				    nd->nd_dextpg <
 				    nd->nd_md->m_ext.ext_pgs->npgs - 1) {
 					pgs = nd->nd_md->m_ext.ext_pgs;
 					pg = PHYS_TO_VM_PAGE(
@@ -1936,9 +1934,11 @@ nfsrv_parsename(struct nfsrv_descript *nd, char *bufp, u_long *hashp,
 					if (nd->nd_dextpg == 0)
 						pgs->first_pg_off = 0;
 					fromcp = nd->nd_dpos = (char *)(void *)
-					    PHYS_TO_DMAP(pgs->pa[nd->nd_dextpg]);
+					    PHYS_TO_DMAP(
+					    pgs->pa[nd->nd_dextpg]);
 					rem = nd->nd_dextpgsiz =
-					    mbuf_ext_pg_len(pgs, nd->nd_dextpg, 0);
+					    mbuf_ext_pg_len(pgs, nd->nd_dextpg,
+					    0);
 				} else {
 					if (!nfsm_shiftnext(nd, &rem)) {
 						error = EBADRPC;

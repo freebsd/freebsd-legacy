@@ -699,8 +699,7 @@ nfsrvd_readlink(struct nfsrv_descript *nd, __unused int isdgram,
 	if (mp != NULL) {
 		nd->nd_mb->m_next = mp;
 		nd->nd_mb = mpend;
-		if ((mpend->m_flags & (M_EXT | M_NOMAP)) ==
-		    (M_EXT | M_NOMAP)) {
+		if ((mpend->m_flags & M_NOMAP) != 0) {
 			pgs = mpend->m_ext.ext_pgs;
 			nd->nd_bextpg = pgs->npgs - 1;
 			nd->nd_bpos = (char *)(void *)
@@ -863,7 +862,8 @@ nfsrvd_read(struct nfsrv_descript *nd, __unused int isdgram,
 		 * Always use ext_pgs if ND_EXTPG is set.
 		 */
 		if ((nd->nd_flag & ND_EXTPG) != 0 || (PMAP_HAS_DMAP != 0 &&
-		    ((nd->nd_flag & ND_TLS) != 0 || nfs_use_ext_pgs)))
+		    ((nd->nd_flag & ND_TLS) != 0 || (nfs_use_ext_pgs &&
+		    cnt > MCLBYTES))))
 			nd->nd_repstat = nfsvno_read(vp, off, cnt, nd->nd_cred,
 			    nd->nd_maxextsiz, p, &m3, &m2);
 		else
@@ -903,8 +903,7 @@ nfsrvd_read(struct nfsrv_descript *nd, __unused int isdgram,
 	if (m3) {
 		nd->nd_mb->m_next = m3;
 		nd->nd_mb = m2;
-		if ((m2->m_flags & (M_EXT | M_NOMAP)) ==
-		    (M_EXT | M_NOMAP)) {
+		if ((m2->m_flags & M_NOMAP) != 0) {
 			nd->nd_flag |= ND_EXTPG;
 			pgs = m2->m_ext.ext_pgs;
 			nd->nd_bextpg = pgs->npgs - 1;
@@ -1056,9 +1055,8 @@ nfsrvd_write(struct nfsrv_descript *nd, __unused int isdgram,
 	 * which is to return ok so long as there are no permission problems.
 	 */
 	if (retlen > 0) {
-		nd->nd_repstat = nfsvno_write(vp, off, retlen, &stable,
-		    nd->nd_md, nd->nd_dpos, nd->nd_dextpg, nd->nd_dextpgsiz,
-		    nd->nd_cred, p);
+		nd->nd_repstat = nfsvno_write(vp, off, retlen, &stable, nd,
+		    p);
 		error = nfsm_advance(nd, NFSM_RNDUP(retlen), -1);
 		if (error)
 			goto nfsmout;
@@ -5587,18 +5585,20 @@ nfsrvd_getxattr(struct nfsrv_descript *nd, __unused int isdgram,
 		if (mp != NULL) {
 			nd->nd_mb->m_next = mp;
 			nd->nd_mb = mpend;
-			if ((mpend->m_flags & (M_EXT | M_NOMAP)) ==
-			    (M_EXT | M_NOMAP)) {
+			if ((mpend->m_flags & M_NOMAP) != 0) {
 				nd->nd_flag |= ND_EXTPG;
 				pgs = mpend->m_ext.ext_pgs;
 				nd->nd_bextpg = pgs->npgs - 1;
 				nd->nd_bpos = (char *)(void *)
 				    PHYS_TO_DMAP(pgs->pa[nd->nd_bextpg]);
-				off = (nd->nd_bextpg == 0) ? pgs->first_pg_off : 0;
+				off = (nd->nd_bextpg == 0) ? pgs->first_pg_off :
+				    0;
 				nd->nd_bpos += off + pgs->last_pg_len;
-				nd->nd_bextpgsiz = PAGE_SIZE - pgs->last_pg_len - off;
+				nd->nd_bextpgsiz = PAGE_SIZE -
+				    pgs->last_pg_len - off;
 			} else
-				nd->nd_bpos = mtod(mpend, char *) + mpend->m_len;
+				nd->nd_bpos = mtod(mpend, char *) +
+				    mpend->m_len;
 		}
 	}
 	free(name, M_TEMP);

@@ -45,7 +45,6 @@ __FBSDID("$FreeBSD$");
 #include <rpc/rpc.h>
 #include <rpc/rpcsec_gss.h>
 
-#include <nfs/nfs_fha.h>
 #include <fs/nfsserver/nfs_fha_new.h>
 
 #include <security/mac/mac_framework.h>
@@ -162,11 +161,9 @@ nfssvc_program(struct svc_req *rqst, SVCXPRT *xprt)
 	 */
 	nd.nd_mrep = rqst->rq_args;
 	rqst->rq_args = NULL;
-#ifdef notnow
 	newnfs_realign(&nd.nd_mrep, M_WAITOK);
-#endif
 	nd.nd_md = nd.nd_mrep;
-	nfsm_set(&nd, false);
+	nfsm_set(&nd, rqst->rq_xprt->xp_mbufoffs, false);
 	nd.nd_nam = svc_getrpccaller(rqst);
 	nd.nd_nam2 = rqst->rq_addr;
 	nd.nd_mreq = NULL;
@@ -604,7 +601,7 @@ nfsrvd_init(int terminating)
 		    SYSCTL_STATIC_CHILDREN(_vfs_nfsd));
 		nfsrvd_pool->sp_rcache = NULL;
 		nfsrvd_pool->sp_assign = fhanew_assign;
-		nfsrvd_pool->sp_done = fha_nd_complete;
+		nfsrvd_pool->sp_done = fhanew_nd_complete;
 		NFSD_LOCK();
 	}
 }

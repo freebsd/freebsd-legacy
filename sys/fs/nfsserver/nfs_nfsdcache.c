@@ -1023,8 +1023,22 @@ nfsrc_getlenandcksum(mbuf_t m1, u_int16_t *cksum)
 		len += mbuf_len(m);
 		m = mbuf_next(m);
 	}
-	cklen = (len > NFSRVCACHE_CHECKLEN) ? NFSRVCACHE_CHECKLEN : len;
-	*cksum = in_cksum(m1, cklen);
+	/*
+	 * in_cksum() doesn't work for ext_pgs mbufs, so just return a
+	 * random checksum to avoid a false hit.
+	 * Since NFSv4.1 and NFSv4.2 does not actually use
+	 * the DRC, due to sessions, I think this should be ok.
+	 * Also, most NFS over TCP implementations do not implement
+	 * a DRC at all.  Unfortunately, the DRC is used for NFSv4.0
+	 * for the cases where there are sequenced operations, such as
+	 * file lock operations, so it must still be enabled for NFSv4.0.
+	 */
+	if ((m1->m_flags & M_NOMAP) == 0) {
+		cklen = (len > NFSRVCACHE_CHECKLEN) ? NFSRVCACHE_CHECKLEN :
+		    len;
+		*cksum = in_cksum(m1, cklen);
+	} else
+		*cksum = arc4random();
 	return (len);
 }
 
