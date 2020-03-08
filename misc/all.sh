@@ -86,6 +86,8 @@
 # quota7.sh	panic: dqflush: stray dquot				20120221
 # rename14.sh	WiP							20200215
 # rename15.sh	WiP							20200215
+# sctp.sh	WiP							20200307
+# sctp2.sh	panic: soclose: SS_NOFDREF on enter			20200307
 # sctp3.sh	WiP							20190809
 # signal.sh	Timing issues. Needs fixing				20171116
 # snap4.sh	panic: snapacct_ufs2: bad block				20181014
