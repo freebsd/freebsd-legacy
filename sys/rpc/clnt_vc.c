@@ -84,6 +84,7 @@ __FBSDID("$FreeBSD$");
 #include <rpc/rpc.h>
 #include <rpc/rpc_com.h>
 #include <rpc/krpc.h>
+#include <rpc/rpcsec_tls.h>
 
 #ifdef KERN_TLS
 extern u_int ktls_maxlen;
@@ -532,6 +533,19 @@ got_reply:
 	if (ext && ext->rc_feedback)
 		ext->rc_feedback(FEEDBACK_OK, proc, ext->rc_feedback_arg);
 
+#ifdef notnow
+{ struct mbuf *m, *m2;
+int txxxx;
+if (cr->cr_mrep != NULL) {
+txxxx = m_length(cr->cr_mrep, NULL);
+if (txxxx > 0) {
+m = mb_copym_ext_pgs(cr->cr_mrep, txxxx, 16384, M_WAITOK,
+    false, mb_free_mext_pgs, &m2);
+m2 = cr->cr_mrep;
+cr->cr_mrep = m;
+m_freem(m2);
+} } }
+#endif
 	xdrmbuf_create(&xdrs, cr->cr_mrep, XDR_DECODE);
 	ok = xdr_replymsg(&xdrs, &reply_msg);
 	cr->cr_mrep = NULL;
@@ -553,6 +567,14 @@ got_reply:
 			} else {
 				KASSERT(results,
 				    ("auth validated but no result"));
+				if (ext) {
+					if ((results->m_flags & M_NOMAP) !=
+					    0)
+						ext->rc_mbufoffs =
+						    xdrs.x_handy;
+					else
+						ext->rc_mbufoffs = 0;
+				}
 				*resultsp = results;
 			}
 		}		/* end successful completion */
@@ -749,8 +771,9 @@ clnt_vc_control(CLIENT *cl, u_int request, void *info)
 		if (ct->ct_backchannelxprt == NULL) {
 			xprt->xp_p2 = ct;
 			if (ct->ct_tls)
-				xprt->xp_tls = TRUE;
+				xprt->xp_tls = RPCTLS_FLAGS_HANDSHAKE;
 			ct->ct_backchannelxprt = xprt;
+printf("backch tls=0x%x xprt=%p\n", xprt->xp_tls, xprt);
 		}
 		break;
 
@@ -1032,9 +1055,11 @@ clnt_vc_soupcall(struct socket *so, void *arg, int waitflag)
 				    ntohl(xid_plus_direction[1]);
 				/* Check message direction. */
 				if (xid_plus_direction[1] == CALL) {
+printf("Got backchannel callback\n");
 					/* This is a backchannel request. */
 					mtx_lock(&ct->ct_lock);
 					xprt = ct->ct_backchannelxprt;
+printf("backxprt=%p\n", xprt);
 					if (xprt == NULL) {
 						mtx_unlock(&ct->ct_lock);
 						/* Just throw it away. */

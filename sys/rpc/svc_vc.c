@@ -45,10 +45,13 @@ __FBSDID("$FreeBSD$");
  * and a record/tcp stream.
  */
 
+#include "opt_kern_tls.h"
+
 #include <sys/param.h>
 #include <sys/limits.h>
 #include <sys/lock.h>
 #include <sys/kernel.h>
+#include <sys/ktls.h>
 #include <sys/malloc.h>
 #include <sys/mbuf.h>
 #include <sys/mutex.h>
@@ -66,11 +69,16 @@ __FBSDID("$FreeBSD$");
 #include <netinet/tcp.h>
 
 #include <rpc/rpc.h>
+#include <rpc/rpcsec_tls.h>
 
 #include <rpc/krpc.h>
 #include <rpc/rpc_com.h>
 
 #include <security/mac/mac_framework.h>
+
+#ifdef KERN_TLS
+extern u_int ktls_maxlen;
+#endif
 
 static bool_t svc_vc_rendezvous_recv(SVCXPRT *, struct rpc_msg *,
     struct sockaddr **, struct mbuf **);
@@ -581,6 +589,30 @@ svc_vc_process_pending(SVCXPRT *xprt)
 	struct socket *so = xprt->xp_socket;
 	struct mbuf *m;
 
+{ struct mbuf *m1, *m2, *m3, *m4;
+	int txxxx;
+	m3 = cd->mpending;
+	m4 = NULL;
+	while (m3 != NULL && (m3->m_flags & M_NOMAP) != 0) {
+		m4 = m3;
+		m3 = m3->m_next;
+	}
+	if (m3 != NULL) {
+		txxxx = m_length(m3, NULL);
+		if (txxxx > 0) {
+			m1 = mb_copym_ext_pgs(m3, txxxx, 16384, M_WAITOK,
+			    false, mb_free_mext_pgs, &m2);
+			if (m4 != NULL) {
+				m4->m_next = m1;
+				m_freem(m3);
+			} else {
+				m2 = cd->mpending;
+				cd->mpending = m1;
+				m_freem(m2);
+			}
+		}
+	}
+}
 	/*
 	 * If cd->resid is non-zero, we have part of the
 	 * record already, otherwise we are expecting a record
@@ -610,7 +642,7 @@ svc_vc_process_pending(SVCXPRT *xprt)
 		header = ntohl(header);
 		cd->eor = (header & 0x80000000) != 0;
 		cd->resid = header & 0x7fffffff;
-		m_adj(cd->mpending, sizeof(uint32_t));
+		cd->resid += sizeof(uint32_t);
 	}
 
 	/*
@@ -623,10 +655,14 @@ svc_vc_process_pending(SVCXPRT *xprt)
 	while (cd->mpending && cd->resid) {
 		m = cd->mpending;
 		if (cd->mpending->m_next
-		    || cd->mpending->m_len > cd->resid)
-			cd->mpending = m_split(cd->mpending,
-			    cd->resid, M_WAITOK);
-		else
+		    || cd->mpending->m_len > cd->resid) {
+			if ((cd->mpending->m_flags & M_NOMAP) != 0)
+				cd->mpending = mb_splitatpos_ext(
+				    cd->mpending, cd->resid, M_WAITOK);
+			else
+				cd->mpending = m_split(cd->mpending,
+				    cd->resid, M_WAITOK);
+		} else
 			cd->mpending = NULL;
 		if (cd->mreq)
 			m_last(cd->mreq)->m_next = m;
@@ -660,7 +696,7 @@ svc_vc_recv(SVCXPRT *xprt, struct rpc_msg *msg,
 	struct socket* so = xprt->xp_socket;
 	XDR xdrs;
 	int error, rcvflag;
-	uint32_t xid_plus_direction[2];
+	uint32_t xid_plus_direction[3], junk;
 
 	/*
 	 * Serialise access to the socket and our own record parsing
@@ -691,15 +727,15 @@ svc_vc_recv(SVCXPRT *xprt, struct rpc_msg *msg,
 				m_copydata(cd->mreq, 0,
 				    sizeof(xid_plus_direction),
 				    (char *)xid_plus_direction);
-				xid_plus_direction[0] =
-				    ntohl(xid_plus_direction[0]);
 				xid_plus_direction[1] =
 				    ntohl(xid_plus_direction[1]);
+				xid_plus_direction[2] =
+				    ntohl(xid_plus_direction[2]);
 				/* Check message direction. */
-				if (xid_plus_direction[1] == REPLY) {
+				if (xid_plus_direction[2] == REPLY) {
 					clnt_bck_svccall(xprt->xp_p2,
 					    cd->mreq,
-					    xid_plus_direction[0]);
+					    xid_plus_direction[1]);
 					cd->mreq = NULL;
 					continue;
 				}
@@ -719,13 +755,18 @@ svc_vc_recv(SVCXPRT *xprt, struct rpc_msg *msg,
 
 			sx_xunlock(&xprt->xp_lock);
 
-			if (! xdr_callmsg(&xdrs, msg)) {
+			if (! xdr_uint32_t(&xdrs, &junk) ||
+			    ! xdr_callmsg(&xdrs, msg)) {
 				XDR_DESTROY(&xdrs);
 				return (FALSE);
 			}
 
 			*addrp = NULL;
 			*mp = xdrmbuf_getall(&xdrs);
+			if (((*mp)->m_flags & M_NOMAP) != 0)
+				xprt->xp_mbufoffs = xdrs.x_handy;
+			else
+				xprt->xp_mbufoffs = 0;
 			XDR_DESTROY(&xdrs);
 
 			return (TRUE);
@@ -827,13 +868,31 @@ svc_vc_backchannel_recv(SVCXPRT *xprt, struct rpc_msg *msg,
 	mtx_unlock(&ct->ct_lock);
 	sx_xunlock(&xprt->xp_lock);
 
+printf("recv backch m=%p\n", m);
+{ struct mbuf *m1, *m2;
+int txxxx;
+if (m != NULL) {
+txxxx = m_length(m, NULL);
+if (txxxx > 0) {
+m1 = mb_copym_ext_pgs(m, txxxx, 16384, M_WAITOK,
+    false, mb_free_mext_pgs, &m2);
+m2 = m;
+m = m1;
+m_freem(m2);
+} } }
 	xdrmbuf_create(&xdrs, m, XDR_DECODE);
 	if (! xdr_callmsg(&xdrs, msg)) {
+printf("recv backch callmsg failed\n");
 		XDR_DESTROY(&xdrs);
 		return (FALSE);
 	}
 	*addrp = NULL;
 	*mp = xdrmbuf_getall(&xdrs);
+	if (((*mp)->m_flags & M_NOMAP) != 0)
+		xprt->xp_mbufoffs = xdrs.x_handy;
+	else
+		xprt->xp_mbufoffs = 0;
+printf("backch offs=%d\n", xprt->xp_mbufoffs);
 	XDR_DESTROY(&xdrs);
 	return (TRUE);
 }
@@ -845,7 +904,7 @@ svc_vc_reply(SVCXPRT *xprt, struct rpc_msg *msg,
 	XDR xdrs;
 	struct mbuf *mrep;
 	bool_t stat = TRUE;
-	int error, len;
+	int error, len, maxextsiz;
 
 	/*
 	 * Leave space for record mark.
@@ -875,7 +934,23 @@ svc_vc_reply(SVCXPRT *xprt, struct rpc_msg *msg,
 		len = mrep->m_pkthdr.len;
 		*mtod(mrep, uint32_t *) =
 			htonl(0x80000000 | (len - sizeof(uint32_t)));
+
+		/* For RPC-over-TLS, copy mrep to a chain of ext_pgs. */
+		if ((xprt->xp_tls & RPCTLS_FLAGS_HANDSHAKE) != 0) {
+			/*
+			 * Copy the mbuf chain to a chain of
+			 * ext_pgs mbuf(s) as required by KERN_TLS.
+			 */
+			maxextsiz = TLS_MAX_MSG_SIZE_V10_2;
+#ifdef KERN_TLS
+			maxextsiz = min(maxextsiz, ktls_maxlen);
+#endif
+			mrep = _rpc_copym_into_ext_pgs(mrep, maxextsiz);
+		}
 		atomic_add_32(&xprt->xp_snd_cnt, len);
+		/*
+		 * sosend consumes mreq.
+		 */
 		error = sosend(xprt->xp_socket, NULL, NULL, mrep, NULL,
 		    0, curthread);
 		if (!error) {
@@ -902,7 +977,7 @@ svc_vc_backchannel_reply(SVCXPRT *xprt, struct rpc_msg *msg,
 	XDR xdrs;
 	struct mbuf *mrep;
 	bool_t stat = TRUE;
-	int error;
+	int error, maxextsiz;
 
 	/*
 	 * Leave space for record mark.
@@ -932,6 +1007,19 @@ svc_vc_backchannel_reply(SVCXPRT *xprt, struct rpc_msg *msg,
 		*mtod(mrep, uint32_t *) =
 			htonl(0x80000000 | (mrep->m_pkthdr.len
 				- sizeof(uint32_t)));
+
+		/* For RPC-over-TLS, copy mrep to a chain of ext_pgs. */
+		if ((xprt->xp_tls & RPCTLS_FLAGS_HANDSHAKE) != 0) {
+			/*
+			 * Copy the mbuf chain to a chain of
+			 * ext_pgs mbuf(s) as required by KERN_TLS.
+			 */
+			maxextsiz = TLS_MAX_MSG_SIZE_V10_2;
+#ifdef KERN_TLS
+			maxextsiz = min(maxextsiz, ktls_maxlen);
+#endif
+			mrep = _rpc_copym_into_ext_pgs(mrep, maxextsiz);
+		}
 		sx_xlock(&xprt->xp_lock);
 		ct = (struct ct_data *)xprt->xp_p2;
 		if (ct != NULL)

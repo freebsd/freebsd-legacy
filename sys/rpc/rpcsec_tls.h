@@ -35,10 +35,16 @@
 #define	RPCTLS_SYSC_CONNECT	2
 #define	RPCTLS_SYSC_SERVER	3
 
+/* Flag bits to indicate certificate results. */
+#define	RPCTLS_FLAGS_HANDSHAKE	0x01
+#define	RPCTLS_FLAGS_GOTCERT	0x02
+#define	RPCTLS_FLAGS_SELFSIGNED	0x04
+#define	RPCTLS_FLAGS_VERIFIED	0x08
+#define	RPCTLS_FLAGS_DISABLED	0x10
+
 #ifdef _KERNEL
 /* Functions that perform upcalls to the rpctlsd daemon. */
 enum clnt_stat	rpctls_connect(CLIENT *newclient, struct socket *so);
-enum clnt_stat	rpctls_server(struct socket *so);
 
 /* String for AUTH_TLS reply verifier. */
 #define	RPCTLS_START_STRING	"STARTTLS"

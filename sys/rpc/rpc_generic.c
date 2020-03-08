@@ -904,8 +904,7 @@ _rpc_copym_into_ext_pgs(struct mbuf *mp, int maxextsiz)
 	tlen = mp->m_len;
 	m2 = mp;
 	for (m = mp->m_next; m != NULL; m = m->m_next) {
-		if ((m->m_flags & (M_EXT | M_NOMAP)) ==
-		    (M_EXT | M_NOMAP))
+		if ((m->m_flags & M_NOMAP) != 0)
 			break;
 		tlen += m->m_len;
 		m2 = m;

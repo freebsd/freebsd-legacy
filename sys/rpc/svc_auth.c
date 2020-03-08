@@ -53,6 +53,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/ucred.h>
 
 #include <rpc/rpc.h>
+#include <rpc/rpcsec_tls.h>
 
 static enum auth_stat (*_svcauth_rpcsec_gss)(struct svc_req *,
     struct rpc_msg *) = NULL;
@@ -94,12 +95,18 @@ _authenticate(struct svc_req *rqst, struct rpc_msg *msg)
 		dummy = _svcauth_null(rqst, msg);
 		return (dummy);
 	case AUTH_SYS:
+		if ((rqst->rq_xprt->xp_tls & RPCTLS_FLAGS_DISABLED) != 0)
+			return (AUTH_REJECTEDCRED);
 		dummy = _svcauth_unix(rqst, msg);
 		return (dummy);
 	case AUTH_SHORT:
+		if ((rqst->rq_xprt->xp_tls & RPCTLS_FLAGS_DISABLED) != 0)
+			return (AUTH_REJECTEDCRED);
 		dummy = _svcauth_short(rqst, msg);
 		return (dummy);
 	case RPCSEC_GSS:
+		if ((rqst->rq_xprt->xp_tls & RPCTLS_FLAGS_DISABLED) != 0)
+			return (AUTH_REJECTEDCRED);
 		if (!_svcauth_rpcsec_gss)
 			return (AUTH_REJECTEDCRED);
 		dummy = _svcauth_rpcsec_gss(rqst, msg);

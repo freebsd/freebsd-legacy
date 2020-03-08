@@ -61,8 +61,11 @@ __FBSDID("$FreeBSD$");
  * connection provided by the client to the server.
  */
 
+#include "opt_kern_tls.h"
+
 #include <sys/param.h>
 #include <sys/systm.h>
+#include <sys/ktls.h>
 #include <sys/lock.h>
 #include <sys/malloc.h>
 #include <sys/mbuf.h>
@@ -84,6 +87,11 @@ __FBSDID("$FreeBSD$");
 #include <rpc/rpc.h>
 #include <rpc/rpc_com.h>
 #include <rpc/krpc.h>
+#include <rpc/rpcsec_tls.h>
+
+#ifdef KERN_TLS
+extern u_int ktls_maxlen;
+#endif
 
 struct cmessage {
         struct cmsghdr cmsg;
@@ -203,7 +211,8 @@ clnt_bck_call(
 	uint32_t xid;
 	struct mbuf *mreq = NULL, *results;
 	struct ct_request *cr;
-	int error;
+	int error, maxextsiz;
+	uint32_t junk;
 
 	cr = malloc(sizeof(struct ct_request), M_RPC, M_WAITOK);
 
@@ -296,6 +305,18 @@ call_again:
 	TAILQ_INSERT_TAIL(&ct->ct_pending, cr, cr_link);
 	mtx_unlock(&ct->ct_lock);
 
+	/* For RPC-over-TLS, copy mrep to a chain of ext_pgs. */
+	if ((xprt->xp_tls & RPCTLS_FLAGS_HANDSHAKE) != 0) {
+		/*
+		 * Copy the mbuf chain to a chain of
+		 * ext_pgs mbuf(s) as required by KERN_TLS.
+		 */
+		maxextsiz = TLS_MAX_MSG_SIZE_V10_2;
+#ifdef KERN_TLS
+		maxextsiz = min(maxextsiz, ktls_maxlen);
+#endif
+		mreq = _rpc_copym_into_ext_pgs(mreq, maxextsiz);
+	}
 	/*
 	 * sosend consumes mreq.
 	 */
@@ -403,7 +424,9 @@ got_reply:
 		ext->rc_feedback(FEEDBACK_OK, proc, ext->rc_feedback_arg);
 
 	xdrmbuf_create(&xdrs, cr->cr_mrep, XDR_DECODE);
-	ok = xdr_replymsg(&xdrs, &reply_msg);
+	ok = xdr_uint32_t(&xdrs, &junk);
+	if (ok)
+		ok = xdr_replymsg(&xdrs, &reply_msg);
 	cr->cr_mrep = NULL;
 
 	if (ok) {
@@ -422,6 +445,14 @@ got_reply:
 			} else {
 				KASSERT(results,
 				    ("auth validated but no result"));
+				if (ext) {
+					if ((results->m_flags & M_NOMAP) !=
+					    0)
+						ext->rc_mbufoffs =
+						    xdrs.x_handy;
+					else
+						ext->rc_mbufoffs = 0;
+				}
 				*resultsp = results;
 			}
 		}		/* end successful completion */
