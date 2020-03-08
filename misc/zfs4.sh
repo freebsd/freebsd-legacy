@@ -62,6 +62,7 @@ zfs set snapdir=visible stress2_tank/test
 
 export RUNDIR=/stress2_tank/test/stressX
 export runRUNTIME=10m
+start=`date +%s`
 (cd ..; ./run.sh marcus.cfg) &
 
 for i in `jot 20`; do
@@ -70,9 +71,17 @@ done
 for i in `jot 20`; do
 	zfs destroy  stress2_tank/test@snap$i
 done
+while pgrep -fq run.sh; do
+	[ $((`date +%s` - start)) -gt 660 ] &&
+	    ../tools/killall.sh
+	sleep 10
+done
 wait
 
-zfs destroy -r stress2_tank
+for i in `jot 3`; do
+	zfs destroy -r stress2_tank && break
+	sleep 10
+done
 zpool destroy stress2_tank
 
 mdconfig -d -u $u1
