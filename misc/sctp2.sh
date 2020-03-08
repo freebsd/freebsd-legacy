@@ -15,6 +15,9 @@
 # "panic: Don't own TCB lock" seen:
 # https://people.freebsd.org/~pho/stress/log/sctp2.txt
 
+# "panic: soclose: SS_NOFDREF on enter" seen:
+# https://people.freebsd.org/~pho/stress/log/sctp2-2.txt
+
 # $FreeBSD$
 
 cat > /tmp/sctp2.c <<EOF
