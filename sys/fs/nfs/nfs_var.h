@@ -361,14 +361,13 @@ int nfsv4_sequencelookup(struct nfsmount *, struct nfsclsession *, int *,
 void nfsv4_freeslot(struct nfsclsession *, int);
 struct ucred *nfsrv_getgrpscred(struct ucred *);
 struct nfsdevice *nfsv4_findmirror(struct nfsmount *);
-int nfsm_set(struct nfsrv_descript *, bool);
+int nfsm_set(struct nfsrv_descript *, u_int, bool);
 bool nfsm_shiftnext(struct nfsrv_descript *, int *);
-void nfsm_trimatpos_extpgs(struct nfsrv_descript *);
-void nfsm_trimback_extpgs(struct mbuf *, int);
+int nfsm_extpgs_calc_offs(struct mbuf *, int, int);
 
 /* nfs_clcomsubs.c */
 void nfsm_uiombuf(struct nfsrv_descript *, struct uio *, int);
-struct mbuf *nfsm_uiombuflist(int, int, struct uio *, int, struct mbuf **, char **);
+struct mbuf *nfsm_uiombuflist(bool, int, struct uio *, int, struct mbuf **, char **);
 nfsuint64 *nfscl_getcookie(struct nfsnode *, off_t off, int);
 u_int8_t *nfscl_getmyip(struct nfsmount *, struct in6_addr *, int *);
 int nfsm_getfh(struct nfsrv_descript *, struct nfsfh **);
@@ -687,8 +686,8 @@ int nfsvno_readlink(vnode_t, struct ucred *, int, NFSPROC_T *, mbuf_t *,
     mbuf_t *, int *);
 int nfsvno_read(vnode_t, off_t, int, struct ucred *, int, NFSPROC_T *,
     mbuf_t *, mbuf_t *);
-int nfsvno_write(vnode_t, off_t, int, int *, mbuf_t, char *, int, int,
-    struct ucred *, NFSPROC_T *);
+int nfsvno_write(vnode_t, off_t, int, int *, struct nfsrv_descript *,
+    NFSPROC_T *);
 int nfsvno_createsub(struct nfsrv_descript *, struct nameidata *,
     vnode_t *, struct nfsvattr *, int *, int32_t *, NFSDEV_T,
     struct nfsexstuff *);
