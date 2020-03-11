@@ -98,7 +98,7 @@ zfs_teardown() {
 	zfs destroy ${zfs_parent}/${r}-i386-worldseed-snap@clone
 	zfs destroy ${zfs_parent}/${r}-i386-worldseed-snap
 
-	echo -n "ZFS datasets were destroyed.  The will be created"
+	echo -n "ZFS datasets were destroyed.  They will be created"
 	echo " automatically via thermite.sh."
 
 	return 0
