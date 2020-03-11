@@ -1,7 +1,8 @@
 #!/bin/sh
 #-
-# Copyright (c) 2013-2018 The FreeBSD Foundation
 # Copyright (c) 2012, 2013 Glen Barber
+# Copyright (c) 2013-2019 The FreeBSD Foundation
+# Copyright (c) 2020 Rubicon Communications, LLC (netgate.com)
 # All rights reserved.
 #
 # Portions of this software were developed by Glen Barber
@@ -108,11 +109,9 @@ runall() {
 }
 
 check_use_zfs() {
-	if [ -z ${use_zfs} ]; then
-		return 1
-	fi
 	if [ ! -c /dev/zfs ]; then
-		return 1
+		echo "ZFS is required."
+		exit 1
 	fi
 	return 0
 }
@@ -159,15 +158,26 @@ zfs_mount_tree() {
 	info "Cloning ${_clone}@clone to ${_target}"
 	zfs clone -p -o mountpoint=${_mount}/usr/${_tree} \
 		${_clone}@clone ${_target}
-	if [ ! -z ${seed_src} ]; then
-		# Only create chroot seeds for x86.
-		if [ "${arch}" = "amd64" ] || [ "${arch}" = "i386" ]; then
-			_seedmount=${chroots}/${rev}/${arch}/${type}
-			_seedtarget="${zfs_parent}/${rev}-${arch}-${type}-chroot"
-			zfs clone -p -o mountpoint=${_seedmount} \
-				${_clone}@clone ${_seedtarget}
-		fi
-	fi
+	unset _clone _mount _target _tree _seedmount _seedtarget
+}
+
+zfs_mount_src() {
+	source_config || return 0
+	_tree=src
+	_clone="${zfs_parent}/${rev}-${_tree}-${type}"
+	# Only create chroot seeds for x86.
+	case ${arch} in
+		amd64|i386)
+			;;
+		*)
+			return 0
+			;;
+	esac
+	_seedmount=${chroots}/${rev}/${arch}/${type}
+	_seedtarget="${zfs_parent}/${rev}-${arch}-${type}-chroot"
+	info "Creating ${_seedtarget} from ${_clone}"
+	zfs clone -p -o mountpoint=${_seedmount} \
+		${_clone}@clone ${_seedtarget}
 	unset _clone _mount _target _tree _seedmount _seedtarget
 }
 
@@ -210,10 +220,13 @@ zfs_bootstrap() {
 	runall zfs_create_tree src
 	runall zfs_create_tree ports
 	runall zfs_create_tree doc
+	zfs_bootstrap_done=1
+}
+
+zfs_finish_bootstrap() {
 	runall zfs_mount_tree src
 	runall zfs_mount_tree ports
 	runall zfs_mount_tree doc
-	zfs_bootstrap_done=1
 }
 
 prebuild_setup() {
@@ -345,8 +358,23 @@ upload_ec2_ami() {
 	_build="${rev}-${arch}-${kernel}-${type}"
 	_conf="${scriptdir}/${_build}.conf"
 	source_config || return 0
-	case ${arch} in
-		amd64)
+	case ${arch}:${kernel} in
+		amd64:GENERIC)
+			_EC2TARGET=amd64
+			_EC2TARGET_ARCH=amd64
+			;;
+		aarch64:GENERIC)
+			# XXX: temporary until support for stable/11 is added
+			case ${rev} in
+				13|12)
+					_EC2TARGET=arm64
+					_EC2TARGET_ARCH=aarch64
+					;;
+				*)
+					return 0
+					;;
+			esac
+			# end XXX
 			;;
 		*)
 			return 0
@@ -371,9 +399,12 @@ upload_ec2_ami() {
 		EC2PUBLIC=${EC2PUBLIC} \
 		EC2PUBLICSNAP=${EC2PUBLICSNAP} \
 		EC2SNSTOPIC=${EC2SNSTOPIC} \
+		TARGET=${_EC2TARGET} \
+		TARGET_ARCH=${_EC2TARGET_ARCH} \
 		ec2ami \
 		>> ${logdir}/${_build}.ec2.log 2>&1
 	unset _build _conf AWSREGION AWSBUCKET AWSKEYFILE EC2PUBLIC EC2SNSTOPIC EC2PUBLICSNAP
+	unset _EC2TARGET _EC2TARGET_ARCH
 	umount ${CHROOTDIR}/dev
 	return 0
 } # upload_ec2_ami()
@@ -464,21 +495,50 @@ install_chroots() {
 			_chrootarch="amd64"
 			;;
 	esac
+	[ ! -z $(eval echo \${zfs_${_chrootarch}_seed_${rev}_${type}}) ] \
+		&& return 0
+	_clone="${zfs_parent}/${rev}-${_chrootarch}-worldseed-${type}"
+	_mount="/${zfs_mount}/${rev}-${arch}-worldseed-${type}"
 	_build="${rev}-${arch}-${kernel}-${type}"
 	_dest="${__WRKDIR_PREFIX}/${_build}"
 	_srcdir="${chroots}/${rev}/${_chrootarch}/${type}"
 	_objdir="${chroots}/${rev}-obj/${_chrootarch}/${type}"
-	info "Creating ${_dest}"
-	mkdir -p "${_dest}"
-	info "Installing ${_dest}"
+	info "Creating ${_mount}"
+	zfs create -o atime=off -o mountpoint=${_mount} ${_clone}
+	info "Installing ${_mount}"
 	env MAKEOBJDIRPREFIX=${_objdir} \
 		make -C ${_srcdir} \
 		__MAKE_CONF=/dev/null SRCCONF=/dev/null \
 		TARGET=${_chrootarch} TARGET_ARCH=${_chrootarch} \
-		DESTDIR=${_dest} \
+		DESTDIR=${_mount} \
 		installworld distribution >> \
 		${logdir}/${_build}.log 2>&1
-	unset _build _dest _objdir _srcdir
+	zfs snapshot ${_clone}@clone
+	eval zfs_${_chrootarch}_seed_${rev}_${type}=1
+	unset _build _dest _objdir _srcdir _clone _mount
+
+	return 0
+}
+
+zfs_clone_chroots() {
+	source_config || return 0
+	case ${arch} in
+		i386)
+			_chrootarch="i386"
+			;;
+		*)
+			_chrootarch="amd64"
+			;;
+	esac
+	_clone="${zfs_parent}/${rev}-${_chrootarch}-worldseed-${type}"
+	_mount="/${zfs_mount}/${rev}-${arch}-worldseed-${type}"
+	_build="${rev}-${arch}-${kernel}-${type}"
+	_dest="${__WRKDIR_PREFIX}/${_build}"
+	info "Cloning ${_chrootarch} world to ${zfs_parent}/${_build}"
+	zfs clone -p -o mountpoint=${_dest} ${_clone}@clone ${zfs_parent}/${_build}
+	unset _clone _mount _build _dest
+
+	return 0
 }
 
 # Build amd64/i386 "seed" chroots for all branches being built.
@@ -519,6 +579,8 @@ build_chroots() {
 		${logdir}/${_build}.log 2>&1
 	eval chroot_${_chrootarch}_build_${rev}_${type}=1
 	unset _build _dest _objdir _srcdir
+
+	return 0
 }
 
 main() {
@@ -541,12 +603,17 @@ main() {
 	done
 	shift $(($OPTIND - 1))
 	[ -z ${CONF} ] && usage
+	use_zfs=1
+	check_use_zfs
 	zfs_bootstrap_done=
 	prebuild_setup
 	runall truncate_logs
 	zfs_bootstrap
+	runall zfs_mount_src
 	runall build_chroots
 	runall install_chroots
+	runall zfs_clone_chroots
+	zfs_finish_bootstrap
 	runall ${parallel}build_release
 	wait
 	runall upload_ec2_ami

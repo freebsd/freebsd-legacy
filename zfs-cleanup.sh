@@ -4,7 +4,7 @@
 #
 
 usage() {
-	echo "$(basename ${0}) [-d] -c /path/to/configuration/file"
+	echo "$(basename ${0}) -d -c /path/to/configuration/file"
 	exit 1
 }
 
@@ -92,26 +92,15 @@ zfs_teardown() {
 			done
 		done
 	done
-	return 0
-}
 
-zfs_setup() {
-	[ ! -z ${delete_only} ] && return 0
-	for r in ${revs}; do
-		for a in ${archs}; do
-			for k in ${kernels}; do
-			for t in ${types}; do
-				s="${r}-${a}-${k}-${t}"
-				if [ -e ${scriptdir}/${s}.conf ];
-				then
-					echo "${pfx} Creating ${zfs_parent}/${s}" \
-						>/dev/stdout
-					zfs create -o atime=off ${zfs_parent}/${s}
-				fi
-			done
-			done
-		done
-	done
+	zfs destroy ${zfs_parent}/${r}-amd64-worldseed-snap@clone
+	zfs destroy ${zfs_parent}/${r}-amd64-worldseed-snap
+	zfs destroy ${zfs_parent}/${r}-i386-worldseed-snap@clone
+	zfs destroy ${zfs_parent}/${r}-i386-worldseed-snap
+
+	echo -n "ZFS datasets were destroyed.  The will be created"
+	echo "automatically via thermite.sh."
+
 	return 0
 }
 
@@ -154,8 +143,8 @@ main() {
 
 	pfx="==="
 
+	delete_only=1
 	zfs_teardown
-	zfs_setup
 }
 
 main "$@"
