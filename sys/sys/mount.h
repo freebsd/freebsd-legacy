@@ -361,6 +361,22 @@ void          __mnt_vnode_markerfree_lazy(struct vnode **mvp, struct mount *mp);
 			MNT_AUTOMOUNTED | MNT_UNTRUSTED)
 
 /*
+ * Export flags that are only set/used in the ex_flags field and
+ * not in mnt_flag.  Since some are defined as MNT_EXxxx above,
+ * these ones are just redefined here.
+ * MNT_EXPORTED must remain and be set/cleared in mnt_flag.
+ * The others defined as MNT_xxx should probably remain for
+ * compatibility with old versions of mountd, etc.
+ */
+#define	MNTEX_TLS		0x0000000000000001ULL	/* TLS RPC required */
+#define	MNTEX_TLSCERT		0x0000000000000002ULL	/* verified certificate req */
+#define	MNTEX_EXPORTED		MNT_EXPORTED		/* filesystem exported */
+#define	MNTEX_RDONLY		MNT_EXRDONLY		/* exported read only */
+#define	MNTEX_EXPORTANON	MNT_EXPORTANON		/* anon uid mapping for all */
+#define	MNTEX_KERB		MNT_EXKERB		/* exported with Kerberos */
+#define	MNTEX_PUBLIC		MNT_EXPUBLIC		/* public export (WebNFS) */
+
+/*
  * External filesystem command modifier flags.
  * Unmount can use the MNT_FORCE flag.
  * XXX: These are not STATES and really should be somewhere else.
