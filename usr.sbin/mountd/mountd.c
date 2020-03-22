@@ -1482,7 +1482,7 @@ get_exportlist_one(int passno)
 		 */
 		has_host = FALSE;
 		anon = def_anon;
-		exflags = MNT_EXPORTED;
+		exflags = MNTEX_EXPORTED;
 		got_nondir = 0;
 		opt_flags = 0;
 		ep = (struct exportlist *)NULL;
@@ -1868,7 +1868,7 @@ get_exportlist(int passno)
 		LOGDEBUG("doing passno=0");
 		/*
 		 * Clear flag that notes if a public fh has been exported.
-		 * It is set by do_mount() if MNT_EXPUBLIC is set for the entry.
+		 * It is set by do_mount() if MNTEX_PUBLIC is set for the entry.
 		 */
 		has_publicfh = 0;
 
@@ -2697,14 +2697,14 @@ do_opt(char **cpp, char **endcpp, struct exportlist *ep, struct grouplist *grp,
 			}
 		}
 		if (!strcmp(cpopt, "ro") || !strcmp(cpopt, "o")) {
-			*exflagsp |= MNT_EXRDONLY;
+			*exflagsp |= MNTEX_RDONLY;
 		} else if (cpoptarg && (!strcmp(cpopt, "maproot") ||
 		    !(allflag = strcmp(cpopt, "mapall")) ||
 		    !strcmp(cpopt, "root") || !strcmp(cpopt, "r"))) {
 			usedarg++;
 			parsecred(cpoptarg, cr);
 			if (allflag == 0) {
-				*exflagsp |= MNT_EXPORTANON;
+				*exflagsp |= MNTEX_EXPORTANON;
 				opt_flags |= OP_MAPALL;
 			} else
 				opt_flags |= OP_MAPROOT;
@@ -2737,9 +2737,9 @@ do_opt(char **cpp, char **endcpp, struct exportlist *ep, struct grouplist *grp,
 		} else if (!strcmp(cpopt, "alldirs")) {
 			opt_flags |= OP_ALLDIRS;
 		} else if (!strcmp(cpopt, "public")) {
-			*exflagsp |= MNT_EXPUBLIC;
+			*exflagsp |= MNTEX_PUBLIC;
 		} else if (!strcmp(cpopt, "webnfs")) {
-			*exflagsp |= (MNT_EXPUBLIC|MNT_EXRDONLY|MNT_EXPORTANON);
+			*exflagsp |= (MNTEX_PUBLIC|MNTEX_RDONLY|MNTEX_EXPORTANON);
 			opt_flags |= OP_MAPALL;
 		} else if (cpoptarg && !strcmp(cpopt, "index")) {
 			ep->ex_indexfile = strdup(cpoptarg);
@@ -2750,6 +2750,10 @@ do_opt(char **cpp, char **endcpp, struct exportlist *ep, struct grouplist *grp,
 				return (1);
 			opt_flags |= OP_SEC;
 			usedarg++;
+		} else if (!strcmp(cpopt, "tls")) {
+			*exflagsp |= MNTEX_TLS;
+		} else if (!strcmp(cpopt, "tlscert")) {
+			*exflagsp |= MNTEX_TLSCERT;
 		} else {
 			syslog(LOG_ERR, "bad opt %s", cpopt);
 			return (1);
@@ -3139,7 +3143,7 @@ do_mount(struct exportlist *ep, struct grouplist *grp, int exflags,
 		 * If this is the public directory, get the file handle
 		 * and load it into the kernel via the nfssvc() syscall.
 		 */
-		if ((exflags & MNT_EXPUBLIC) != 0) {
+		if ((exflags & MNTEX_PUBLIC) != 0) {
 			fhandle_t fh;
 			char *public_name;
 
