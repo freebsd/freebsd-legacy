@@ -7,7 +7,6 @@ MAN=	rpctlssd.8
 SRCS=	rpctlssd.c rpctlssd.h rpctlssd_svc.c rpctlssd_xdr.c
 
 CFLAGS+= -I.
-WARNS?= 1
 
 LIBADD=	ssl crypto
 
