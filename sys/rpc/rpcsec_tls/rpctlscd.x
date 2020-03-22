@@ -25,14 +25,29 @@
  * SUCH DAMAGE.
  */
 
-/* $FreeBSD$ */
-
 /* Modified from gssd.x for the client side of RPC-over-TLS. */
+
+/* $FreeBSD:$ */
+
+struct rpctlscd_connect_res {
+	uint64_t sec;
+	uint64_t usec;
+	uint64_t ssl;
+};
+
+struct rpctlscd_disconnect_arg {
+	uint64_t sec;
+	uint64_t usec;
+	uint64_t ssl;
+};
 
 program RPCTLSCD {
 	version RPCTLSCDVERS {
 		void RPCTLSCD_NULL(void) = 0;
 
-		void RPCTLSCD_CONNECT(void) = 1;
+		rpctlscd_connect_res
+		RPCTLSCD_CONNECT(void) = 1;
+
+		void RPCTLSCD_DISCONNECT(rpctlscd_disconnect_arg) = 2;
 	} = 1;
 } = 0x40677374;

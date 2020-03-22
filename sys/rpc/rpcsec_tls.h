@@ -44,7 +44,10 @@
 
 #ifdef _KERNEL
 /* Functions that perform upcalls to the rpctlsd daemon. */
-enum clnt_stat	rpctls_connect(CLIENT *newclient, struct socket *so);
+enum clnt_stat	rpctls_connect(CLIENT *newclient, struct socket *so,
+		    uint64_t *sslp);
+enum clnt_stat	rpctls_cl_disconnect(uint64_t sec, uint64_t usec, uint64_t ssl);
+enum clnt_stat	rpctls_srv_disconnect(uint64_t sec, uint64_t usec, uint64_t ssl);
 
 /* String for AUTH_TLS reply verifier. */
 #define	RPCTLS_START_STRING	"STARTTLS"

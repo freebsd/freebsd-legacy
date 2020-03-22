@@ -455,9 +455,16 @@ svc_vc_rendezvous_stat(SVCXPRT *xprt)
 static void
 svc_vc_destroy_common(SVCXPRT *xprt)
 {
+	enum clnt_stat stat;
 
-	if (xprt->xp_socket)
-		(void)soclose(xprt->xp_socket);
+	if (xprt->xp_socket) {
+		stat = RPC_FAILED;
+		if ((xprt->xp_tls & RPCTLS_FLAGS_HANDSHAKE) != 0)
+			stat = rpctls_srv_disconnect(xprt->xp_sslsec,
+			    xprt->xp_sslusec, xprt->xp_sslrefno);
+		if (stat != RPC_SUCCESS)
+			(void)soclose(xprt->xp_socket);
+	}
 
 	if (xprt->xp_netid)
 		(void) mem_free(xprt->xp_netid, strlen(xprt->xp_netid) + 1);

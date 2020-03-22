@@ -670,13 +670,10 @@ svc_sendreply_common(struct svc_req *rqstp, struct rpc_msg *rply,
 		replay_setreply(xprt->xp_pool->sp_rcache,
 		    rply, svc_getrpccaller(rqstp), body);
 
-printf("sendreply_common\n");
 	if (!SVCAUTH_WRAP(&rqstp->rq_auth, &body))
 		return (FALSE);
 
-printf("at SVC_REPLY\n");
 	ok = SVC_REPLY(xprt, rply, rqstp->rq_addr, body, &rqstp->rq_reply_seq);
-printf("aft SVC_REPLY ok=%d\n", ok);
 	if (rqstp->rq_addr) {
 		free(rqstp->rq_addr, M_SONAME);
 		rqstp->rq_addr = NULL;
@@ -817,7 +814,6 @@ svcerr_auth(struct svc_req *rqstp, enum auth_stat why)
 	if (xprt->xp_pool->sp_rcache)
 		replay_setreply(xprt->xp_pool->sp_rcache,
 		    &rply, svc_getrpccaller(rqstp), NULL);
-printf("SVC SENDAUTHERR\n");
 
 	svc_sendreply_common(rqstp, &rply, NULL);
 }
@@ -980,7 +976,6 @@ svc_getreq(SVCXPRT *xprt, struct svc_req **rqstp_ret)
 			 * should not be dispatched to the
 			 * application.
 			 */
-printf("AUTH FAILED=%d\n", why);
 			if (why != RPCSEC_GSS_NODISPATCH)
 				svcerr_auth(r, why);
 			goto call_done;

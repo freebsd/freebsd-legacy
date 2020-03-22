@@ -417,7 +417,7 @@ call_again:
 	TAILQ_INSERT_TAIL(&ct->ct_pending, cr, cr_link);
 	mtx_unlock(&ct->ct_lock);
 
-	if (ct->ct_tls) {
+	if (ct->ct_sslrefno != 0) {
 		/*
 		 * Copy the mbuf chain to a chain of ext_pgs mbuf(s)
 		 * as required by KERN_TLS.
@@ -655,6 +655,7 @@ clnt_vc_control(CLIENT *cl, u_int request, void *info)
 	struct ct_data *ct = (struct ct_data *)cl->cl_private;
 	void *infop = info;
 	SVCXPRT *xprt;
+	uint64_t *p;
 
 	mtx_lock(&ct->ct_lock);
 
@@ -770,7 +771,7 @@ clnt_vc_control(CLIENT *cl, u_int request, void *info)
 		xprt = (SVCXPRT *)info;
 		if (ct->ct_backchannelxprt == NULL) {
 			xprt->xp_p2 = ct;
-			if (ct->ct_tls)
+			if (ct->ct_sslrefno != 0)
 				xprt->xp_tls = RPCTLS_FLAGS_HANDSHAKE;
 			ct->ct_backchannelxprt = xprt;
 printf("backch tls=0x%x xprt=%p\n", xprt->xp_tls, xprt);
@@ -778,7 +779,10 @@ printf("backch tls=0x%x xprt=%p\n", xprt->xp_tls, xprt);
 		break;
 
 	case CLSET_TLS:
-		ct->ct_tls = TRUE;
+		p = (uint64_t *)info;
+		ct->ct_sslsec = *p++;
+		ct->ct_sslusec = *p++;
+		ct->ct_sslrefno = *p;
 		break;
 
 	case CLSET_BLOCKRCV:
@@ -854,6 +858,7 @@ clnt_vc_destroy(CLIENT *cl)
 	struct ct_data *ct = (struct ct_data *) cl->cl_private;
 	struct socket *so = NULL;
 	SVCXPRT *xprt;
+	enum clnt_stat stat;
 
 	clnt_vc_close(cl);
 
@@ -878,8 +883,14 @@ clnt_vc_destroy(CLIENT *cl)
 
 	mtx_destroy(&ct->ct_lock);
 	if (so) {
-		soshutdown(so, SHUT_WR);
-		soclose(so);
+		stat = RPC_FAILED;
+		if (ct->ct_sslrefno != 0)
+			stat = rpctls_cl_disconnect(ct->ct_sslsec,
+			    ct->ct_sslusec, ct->ct_sslrefno);
+		if (stat != RPC_SUCCESS) {
+			soshutdown(so, SHUT_WR);
+			soclose(so);
+		}
 	}
 	mem_free(ct, sizeof(struct ct_data));
 	if (cl->cl_netid && cl->cl_netid[0])

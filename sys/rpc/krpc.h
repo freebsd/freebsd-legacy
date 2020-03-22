@@ -79,7 +79,7 @@ struct rc_data {
 	CLIENT*			rc_client; /* underlying RPC client */
 	struct rpc_err		rc_err;
 	void			*rc_backchannel;
-	int			rc_tls;	/* Enable TLS on connection */
+	bool			rc_tls; /* Enable TLS on connection */
 };
 
 struct ct_data {
@@ -103,7 +103,9 @@ struct ct_data {
 	struct ct_request_list ct_pending;
 	int		ct_upcallrefs;	/* Ref cnt of upcalls in prog. */
 	SVCXPRT		*ct_backchannelxprt; /* xprt for backchannel */
-	bool_t		ct_tls;		/* Enable RPC-over-TLS support. */
+	uint64_t	ct_sslsec;	/* RPC-over-TLS connection. */
+	uint64_t	ct_sslusec;
+	uint64_t	ct_sslrefno;
 	bool_t		ct_dontrcv;	/* TRUE to block receiving */
 };
 

@@ -82,19 +82,15 @@ struct rpctls_syscall_args {
 static CLIENT		*rpctls_connect_handle;
 static struct mtx	rpctls_connect_lock;
 static struct socket	*rpctls_connect_so = NULL;
-static struct file	*rpctls_connect_fp = NULL;
-static int		rpctls_connect_fd = -1;
 static CLIENT		*rpctls_server_handle;
 static struct mtx	rpctls_server_lock;
 static struct socket	*rpctls_server_so = NULL;
-static struct file	*rpctls_server_fp = NULL;
-static int		rpctls_server_fd = -1;
 static struct opaque_auth rpctls_null_verf;
 
 static CLIENT		*rpctls_connect_client(void);
 static CLIENT		*rpctls_server_client(void);
 static enum clnt_stat	rpctls_server(struct socket *so,
-			    uint32_t *flags);
+			    uint32_t *flags, uint64_t *sslp);
 
 static void
 rpctls_init(void *dummy)
@@ -227,13 +223,6 @@ printf("In connect\n");
 		if (PMAP_HAS_DMAP != 0)
 			error = 0;
 #endif
-		if (error == 0) {
-			mtx_lock(&rpctls_connect_lock);
-			if (rpctls_connect_so == NULL ||
-			    rpctls_connect_fd != -1)
-				error = EINVAL;
-			mtx_unlock(&rpctls_connect_lock);
-		}
 		if (error == 0)
 			error = falloc(td, &fp, &fd, 0);
 		if (error == 0) {
@@ -241,35 +230,11 @@ printf("falloc=%d fd=%d\n", error, fd);
 			mtx_lock(&rpctls_connect_lock);
 			so = rpctls_connect_so;
 			rpctls_connect_so = NULL;
-			rpctls_connect_fp = fp;
-			rpctls_connect_fd = fd;
 			mtx_unlock(&rpctls_connect_lock);
 			finit(fp, FREAD | FWRITE, DTYPE_SOCKET, so, &socketops);
 			td->td_retval[0] = fd;
 		}
 printf("returning=%d\n", fd);
-	} else if (path[0] == 'D') {
-printf("In EOconnect\n");
-		mtx_lock(&rpctls_connect_lock);
-		fd = rpctls_connect_fd;
-		rpctls_connect_fd = -1;
-		fp = rpctls_connect_fp;
-		rpctls_connect_fp = NULL;
-		mtx_unlock(&rpctls_connect_lock);
-printf("fd=%d\n", fd);
-		if (fd >= 0) {
-			/*
-			 * Since the daemon will not be using the fd any
-			 * more, we want to close the fd, but we do not
-			 * want to soclose() the associated socket.
-			 * Set f_ops == badfileops so that kern_close() will
-			 * not do a soclose().
-			 */
-			fp->f_ops = &badfileops;
-			kern_close(td, fd);
-printf("aft kern_close\n");
-		} else
-			printf("rpctlsc fd -1\n");
 	} else if (path[0] == 'E') {
 printf("In srvconnect\n");
 		error = EINVAL;
@@ -277,13 +242,6 @@ printf("In srvconnect\n");
 		if (PMAP_HAS_DMAP != 0)
 			error = 0;
 #endif
-		if (error == 0) {
-			mtx_lock(&rpctls_server_lock);
-			if (rpctls_server_so == NULL ||
-			    rpctls_server_fd != -1)
-				error = EINVAL;
-			mtx_unlock(&rpctls_server_lock);
-		}
 		if (error == 0)
 			error = falloc(td, &fp, &fd, 0);
 		if (error == 0) {
@@ -291,8 +249,6 @@ printf("srv falloc=%d fd=%d\n", error, fd);
 			mtx_lock(&rpctls_server_lock);
 			so = rpctls_server_so;
 			rpctls_server_so = NULL;
-			rpctls_server_fp = fp;
-			rpctls_server_fd = fd;
 			mtx_unlock(&rpctls_server_lock);
 			finit(fp, FREAD | FWRITE, DTYPE_SOCKET, so, &socketops);
 			td->td_retval[0] = fd;
@@ -300,26 +256,15 @@ printf("srv falloc=%d fd=%d\n", error, fd);
 printf("srv returning=%d\n", fd);
 	} else if (path[0] == 'F') {
 printf("In EOserver\n");
-		mtx_lock(&rpctls_server_lock);
-		fd = rpctls_server_fd;
-		rpctls_server_fd = -1;
-		fp = rpctls_server_fp;
-		rpctls_server_fp = NULL;
-		mtx_unlock(&rpctls_server_lock);
+		fd = strtol(&path[1], NULL, 10);
 printf("srv fd=%d\n", fd);
 		if (fd >= 0) {
-			/*
-			 * Since the daemon will not be using the fd any
-			 * more, we want to close the fd, but we do not
-			 * want to soclose() the associated socket.
-			 * Set f_ops == badfileops so that kern_close() will
-			 * not do a soclose().
-			 */
-			fp->f_ops = &badfileops;
-			kern_close(td, fd);
-printf("srv aft kern_close\n");
-		} else
-			printf("rpctlss fd -1\n");
+			error = kern_close(td, fd);
+printf("srv aft kern_close=%d\n", error);
+		} else {
+			printf("rpctlss fd negative\n");
+			error = EINVAL;
+		}
 	}
 
 	return (error);
@@ -361,8 +306,9 @@ rpctls_server_client(void)
 
 /* Do an upcall for a new socket connect using TLS. */
 enum clnt_stat
-rpctls_connect(CLIENT *newclient, struct socket *so)
+rpctls_connect(CLIENT *newclient, struct socket *so, uint64_t *sslp)
 {
+	struct rpctlscd_connect_res res;
 	struct rpc_callextra ext;
 	struct timeval utimeout;
 	enum clnt_stat stat;
@@ -406,8 +352,13 @@ printf("rpctls_conect so=%p\n", so);
 	CLNT_CONTROL(newclient, CLSET_BLOCKRCV, &val);
 
 	/* Do the connect handshake upcall. */
-	stat = rpctlscd_connect_1(NULL, NULL, cl);
+	stat = rpctlscd_connect_1(NULL, &res, cl);
 printf("aft connect upcall=%d\n", stat);
+	if (stat == RPC_SUCCESS) {
+		*sslp++ = res.sec;
+		*sslp++ = res.usec;
+		*sslp = res.ssl;
+	}
 	CLNT_RELEASE(cl);
 
 	/* Unblock reception. */
@@ -417,7 +368,6 @@ printf("aft connect upcall=%d\n", stat);
 	/* Once the upcall is done, the daemon is done with the fp and so. */
 	mtx_lock(&rpctls_connect_lock);
 	rpctls_connect_so = NULL;
-	rpctls_connect_fd = -1;
 	rpctls_connect_busy = false;
 	wakeup(&rpctls_connect_busy);
 	mtx_unlock(&rpctls_connect_lock);
@@ -426,9 +376,56 @@ printf("aft wakeup\n");
 	return (stat);
 }
 
+/* Do an upcall to shut down a socket using TLS. */
+enum clnt_stat
+rpctls_cl_disconnect(uint64_t sec, uint64_t usec, uint64_t ssl)
+{
+	struct rpctlscd_disconnect_arg arg;
+	enum clnt_stat stat;
+	CLIENT *cl;
+
+printf("In rpctls_cl_disconnect\n");
+	cl = rpctls_connect_client();
+printf("disconnect_client=%p\n", cl);
+	if (cl == NULL)
+		return (RPC_FAILED);
+
+	/* Do the disconnect upcall. */
+	arg.sec = sec;
+	arg.usec = usec;
+	arg.ssl = ssl;
+	stat = rpctlscd_disconnect_1(&arg, NULL, cl);
+printf("aft disconnect upcall=%d\n", stat);
+	CLNT_RELEASE(cl);
+	return (stat);
+}
+
+enum clnt_stat
+rpctls_srv_disconnect(uint64_t sec, uint64_t usec, uint64_t ssl)
+{
+	struct rpctlssd_disconnect_arg arg;
+	enum clnt_stat stat;
+	CLIENT *cl;
+
+printf("In rpctls_srv_disconnect\n");
+	cl = rpctls_server_client();
+printf("srv disconnect_client=%p\n", cl);
+	if (cl == NULL)
+		return (RPC_FAILED);
+
+	/* Do the disconnect upcall. */
+	arg.sec = sec;
+	arg.usec = usec;
+	arg.ssl = ssl;
+	stat = rpctlssd_disconnect_1(&arg, NULL, cl);
+printf("aft srv disconnect upcall=%d\n", stat);
+	CLNT_RELEASE(cl);
+	return (stat);
+}
+
 /* Do an upcall for a new server socket using TLS. */
 static enum clnt_stat
-rpctls_server(struct socket *so, uint32_t *flags)
+rpctls_server(struct socket *so, uint32_t *flags, uint64_t *sslp)
 {
 	enum clnt_stat stat;
 	CLIENT *cl;
@@ -453,15 +450,18 @@ printf("rpctls_conect so=%p\n", so);
 
 	/* Do the server upcall. */
 	stat = rpctlssd_connect_1(NULL, &res, cl);
-	if (stat == RPC_SUCCESS)
+	if (stat == RPC_SUCCESS) {
 		*flags = res.flags;
+		*sslp++ = res.sec;
+		*sslp++ = res.usec;
+		*sslp = res.ssl;
+	}
 printf("aft server upcall stat=%d flags=0x%x\n", stat, res.flags);
 	CLNT_RELEASE(cl);
 
 	/* Once the upcall is done, the daemon is done with the fp and so. */
 	mtx_lock(&rpctls_server_lock);
 	rpctls_server_so = NULL;
-	rpctls_server_fd = -1;
 	rpctls_server_busy = false;
 	wakeup(&rpctls_server_busy);
 	mtx_unlock(&rpctls_server_lock);
@@ -483,6 +483,7 @@ _svcauth_rpcsec_tls(struct svc_req *rqst, struct rpc_msg *msg)
 	enum clnt_stat stat;
 	SVCXPRT *xprt;
 	uint32_t flags;
+	uint64_t ssl[3];
 	
 	/* Initialize reply. */
 	rqst->rq_verf = rpctls_null_verf;
@@ -529,13 +530,18 @@ printf("authtls: null reply=%d\n", call_stat);
 	}
 
 	/* Do an upcall to do the TLS handshake. */
-	stat = rpctls_server(rqst->rq_xprt->xp_socket, &flags);
+	stat = rpctls_server(rqst->rq_xprt->xp_socket, &flags,
+	    ssl);
 
 	/* Re-enable reception on the socket within the krpc. */
 	sx_xlock(&xprt->xp_lock);
 	xprt->xp_dontrcv = FALSE;
-	if (stat == RPC_SUCCESS)
+	if (stat == RPC_SUCCESS) {
 		xprt->xp_tls = flags;
+		xprt->xp_sslsec = ssl[0];
+		xprt->xp_sslusec = ssl[1];
+		xprt->xp_sslrefno = ssl[2];
+	}
 	sx_xunlock(&xprt->xp_lock);
 	xprt_active(xprt);		/* Harmless if already active. */
 printf("authtls: aft handshake stat=%d\n", stat);

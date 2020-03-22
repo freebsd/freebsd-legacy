@@ -178,6 +178,9 @@ typedef struct __rpc_svcxprt {
 	u_int		xp_mbufoffs;	/* Offset into ext_pgs mbuf */
 	bool_t		xp_dontrcv;	/* Do not receive on the socket */
 	uint32_t	xp_tls;		/* RPC-over-TLS on socket */
+	uint64_t	xp_sslsec;	/* Userland SSL * */
+	uint64_t	xp_sslusec;
+	uint64_t	xp_sslrefno;
 #else
 	int		xp_fd;
 	u_short		xp_port;	 /* associated port number */
