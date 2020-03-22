@@ -52,6 +52,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/sysctl.h>
 #include <nlm/nlm_prot.h>
 #include <nlm/nlm.h>
+#include <rpc/rpcsec_tls.h>
 
 FEATURE(nfsd, "NFSv4 server");
 
@@ -3344,7 +3345,20 @@ nfsd_fhtovp(struct nfsrv_descript *nd, struct nfsrvfh *nfp, int lktype,
 	if (!nd->nd_repstat && exp->nes_exflag == 0 &&
 	    !(nd->nd_flag & ND_NFSV4)) {
 		vput(*vpp);
-		nd->nd_repstat = EACCES;
+		nd->nd_repstat = NFSERR_ACCES;
+	}
+
+	/*
+	 * If TLS is required by the export, check the flags in nd_flag.
+	 */
+printf("ndflag=0x%jx exflags=0x%x\n", (uintmax_t)nd->nd_flag, exp->nes_exflag);
+	if (nd->nd_repstat == 0 && ((NFSVNO_EXTLS(exp) &&
+	    (nd->nd_flag & ND_TLS) == 0) ||
+	     (NFSVNO_EXTLSCERT(exp) &&
+	      (nd->nd_flag & ND_TLSCERT) == 0))) {
+		vput(*vpp);
+		nd->nd_repstat = NFSERR_ACCES;
+printf("set eacces\n");
 	}
 
 	/*
@@ -3608,6 +3622,14 @@ nfsvno_v4rootexport(struct nfsrv_descript *nd)
 			nd->nd_flag |= ND_EXGSSINTEGRITY;
 		else if (secflavors[i] == RPCSEC_GSS_KRB5P)
 			nd->nd_flag |= ND_EXGSSPRIVACY;
+	}
+
+	/* And set ND_EXxx flags for TLS. */
+printf("v4root exflags=0x%x\n", exflags);
+	if ((exflags & RPCTLS_FLAGS_HANDSHAKE) != 0) {
+		nd->nd_flag |= ND_EXTLS;
+		if ((exflags & RPCTLS_FLAGS_VERIFIED) != 0)
+			nd->nd_flag |= ND_EXTLSCERT;
 	}
 
 out:
@@ -5268,7 +5290,7 @@ nfsrv_writedsdorpc(struct nfsmount *nmp, fhandle_t *fhp, off_t off, int len,
 	/* Put data in mbuf chain. */
 	nd->nd_mb->m_next = m;
 	if ((m->m_flags & M_NOMAP) != 0)
-		nd->nd_flag |= ND_EXTPG;
+		nd->nd_flag |= ND_NOMAP;
 
 	/* Set nd_mb and nd_bpos to end of data. */
 	while (m->m_next != NULL)
@@ -6398,9 +6420,9 @@ nfsvno_getxattr(struct vnode *vp, char *name, uint32_t maxresp,
 	/*
 	 * If the cnt is larger than MCLBYTES, use ext_pgs if
 	 * possible.
-	 * Always use ext_pgs if ND_EXTPG is set.
+	 * Always use ext_pgs if ND_NOMAP is set.
 	 */
-	if ((flag & ND_EXTPG) != 0 || (tlen > MCLBYTES &&
+	if ((flag & ND_NOMAP) != 0 || (tlen > MCLBYTES &&
 	    PMAP_HAS_DMAP != 0 && ((flag & ND_TLS) != 0 || nfs_use_ext_pgs)))
 		uiop->uio_iovcnt = nfsrv_createiovec_extpgs(tlen, maxextsiz,
 		    &m, &m2, &iv);

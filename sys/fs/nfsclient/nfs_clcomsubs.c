@@ -82,12 +82,12 @@ nfsm_uiombuf(struct nfsrv_descript *nd, struct uio *uiop, int siz)
 			left = siz;
 		uiosiz = left;
 		while (left > 0) {
-			if ((nd->nd_flag & ND_EXTPG) != 0)
+			if ((nd->nd_flag & ND_NOMAP) != 0)
 				mlen = nd->nd_bextpgsiz;
 			else
 				mlen = M_TRAILINGSPACE(mp);
 			if (mlen == 0) {
-				if ((nd->nd_flag & ND_EXTPG) != 0) {
+				if ((nd->nd_flag & ND_NOMAP) != 0) {
 					mp = nfsm_add_ext_pgs(mp,
 					    nd->nd_maxextsiz, &nd->nd_bextpg);
 					mcp = (char *)(void *)PHYS_TO_DMAP(
@@ -114,7 +114,7 @@ nfsm_uiombuf(struct nfsrv_descript *nd, struct uio *uiop, int siz)
 			left -= xfer;
 			uiocp += xfer;
 			mcp += xfer;
-			if ((nd->nd_flag & ND_EXTPG) != 0) {
+			if ((nd->nd_flag & ND_NOMAP) != 0) {
 				nd->nd_bextpgsiz -= xfer;
 				mp->m_ext.ext_pgs->last_pg_len += xfer;
 			}
@@ -128,13 +128,13 @@ nfsm_uiombuf(struct nfsrv_descript *nd, struct uio *uiop, int siz)
 		siz -= uiosiz;
 	}
 	if (rem > 0) {
-		if ((nd->nd_flag & ND_EXTPG) == 0 && rem >
+		if ((nd->nd_flag & ND_NOMAP) == 0 && rem >
 		    M_TRAILINGSPACE(mp)) {
 			NFSMGET(mp);
 			mp->m_len = 0;
 			mp2->m_next = mp;
 			mcp = mtod(mp, char *);
-		} else if ((nd->nd_flag & ND_EXTPG) != 0 && rem >
+		} else if ((nd->nd_flag & ND_NOMAP) != 0 && rem >
 		    nd->nd_bextpgsiz) {
 			mp = nfsm_add_ext_pgs(mp, nd->nd_maxextsiz,
 			    &nd->nd_bextpg);
@@ -146,7 +146,7 @@ nfsm_uiombuf(struct nfsrv_descript *nd, struct uio *uiop, int siz)
 			*mcp++ = '\0';
 		mp->m_len += rem;
 		nd->nd_bpos = mcp;
-		if ((nd->nd_flag & ND_EXTPG) != 0) {
+		if ((nd->nd_flag & ND_NOMAP) != 0) {
 			nd->nd_bextpgsiz -= rem;
 			mp->m_ext.ext_pgs->last_pg_len += rem;
 		}

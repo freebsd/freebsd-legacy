@@ -57,7 +57,7 @@
  * Replace most of the macro with an inline function, to minimize
  * the machine code. The inline functions in lower case can be called
  * directly, bypassing the macro.
- * For ND_EXTPG, if there is not enough contiguous space left in
+ * For ND_NOMAP, if there is not enough contiguous space left in
  * the mbuf page, allocate a regular mbuf.  The data in these regular
  * mbufs will need to be copied into pages later, since the data must
  * be filled pages.  This should only happen after a write request or
@@ -69,7 +69,7 @@ nfsm_build(struct nfsrv_descript *nd, int siz)
 	void *retp;
 	struct mbuf *mb2;
 
-	if ((nd->nd_flag & ND_EXTPG) == 0 &&
+	if ((nd->nd_flag & ND_NOMAP) == 0 &&
 	    siz > M_TRAILINGSPACE(nd->nd_mb)) {
 		NFSMCLGET(mb2, M_NOWAIT);
 		if (siz > MLEN)
@@ -78,7 +78,7 @@ nfsm_build(struct nfsrv_descript *nd, int siz)
 		nd->nd_bpos = mtod(mb2, char *);
 		nd->nd_mb->m_next = mb2;
 		nd->nd_mb = mb2;
-	} else if ((nd->nd_flag & ND_EXTPG) != 0) {
+	} else if ((nd->nd_flag & ND_NOMAP) != 0) {
 		if (siz > nd->nd_bextpgsiz) {
 			mb2 = mb_alloc_ext_plus_pages(PAGE_SIZE, M_WAITOK,
 			    false, mb_free_mext_pgs);

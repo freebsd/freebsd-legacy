@@ -44,6 +44,7 @@ __FBSDID("$FreeBSD$");
 
 #include <rpc/rpc.h>
 #include <rpc/rpcsec_gss.h>
+#include <rpc/rpcsec_tls.h>
 
 #include <fs/nfsserver/nfs_fha_new.h>
 
@@ -238,6 +239,12 @@ nfssvc_program(struct svc_req *rqst, SVCXPRT *xprt)
 			goto out;
 		}
 
+		if ((xprt->xp_tls & RPCTLS_FLAGS_HANDSHAKE) != 0) {
+			nd.nd_flag |= ND_TLS;
+			if ((xprt->xp_tls & RPCTLS_FLAGS_VERIFIED) != 0)
+				nd.nd_flag |= ND_TLSCERT;
+		}
+		nd.nd_maxextsiz = 16384;
 #ifdef MAC
 		mac_cred_associate_nfsd(nd.nd_cred);
 #endif
@@ -272,11 +279,8 @@ nfssvc_program(struct svc_req *rqst, SVCXPRT *xprt)
 			}
 		}
 
-		if (xprt->xp_tls)
-			nd.nd_flag |= ND_TLS;
-		nd.nd_maxextsiz = 16384;
 #ifdef KERN_TLS
-		if (xprt->xp_tls)
+		if ((xprt->xp_tls & RPCTLS_FLAGS_HANDSHAKE) != 0)
 			nd.nd_maxextsiz = min(TLS_MAX_MSG_SIZE_V10_2,
 			    ktls_maxlen);
 #endif

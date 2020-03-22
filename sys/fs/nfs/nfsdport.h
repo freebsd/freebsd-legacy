@@ -81,6 +81,8 @@ struct nfsexstuff {
 #define	NFSVNO_EXPORTANON(e)		((e)->nes_exflag & MNT_EXPORTANON)
 #define	NFSVNO_EXSTRICTACCESS(e)	((e)->nes_exflag & MNT_EXSTRICTACCESS)
 #define	NFSVNO_EXV4ONLY(e)		((e)->nes_exflag & MNT_EXV4ONLY)
+#define	NFSVNO_EXTLS(e)			((e)->nes_exflag & MNTEX_TLS)
+#define	NFSVNO_EXTLSCERT(e)		((e)->nes_exflag & MNTEX_TLSCERT)
 
 #define	NFSVNO_SETEXRDONLY(e)	((e)->nes_exflag = (MNT_EXPORTED|MNT_EXRDONLY))
 

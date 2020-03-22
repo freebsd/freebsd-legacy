@@ -2140,6 +2140,12 @@ nfsd_checkrootexp(struct nfsrv_descript *nd)
 	if ((nd->nd_flag & (ND_GSS | ND_GSSINTEGRITY | ND_GSSPRIVACY |
 	     ND_EXGSS)) == (ND_GSS | ND_EXGSS))
 		return (0);
+	if ((nd->nd_flag & (ND_TLSCERT | ND_EXTLSCERT)) ==
+	    (ND_TLSCERT | ND_EXTLSCERT))
+		return (0);
+	if ((nd->nd_flag & (ND_EXTLSCERT | ND_EXTLS | ND_TLS)) ==
+	    (ND_EXTLS | ND_TLS))
+		return (0);
 	return (1);
 }
 
