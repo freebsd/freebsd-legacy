@@ -275,7 +275,8 @@ static void pmc_process_allproc(struct pmc *pm);
  */
 
 SYSCTL_DECL(_kern_hwpmc);
-SYSCTL_NODE(_kern_hwpmc, OID_AUTO, stats, CTLFLAG_RW, 0, "HWPMC stats");
+SYSCTL_NODE(_kern_hwpmc, OID_AUTO, stats, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+    "HWPMC stats");
 
 
 /* Stats. */
@@ -313,8 +314,9 @@ char	pmc_debugstr[PMC_DEBUG_STRSIZE];
 TUNABLE_STR(PMC_SYSCTL_NAME_PREFIX "debugflags", pmc_debugstr,
     sizeof(pmc_debugstr));
 SYSCTL_PROC(_kern_hwpmc, OID_AUTO, debugflags,
-    CTLTYPE_STRING | CTLFLAG_RWTUN | CTLFLAG_NOFETCH,
-    0, 0, pmc_debugflags_sysctl_handler, "A", "debug flags");
+    CTLTYPE_STRING | CTLFLAG_RWTUN | CTLFLAG_NOFETCH | CTLFLAG_NEEDGIANT,
+    0, 0, pmc_debugflags_sysctl_handler, "A",
+    "debug flags");
 #endif
 
 
@@ -1884,7 +1886,7 @@ pmc_log_process_mappings(struct pmc_owner *po, struct proc *p)
 	map = &vm->vm_map;
 	vm_map_lock_read(map);
 
-	for (entry = map->header.next; entry != &map->header; entry = entry->next) {
+	VM_MAP_ENTRY_FOREACH(entry, map) {
 
 		if (entry == NULL) {
 			PMCDBG2(LOG,OPS,2, "hwpmc: vm_map entry unexpectedly "
@@ -1988,7 +1990,7 @@ pmc_log_process_mappings(struct pmc_owner *po, struct proc *p)
 		 * new lookup for this entry.  If there is no entry
 		 * for this address range, vm_map_lookup_entry() will
 		 * return the previous one, so we always want to go to
-		 * entry->next on the next loop iteration.
+		 * the next entry on the next loop iteration.
 		 * 
 		 * There is an edge condition here that can occur if
 		 * there is no entry at or before this address.  In
@@ -4828,7 +4830,7 @@ pmc_capture_user_callchain(int cpu, int ring, struct trapframe *tf)
 			nfree++;
 #endif
 		if (ps->ps_td != td ||
-		   ps->ps_nsamples == PMC_USER_CALLCHAIN_PENDING ||
+		   ps->ps_nsamples != PMC_USER_CALLCHAIN_PENDING ||
 		   ps->ps_pmc->pm_state != PMC_STATE_RUNNING)
 			continue;
 

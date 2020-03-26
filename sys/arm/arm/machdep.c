@@ -63,6 +63,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/imgact.h>
 #include <sys/kdb.h>
 #include <sys/kernel.h>
+#include <sys/ktr.h>
 #include <sys/linker.h>
 #include <sys/msgbuf.h>
 #include <sys/reboot.h>
@@ -388,9 +389,9 @@ spinlock_enter(void)
 		cspr = disable_interrupts(PSR_I | PSR_F);
 		td->td_md.md_spinlock_count = 1;
 		td->td_md.md_saved_cspr = cspr;
+		critical_enter();
 	} else
 		td->td_md.md_spinlock_count++;
-	critical_enter();
 }
 
 void
@@ -400,18 +401,19 @@ spinlock_exit(void)
 	register_t cspr;
 
 	td = curthread;
-	critical_exit();
 	cspr = td->td_md.md_saved_cspr;
 	td->td_md.md_spinlock_count--;
-	if (td->td_md.md_spinlock_count == 0)
+	if (td->td_md.md_spinlock_count == 0) {
+		critical_exit();
 		restore_interrupts(cspr);
+	}
 }
 
 /*
  * Clear registers on exec
  */
 void
-exec_setregs(struct thread *td, struct image_params *imgp, u_long stack)
+exec_setregs(struct thread *td, struct image_params *imgp, uintptr_t stack)
 {
 	struct trapframe *tf = td->td_frame;
 
@@ -770,8 +772,9 @@ init_proc0(vm_offset_t kstack)
 {
 	proc_linkup0(&proc0, &thread0);
 	thread0.td_kstack = kstack;
-	thread0.td_pcb = (struct pcb *)
-		(thread0.td_kstack + kstack_pages * PAGE_SIZE) - 1;
+	thread0.td_kstack_pages = kstack_pages;
+	thread0.td_pcb = (struct pcb *)(thread0.td_kstack +
+	    thread0.td_kstack_pages * PAGE_SIZE) - 1;
 	thread0.td_pcb->pcb_flags = 0;
 	thread0.td_pcb->pcb_vfpcpu = -1;
 	thread0.td_pcb->pcb_vfpstate.fpscr = VFPSCR_DN;
@@ -941,7 +944,7 @@ initarm(struct arm_boot_params *abp)
 	valloc_pages(irqstack, IRQ_STACK_SIZE * MAXCPU);
 	valloc_pages(abtstack, ABT_STACK_SIZE * MAXCPU);
 	valloc_pages(undstack, UND_STACK_SIZE * MAXCPU);
-	valloc_pages(kernelstack, kstack_pages * MAXCPU);
+	valloc_pages(kernelstack, kstack_pages);
 	valloc_pages(msgbufpv, round_page(msgbufsize) / PAGE_SIZE);
 
 	/*
@@ -1206,7 +1209,7 @@ initarm(struct arm_boot_params *abp)
 	irqstack    = pmap_preboot_get_vpages(IRQ_STACK_SIZE * MAXCPU);
 	abtstack    = pmap_preboot_get_vpages(ABT_STACK_SIZE * MAXCPU);
 	undstack    = pmap_preboot_get_vpages(UND_STACK_SIZE * MAXCPU );
-	kernelstack = pmap_preboot_get_vpages(kstack_pages * MAXCPU);
+	kernelstack = pmap_preboot_get_vpages(kstack_pages);
 
 	/* Allocate message buffer. */
 	msgbufp = (void *)pmap_preboot_get_vpages(

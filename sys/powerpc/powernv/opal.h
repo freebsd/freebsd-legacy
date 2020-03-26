@@ -31,7 +31,7 @@
 
 #include <sys/cdefs.h>
 #include <sys/types.h>
-#include <sys/eventhandler.h>
+#include <sys/_eventhandler.h>
 
 /* Check if OPAL is correctly instantiated. Will try to instantiate it. */
 int opal_check(void);
@@ -45,6 +45,8 @@ int opal_call(uint64_t token, ...);
 #define OPAL_RTC_WRITE			4
 #define	OPAL_CEC_POWER_DOWN		5
 #define	OPAL_CEC_REBOOT			6
+#define	OPAL_READ_NVRAM			7
+#define	OPAL_WRITE_NVRAM		8
 #define	OPAL_HANDLE_INTERRUPT		9
 #define	OPAL_POLL_EVENTS		10
 #define	OPAL_PCI_CONFIG_READ_BYTE	13
@@ -53,6 +55,7 @@ int opal_call(uint64_t token, ...);
 #define	OPAL_PCI_CONFIG_WRITE_BYTE	16
 #define	OPAL_PCI_CONFIG_WRITE_HALF_WORD	17
 #define	OPAL_PCI_CONFIG_WRITE_WORD	18
+#define	OPAL_PCI_EEH_FREEZE_STATUS	23
 #define	OPAL_PCI_EEH_FREEZE_CLEAR	26
 #define	OPAL_PCI_PHB_MMIO_ENABLE	27
 #define	OPAL_PCI_SET_PHB_MEM_WINDOW	28
@@ -88,6 +91,7 @@ int opal_call(uint64_t token, ...);
 #define	OPAL_INT_EOI			124
 #define	OPAL_INT_SET_MFRR		125
 #define	OPAL_PCI_TCE_KILL		126
+#define	OPAL_NMMU_SET_PTCR		127
 #define	OPAL_XIVE_RESET			128
 #define	OPAL_XIVE_GET_IRQ_INFO		129
 #define	OPAL_XIVE_GET_IRQ_CONFIG	130
@@ -125,6 +129,11 @@ int opal_call(uint64_t token, ...);
 
 #define	OPAL_IGNORE_RID_FUNC_NUMBER	0
 #define	OPAL_COMPARE_RID_FUNC_NUMBER	1
+
+/* For OPAL_PCI_TCE_KILL */
+#define	OPAL_PCI_TCE_KILL_PAGE		0
+#define	OPAL_PCI_TCE_KILL_PE		1
+#define	OPAL_PCI_TCE_KILL_ALL		2
 
 #define	OPAL_SUCCESS			0
 #define	OPAL_PARAMETER			-1

@@ -640,10 +640,10 @@ selectroute(struct sockaddr_in6 *dstsock, struct ip6_pktopts *opts,
 	if (dstsock->sin6_addr.s6_addr32[0] == 0 &&
 	    dstsock->sin6_addr.s6_addr32[1] == 0 &&
 	    !IN6_IS_ADDR_LOOPBACK(&dstsock->sin6_addr)) {
-		printf("in6_selectroute: strange destination %s\n",
+		printf("%s: strange destination %s\n", __func__,
 		       ip6_sprintf(ip6buf, &dstsock->sin6_addr));
 	} else {
-		printf("in6_selectroute: destination = %s%%%d\n",
+		printf("%s: destination = %s%%%d\n", __func__,
 		       ip6_sprintf(ip6buf, &dstsock->sin6_addr),
 		       dstsock->sin6_scope_id); /* for debug */
 	}
@@ -724,6 +724,10 @@ selectroute(struct sockaddr_in6 *dstsock, struct ip6_pktopts *opts,
 		if (ron->ro_rt == NULL ||
 		    (ron->ro_rt->rt_flags & RTF_GATEWAY) != 0)
 			error = EHOSTUNREACH;
+		else {
+			rt = ron->ro_rt;
+			ifp = rt->rt_ifp;
+		}
 		goto done;
 	}
 
@@ -891,25 +895,9 @@ in6_selectif(struct sockaddr_in6 *dstsock, struct ip6_pktopts *opts,
 	return (0);
 }
 
-/*
- * Public wrapper function to selectroute().
- *
- * XXX-BZ in6_selectroute() should and will grow the FIB argument. The
- * in6_selectroute_fib() function is only there for backward compat on stable.
- */
+/* Public wrapper function to selectroute(). */
 int
 in6_selectroute(struct sockaddr_in6 *dstsock, struct ip6_pktopts *opts,
-    struct ip6_moptions *mopts, struct route_in6 *ro,
-    struct ifnet **retifp, struct rtentry **retrt)
-{
-
-	return (selectroute(dstsock, opts, mopts, ro, retifp,
-	    retrt, 0, RT_DEFAULT_FIB));
-}
-
-#ifndef BURN_BRIDGES
-int
-in6_selectroute_fib(struct sockaddr_in6 *dstsock, struct ip6_pktopts *opts,
     struct ip6_moptions *mopts, struct route_in6 *ro,
     struct ifnet **retifp, struct rtentry **retrt, u_int fibnum)
 {
@@ -917,7 +905,6 @@ in6_selectroute_fib(struct sockaddr_in6 *dstsock, struct ip6_pktopts *opts,
 	return (selectroute(dstsock, opts, mopts, ro, retifp,
 	    retrt, 0, fibnum));
 }
-#endif
 
 /*
  * Default hop limit selection. The precedence is as follows:
@@ -927,21 +914,21 @@ in6_selectroute_fib(struct sockaddr_in6 *dstsock, struct ip6_pktopts *opts,
  * 3. The system default hoplimit.
  */
 int
-in6_selecthlim(struct inpcb *in6p, struct ifnet *ifp)
+in6_selecthlim(struct inpcb *inp, struct ifnet *ifp)
 {
 
-	if (in6p && in6p->in6p_hops >= 0)
-		return (in6p->in6p_hops);
+	if (inp && inp->in6p_hops >= 0)
+		return (inp->in6p_hops);
 	else if (ifp)
 		return (ND_IFINFO(ifp)->chlim);
-	else if (in6p && !IN6_IS_ADDR_UNSPECIFIED(&in6p->in6p_faddr)) {
+	else if (inp && !IN6_IS_ADDR_UNSPECIFIED(&inp->in6p_faddr)) {
 		struct nhop6_basic nh6;
 		struct in6_addr dst;
 		uint32_t fibnum, scopeid;
 		int hlim;
 
-		fibnum = in6p->inp_inc.inc_fibnum;
-		in6_splitscope(&in6p->in6p_faddr, &dst, &scopeid);
+		fibnum = inp->inp_inc.inc_fibnum;
+		in6_splitscope(&inp->in6p_faddr, &dst, &scopeid);
 		if (fib6_lookup_nh_basic(fibnum, &dst, scopeid, 0, 0, &nh6)==0){
 			hlim = ND_IFINFO(nh6.nh_ifp)->chlim;
 			return (hlim);
@@ -1036,7 +1023,8 @@ struct walkarg {
 static int in6_src_sysctl(SYSCTL_HANDLER_ARGS);
 SYSCTL_DECL(_net_inet6_ip6);
 static SYSCTL_NODE(_net_inet6_ip6, IPV6CTL_ADDRCTLPOLICY, addrctlpolicy,
-	CTLFLAG_RD, in6_src_sysctl, "");
+    CTLFLAG_RD | CTLFLAG_MPSAFE, in6_src_sysctl,
+    "");
 
 static int
 in6_src_sysctl(SYSCTL_HANDLER_ARGS)

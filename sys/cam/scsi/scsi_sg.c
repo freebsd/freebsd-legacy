@@ -142,7 +142,7 @@ PERIPHDRIVER_DECLARE(sg, sgdriver);
 
 static struct cdevsw sg_cdevsw = {
 	.d_version =	D_VERSION,
-	.d_flags =	D_NEEDGIANT | D_TRACKCLOSE,
+	.d_flags =	D_TRACKCLOSE,
 	.d_open =	sgopen,
 	.d_close =	sgclose,
 	.d_ioctl =	sgioctl,
@@ -915,7 +915,9 @@ sgsendccb(struct cam_periph *periph, union ccb *ccb)
 				  SF_RETRY_UA,
 				  softc->device_stats);
 
+	cam_periph_unlock(periph);
 	cam_periph_unmapmem(ccb, &mapinfo);
+	cam_periph_lock(periph);
 
 	return (error);
 }

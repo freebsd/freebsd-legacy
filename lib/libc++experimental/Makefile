@@ -3,7 +3,7 @@
 .include <src.opts.mk>
 
 PACKAGE=	clibs
-SRCDIR=		${SRCTOP}/contrib/libc++
+SRCDIR=		${SRCTOP}/contrib/llvm-project/libcxx
 
 LIB=		c++experimental
 NO_PIC=
@@ -20,6 +20,6 @@ CXXFLAGS+=	-nostdinc++
 CXXFLAGS+=	-nostdlib
 CXXFLAGS+=	-D_LIBCPP_BUILDING_LIBRARY
 CXXFLAGS+=	-DLIBCXXRT
-CXXSTD=		c++14
+CXXSTD?=	c++14
 
 .include <bsd.lib.mk>

@@ -43,6 +43,7 @@ __FBSDID("$FreeBSD$");
 #include <vmmapi.h>
 
 #include "bhyverun.h"
+#include "debug.h"
 #include "smbiostbl.h"
 
 #define	MB			(1024*1024)
@@ -636,7 +637,7 @@ smbios_type4_initializer(struct smbios_structure *template_entry,
 {
 	int i;
 
-	for (i = 0; i < guest_ncpus; i++) {
+	for (i = 0; i < sockets; i++) {
 		struct smbios_table_type4 *type4;
 		char *p;
 		int nstrings, len;
@@ -655,6 +656,16 @@ smbios_type4_initializer(struct smbios_structure *template_entry,
 		*(*endaddr) = '\0';
 		(*endaddr)++;
 		type4->socket = nstrings + 1;
+		/* Revise cores and threads after update to smbios 3.0 */
+		if (cores > 254)
+			type4->cores = 0;
+		else
+			type4->cores = cores;
+		/* This threads is total threads in a socket */
+		if ((cores * threads) > 254)
+			type4->threads = 0;
+		else
+			type4->threads = (cores * threads);
 		curaddr = *endaddr;
 	}
 
@@ -786,7 +797,7 @@ smbios_build(struct vmctx *ctx)
 
 	startaddr = paddr_guest2host(ctx, SMBIOS_BASE, SMBIOS_MAX_LENGTH);
 	if (startaddr == NULL) {
-		fprintf(stderr, "smbios table requires mapped mem\n");
+		EPRINTLN("smbios table requires mapped mem");
 		return (ENOMEM);
 	}
 

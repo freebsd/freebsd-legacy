@@ -128,6 +128,12 @@ SYSCTL_INT(_net_inet_icmp, OID_AUTO, log_redirect, CTLFLAG_VNET | CTLFLAG_RW,
 	&VNET_NAME(log_redirect), 0,
 	"Log ICMP redirects to the console");
 
+VNET_DEFINE_STATIC(int, redirtimeout) = 60 * 10; /* 10 minutes */
+#define	V_redirtimeout			VNET(redirtimeout)
+SYSCTL_INT(_net_inet_icmp, OID_AUTO, redirtimeout, CTLFLAG_VNET | CTLFLAG_RW,
+	&VNET_NAME(redirtimeout), 0,
+	"Delay in seconds before expiring redirect route");
+
 VNET_DEFINE_STATIC(char, reply_src[IFNAMSIZ]);
 #define	V_reply_src			VNET(reply_src)
 SYSCTL_STRING(_net_inet_icmp, OID_AUTO, reply_src, CTLFLAG_VNET | CTLFLAG_RW,
@@ -170,6 +176,8 @@ int	icmpprintfs = 0;
 
 static void	icmp_reflect(struct mbuf *);
 static void	icmp_send(struct mbuf *, struct mbuf *);
+static int	icmp_verify_redirect_gateway(struct sockaddr_in *,
+    struct sockaddr_in *, struct sockaddr_in *, u_int);
 
 extern	struct protosw inetsw[];
 
@@ -393,7 +401,6 @@ freeit:
 int
 icmp_input(struct mbuf **mp, int *offp, int proto)
 {
-	struct epoch_tracker et;
 	struct icmp *icp;
 	struct in_ifaddr *ia;
 	struct mbuf *m = *mp;
@@ -404,6 +411,8 @@ icmp_input(struct mbuf **mp, int *offp, int proto)
 	int i, code;
 	void (*ctlfunc)(int, struct sockaddr *, void *);
 	int fibnum;
+
+	NET_EPOCH_ASSERT();
 
 	*mp = NULL;
 
@@ -421,7 +430,6 @@ icmp_input(struct mbuf **mp, int *offp, int proto)
 		    inet_ntoa_r(ip->ip_dst, dstbuf), icmplen);
 	}
 #endif
-	NET_EPOCH_ENTER(et);
 	if (icmplen < ICMP_MINLEN) {
 		ICMPSTAT_INC(icps_tooshort);
 		goto freeit;
@@ -429,7 +437,6 @@ icmp_input(struct mbuf **mp, int *offp, int proto)
 	i = hlen + min(icmplen, ICMP_ADVLENMIN);
 	if (m->m_len < i && (m = m_pullup(m, i)) == NULL)  {
 		ICMPSTAT_INC(icps_tooshort);
-		NET_EPOCH_EXIT(et);
 		return (IPPROTO_DONE);
 	}
 	ip = mtod(m, struct ip *);
@@ -547,7 +554,6 @@ icmp_input(struct mbuf **mp, int *offp, int proto)
 		if (m->m_len < i && (m = m_pullup(m, i)) == NULL) {
 			/* This should actually not happen */
 			ICMPSTAT_INC(icps_tooshort);
-			NET_EPOCH_EXIT(et);
 			return (IPPROTO_DONE);
 		}
 		ip = mtod(m, struct ip *);
@@ -557,7 +563,7 @@ icmp_input(struct mbuf **mp, int *offp, int proto)
 		 * - The outer IP header has no options.
 		 * - The outer IP header, the ICMP header, the inner IP header,
 		 *   and the first n bytes of the inner payload are contiguous.
-		 *   n is at least 8, but might be larger based on 
+		 *   n is at least 8, but might be larger based on
 		 *   ICMP_ADVLENPREF. See its definition in ip_icmp.h.
 		 */
 		ctlfunc = inetsw[ip_protox[icp->icmp_ip.ip_p]].pr_ctlinput;
@@ -623,7 +629,7 @@ icmp_input(struct mbuf **mp, int *offp, int proto)
 			    (struct sockaddr *)&icmpdst, m->m_pkthdr.rcvif);
 		if (ia == NULL)
 			break;
-		if (ia->ia_ifp == NULL) 
+		if (ia->ia_ifp == NULL)
 			break;
 		icp->icmp_type = ICMP_MASKREPLY;
 		if (V_icmpmaskfake == 0)
@@ -640,7 +646,6 @@ reflect:
 		ICMPSTAT_INC(icps_reflect);
 		ICMPSTAT_INC(icps_outhist[icp->icmp_type]);
 		icmp_reflect(m);
-		NET_EPOCH_EXIT(et);
 		return (IPPROTO_DONE);
 
 	case ICMP_REDIRECT:
@@ -692,11 +697,31 @@ reflect:
 		}
 #endif
 		icmpsrc.sin_addr = icp->icmp_ip.ip_dst;
+
+		/*
+		 * RFC 1122 says network (code 0,2) redirects SHOULD
+		 * be treated identically to the host redirects.
+		 * Given that, ignore network masks.
+		 */
+
+		/*
+		 * Variable values:
+		 * icmpsrc: route destination
+		 * icmpdst: route gateway
+		 * icmpgw: message source
+		 */
+
+		if (icmp_verify_redirect_gateway(&icmpgw, &icmpsrc, &icmpdst,
+		    M_GETFIB(m)) != 0) {
+			/* TODO: increment bad redirects here */
+			break;
+		}
+
 		for ( fibnum = 0; fibnum < rt_numfibs; fibnum++) {
-			in_rtredirect((struct sockaddr *)&icmpsrc,
-			  (struct sockaddr *)&icmpdst,
-			  (struct sockaddr *)0, RTF_GATEWAY | RTF_HOST,
-			  (struct sockaddr *)&icmpgw, fibnum);
+			rib_add_redirect(fibnum, (struct sockaddr *)&icmpsrc,
+			    (struct sockaddr *)&icmpdst,
+			    (struct sockaddr *)&icmpgw, m->m_pkthdr.rcvif,
+			    RTF_GATEWAY, V_redirtimeout);
 		}
 		pfctlinput(PRC_REDIRECT_HOST, (struct sockaddr *)&icmpsrc);
 		break;
@@ -717,13 +742,11 @@ reflect:
 	}
 
 raw:
-	NET_EPOCH_EXIT(et);
 	*mp = m;
 	rip_input(mp, offp, proto);
 	return (IPPROTO_DONE);
 
 freeit:
-	NET_EPOCH_EXIT(et);
 	m_freem(m);
 	return (IPPROTO_DONE);
 }
@@ -735,7 +758,6 @@ static void
 icmp_reflect(struct mbuf *m)
 {
 	struct rm_priotracker in_ifa_tracker;
-	struct epoch_tracker et;
 	struct ip *ip = mtod(m, struct ip *);
 	struct ifaddr *ifa;
 	struct ifnet *ifp;
@@ -744,6 +766,8 @@ icmp_reflect(struct mbuf *m)
 	struct nhop4_extended nh_ext;
 	struct mbuf *opts = NULL;
 	int optlen = (ip->ip_hl << 2) - sizeof(struct ip);
+
+	NET_EPOCH_ASSERT();
 
 	if (IN_MULTICAST(ntohl(ip->ip_src.s_addr)) ||
 	    IN_EXPERIMENTAL(ntohl(ip->ip_src.s_addr)) ||
@@ -779,7 +803,6 @@ icmp_reflect(struct mbuf *m)
 	 */
 	ifp = m->m_pkthdr.rcvif;
 	if (ifp != NULL && ifp->if_flags & IFF_BROADCAST) {
-		NET_EPOCH_ENTER(et);
 		CK_STAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link) {
 			if (ifa->ifa_addr->sa_family != AF_INET)
 				continue;
@@ -787,11 +810,9 @@ icmp_reflect(struct mbuf *m)
 			if (satosin(&ia->ia_broadaddr)->sin_addr.s_addr ==
 			    t.s_addr) {
 				t = IA_SIN(ia)->sin_addr;
-				NET_EPOCH_EXIT(et);
 				goto match;
 			}
 		}
-		NET_EPOCH_EXIT(et);
 	}
 	/*
 	 * If the packet was transiting through us, use the address of
@@ -800,16 +821,13 @@ icmp_reflect(struct mbuf *m)
 	 * criteria apply.
 	 */
 	if (V_icmp_rfi && ifp != NULL) {
-		NET_EPOCH_ENTER(et);
 		CK_STAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link) {
 			if (ifa->ifa_addr->sa_family != AF_INET)
 				continue;
 			ia = ifatoia(ifa);
 			t = IA_SIN(ia)->sin_addr;
-			NET_EPOCH_EXIT(et);
 			goto match;
 		}
-		NET_EPOCH_EXIT(et);
 	}
 	/*
 	 * If the incoming packet was not addressed directly to us, use
@@ -818,16 +836,13 @@ icmp_reflect(struct mbuf *m)
 	 * with normal source selection.
 	 */
 	if (V_reply_src[0] != '\0' && (ifp = ifunit(V_reply_src))) {
-		NET_EPOCH_ENTER(et);
 		CK_STAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link) {
 			if (ifa->ifa_addr->sa_family != AF_INET)
 				continue;
 			ia = ifatoia(ifa);
 			t = IA_SIN(ia)->sin_addr;
-			NET_EPOCH_EXIT(et);
 			goto match;
 		}
-		NET_EPOCH_EXIT(et);
 	}
 	/*
 	 * If the packet was transiting through us, use the address of
@@ -916,6 +931,68 @@ done:
 	if (opts)
 		(void)m_free(opts);
 }
+
+/*
+ * Verifies if redirect message is valid, according to RFC 1122
+ *
+ * @src: sockaddr with address of redirect originator
+ * @dst: sockaddr with destination in question
+ * @gateway: new proposed gateway
+ *
+ * Returns 0 on success.
+ */
+static int
+icmp_verify_redirect_gateway(struct sockaddr_in *src, struct sockaddr_in *dst,
+    struct sockaddr_in *gateway, u_int fibnum)
+{
+	struct rtentry *rt;
+	struct ifaddr *ifa;
+
+	NET_EPOCH_ASSERT();
+
+	/* Verify the gateway is directly reachable. */
+	if ((ifa = ifa_ifwithnet((struct sockaddr *)gateway, 0, fibnum))==NULL)
+		return (ENETUNREACH);
+
+	/* TODO: fib-aware. */
+	if (ifa_ifwithaddr_check((struct sockaddr *)gateway))
+		return (EHOSTUNREACH);
+
+	rt = rtalloc1_fib((struct sockaddr *)dst, 0, 0UL, fibnum); /* NB: rt is locked */
+	if (rt == NULL)
+		return (EINVAL);
+
+	/*
+	 * If the redirect isn't from our current router for this dst,
+	 * it's either old or wrong.  If it redirects us to ourselves,
+	 * we have a routing loop, perhaps as a result of an interface
+	 * going down recently.
+	 */
+	if (!sa_equal((struct sockaddr *)src, rt->rt_gateway)) {
+		RTFREE_LOCKED(rt);
+		return (EINVAL);
+	}
+	if (rt->rt_ifa != ifa && ifa->ifa_addr->sa_family != AF_LINK) {
+		RTFREE_LOCKED(rt);
+		return (EINVAL);
+	}
+
+	/* If host route already exists, ignore redirect. */
+	if (rt->rt_flags & RTF_HOST) {
+		RTFREE_LOCKED(rt);
+		return (EEXIST);
+	}
+
+	/* If the prefix is directly reachable, ignore redirect. */
+	if (!(rt->rt_flags & RTF_GATEWAY)) {
+		RTFREE_LOCKED(rt);
+		return (EEXIST);
+	}
+
+	RTFREE_LOCKED(rt);
+	return (0);
+}
+
 
 /*
  * Send an icmp packet back to the ip level,

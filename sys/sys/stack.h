@@ -33,6 +33,10 @@
 
 #include <sys/_stack.h>
 
+#ifdef _SYS_MALLOC_H_
+MALLOC_DECLARE(M_STACK);
+#endif
+
 struct sbuf;
 
 /* MI Routines. */
@@ -63,7 +67,6 @@ void		 stack_ktr(u_int, const char *, int, const struct stack *,
 /* MD Routines. */
 struct thread;
 void		 stack_save(struct stack *);
-void		 stack_save_td(struct stack *, struct thread *);
-int		 stack_save_td_running(struct stack *, struct thread *);
+int		 stack_save_td(struct stack *, struct thread *);
 
 #endif

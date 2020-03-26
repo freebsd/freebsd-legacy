@@ -11,7 +11,7 @@
 #include <openssl/err.h>
 #include <openssl/symhacks.h>
 
-#include "ec_lcl.h"
+#include "ec_local.h"
 
 const EC_METHOD *EC_GFp_simple_method(void)
 {
@@ -307,8 +307,7 @@ int ec_GFp_simple_group_check_discriminant(const EC_GROUP *group, BN_CTX *ctx)
     ret = 1;
 
  err:
-    if (ctx != NULL)
-        BN_CTX_end(ctx);
+    BN_CTX_end(ctx);
     BN_CTX_free(new_ctx);
     return ret;
 }
@@ -787,8 +786,7 @@ int ec_GFp_simple_add(const EC_GROUP *group, EC_POINT *r, const EC_POINT *a,
     ret = 1;
 
  end:
-    if (ctx)                    /* otherwise we already called BN_CTX_end */
-        BN_CTX_end(ctx);
+    BN_CTX_end(ctx);
     BN_CTX_free(new_ctx);
     return ret;
 }

@@ -84,6 +84,15 @@ struct vxlan_socket_mc_info {
 	int				 vxlsomc_users;
 };
 
+/*
+ * The maximum MTU of encapsulated ethernet frame within IPv4/UDP packet.
+ */
+#define VXLAN_MAX_MTU	(IP_MAXPACKET - \
+		60 /* Maximum IPv4 header len */ - \
+		sizeof(struct udphdr) - \
+		sizeof(struct vxlan_header) - \
+		ETHER_HDR_LEN - ETHER_CRC_LEN - ETHER_VLAN_ENCAP_LEN)
+
 #define VXLAN_SO_MC_MAX_GROUPS		32
 
 #define VXLAN_SO_VNI_HASH_SHIFT		6
@@ -390,7 +399,7 @@ static LIST_HEAD(, vxlan_socket) vxlan_socket_list;
 static eventhandler_tag vxlan_ifdetach_event_tag;
 
 SYSCTL_DECL(_net_link);
-SYSCTL_NODE(_net_link, OID_AUTO, vxlan, CTLFLAG_RW, 0,
+SYSCTL_NODE(_net_link, OID_AUTO, vxlan, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
     "Virtual eXtensible Local Area Network");
 
 static int vxlan_legacy_port = 0;
@@ -1134,7 +1143,7 @@ vxlan_socket_mc_join_group(struct vxlan_socket *vso,
 		 * If we really need to, we can of course look in the INP's
 		 * membership list:
 		 *     sotoinpcb(vso->vxlso_sock)->inp_moptions->
-		 *         imo_membership[]->inm_ifp
+		 *         imo_head[]->imf_inm->inm_ifp
 		 * similarly to imo_match_group().
 		 */
 		source->in4.sin_addr = local->in4.sin_addr;
@@ -2247,10 +2256,11 @@ vxlan_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 	ifr = (struct ifreq *) data;
 	ifd = (struct ifdrv *) data;
 
+	error = 0;
+
 	switch (cmd) {
 	case SIOCADDMULTI:
 	case SIOCDELMULTI:
-		error = 0;
 		break;
 
 	case SIOCGDRVSPEC:
@@ -2265,6 +2275,13 @@ vxlan_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 	case SIOCSIFMEDIA:
 	case SIOCGIFMEDIA:
 		error = ifmedia_ioctl(ifp, ifr, &sc->vxl_media, cmd);
+		break;
+
+	case SIOCSIFMTU:
+		if (ifr->ifr_mtu < ETHERMIN || ifr->ifr_mtu > VXLAN_MAX_MTU)
+			error = EINVAL;
+		else
+			ifp->if_mtu = ifr->ifr_mtu;
 		break;
 
 	default:
@@ -2747,14 +2764,14 @@ vxlan_clone_create(struct if_clone *ifc, int unit, caddr_t params)
 	ifp->if_ioctl = vxlan_ioctl;
 	ifp->if_transmit = vxlan_transmit;
 	ifp->if_qflush = vxlan_qflush;
-	ifp->if_capabilities |= IFCAP_LINKSTATE;
-	ifp->if_capenable |= IFCAP_LINKSTATE;
+	ifp->if_capabilities |= IFCAP_LINKSTATE | IFCAP_JUMBO_MTU;
+	ifp->if_capenable |= IFCAP_LINKSTATE | IFCAP_JUMBO_MTU;
 
 	ifmedia_init(&sc->vxl_media, 0, vxlan_media_change, vxlan_media_status);
 	ifmedia_add(&sc->vxl_media, IFM_ETHER | IFM_AUTO, 0, NULL);
 	ifmedia_set(&sc->vxl_media, IFM_ETHER | IFM_AUTO);
 
-	ether_fakeaddr(&sc->vxl_hwaddr);
+	ether_gen_addr(ifp, &sc->vxl_hwaddr);
 	ether_ifattach(ifp, sc->vxl_hwaddr.octet);
 
 	ifp->if_baudrate = 0;
@@ -3043,10 +3060,10 @@ vxlan_sysctl_setup(struct vxlan_softc *sc)
 	sysctl_ctx_init(ctx);
 	sc->vxl_sysctl_node = SYSCTL_ADD_NODE(ctx,
 	    SYSCTL_STATIC_CHILDREN(_net_link_vxlan), OID_AUTO, namebuf,
-	    CTLFLAG_RD, NULL, "");
+	    CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, "");
 
 	node = SYSCTL_ADD_NODE(ctx, SYSCTL_CHILDREN(sc->vxl_sysctl_node),
-	    OID_AUTO, "ftable", CTLFLAG_RD, NULL, "");
+	    OID_AUTO, "ftable", CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, "");
 	SYSCTL_ADD_UINT(ctx, SYSCTL_CHILDREN(node), OID_AUTO, "count",
 	    CTLFLAG_RD, &sc->vxl_ftable_cnt, 0,
 	    "Number of entries in fowarding table");
@@ -3062,7 +3079,7 @@ vxlan_sysctl_setup(struct vxlan_softc *sc)
 	    "Dump the forwarding table entries");
 
 	node = SYSCTL_ADD_NODE(ctx, SYSCTL_CHILDREN(sc->vxl_sysctl_node),
-	    OID_AUTO, "stats", CTLFLAG_RD, NULL, "");
+	    OID_AUTO, "stats", CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, "");
 	SYSCTL_ADD_UINT(ctx, SYSCTL_CHILDREN(node), OID_AUTO,
 	    "ftable_nospace", CTLFLAG_RD, &stats->ftable_nospace, 0,
 	    "Fowarding table reached maximum entries");

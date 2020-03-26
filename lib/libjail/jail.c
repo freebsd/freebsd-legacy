@@ -30,7 +30,6 @@
 __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
-#include <sys/types.h>
 #include <sys/jail.h>
 #include <sys/linker.h>
 #include <sys/socket.h>
@@ -263,7 +262,10 @@ jailparam_all(struct jailparam **jpp)
 			goto error;
 		mib1[1] = 2;
 	}
-	jp = reallocarray(jp, njp, sizeof(*jp));
+	/* Just return the untrimmed buffer if reallocarray() somehow fails. */
+	tjp = reallocarray(jp, njp, sizeof(*jp));
+	if (tjp != NULL)
+		jp = tjp;
 	*jpp = jp;
 	return (njp);
 

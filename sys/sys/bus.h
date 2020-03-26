@@ -150,8 +150,9 @@ struct devreq {
 
 #ifdef _KERNEL
 
-#include <sys/eventhandler.h>
+#include <sys/_eventhandler.h>
 #include <sys/kobj.h>
+#include <sys/systm.h>
 
 /**
  * devctl hooks.  Typically one should use the devctl_notify
@@ -419,6 +420,8 @@ void	root_bus_configure(void);
  * Useful functions for implementing buses.
  */
 
+struct _cpuset;
+
 int	bus_generic_activate_resource(device_t dev, device_t child, int type,
 				      int rid, struct resource *r);
 device_t
@@ -431,6 +434,8 @@ struct resource *
 	bus_generic_alloc_resource(device_t bus, device_t child, int type,
 				   int *rid, rman_res_t start, rman_res_t end,
 				   rman_res_t count, u_int flags);
+int	bus_generic_translate_resource(device_t dev, int type, rman_res_t start,
+			      rman_res_t *newstart);
 int	bus_generic_attach(device_t dev);
 int	bus_generic_bind_intr(device_t dev, device_t child,
 			      struct resource *irq, int cpu);
@@ -562,6 +567,7 @@ int	bus_child_present(device_t child);
 int	bus_child_pnpinfo_str(device_t child, char *buf, size_t buflen);
 int	bus_child_location_str(device_t child, char *buf, size_t buflen);
 void	bus_enumerate_hinted_children(device_t bus);
+int	bus_delayed_attach_children(device_t bus);
 
 static __inline struct resource *
 bus_alloc_resource_any(device_t dev, int type, int *rid, u_int flags)
@@ -808,16 +814,24 @@ DECLARE_MODULE(name##_##busname, name##_##busname##_mod,		\
 static __inline type varp ## _get_ ## var(device_t dev)			\
 {									\
 	uintptr_t v;							\
-	BUS_READ_IVAR(device_get_parent(dev), dev,			\
+	int e;								\
+	e = BUS_READ_IVAR(device_get_parent(dev), dev,			\
 	    ivarp ## _IVAR_ ## ivar, &v);				\
+	KASSERT(e == 0, ("%s failed for %s on bus %s, error = %d",	\
+	    __func__, device_get_nameunit(dev),				\
+	    device_get_nameunit(device_get_parent(dev)), e));		\
 	return ((type) v);						\
 }									\
 									\
 static __inline void varp ## _set_ ## var(device_t dev, type t)		\
 {									\
 	uintptr_t v = (uintptr_t) t;					\
-	BUS_WRITE_IVAR(device_get_parent(dev), dev,			\
+	int e;								\
+	e = BUS_WRITE_IVAR(device_get_parent(dev), dev,			\
 	    ivarp ## _IVAR_ ## ivar, v);				\
+	KASSERT(e == 0, ("%s failed for %s on bus %s, error = %d",	\
+	    __func__, device_get_nameunit(dev),				\
+	    device_get_nameunit(device_get_parent(dev)), e));		\
 }
 
 /**

@@ -34,6 +34,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/param.h>
 #include <sys/bus.h>
 #include <sys/cpu.h>
+#include <sys/eventhandler.h>
 #include <sys/limits.h>
 #include <sys/malloc.h>
 #include <sys/systm.h>
@@ -133,7 +134,11 @@ tsc_freq_vmware(void)
 
 /*
  * Calculate TSC frequency using information from the CPUID leaf 0x15
- * 'Time Stamp Counter and Nominal Core Crystal Clock'.  It should be
+ * 'Time Stamp Counter and Nominal Core Crystal Clock'.  If leaf 0x15
+ * is not functional, as it is on Skylake/Kabylake, try 0x16 'Processor
+ * Frequency Information'.  Leaf 0x16 is described in the SDM as
+ * informational only, but if 0x15 did not work, and TSC calibration
+ * is disabled, it is the best we can get at all.  It should still be
  * an improvement over the parsing of the CPU model name in
  * tsc_freq_intel(), when available.
  */
@@ -145,10 +150,20 @@ tsc_freq_cpuid(void)
 	if (cpu_high < 0x15)
 		return (false);
 	do_cpuid(0x15, regs);
-	if (regs[0] == 0 || regs[1] == 0 || regs[2] == 0)
+	if (regs[0] != 0 && regs[1] != 0 && regs[2] != 0) {
+		tsc_freq = (uint64_t)regs[2] * regs[1] / regs[0];
+		return (true);
+	}
+
+	if (cpu_high < 0x16)
 		return (false);
-	tsc_freq = (uint64_t)regs[2] * regs[1] / regs[0];
-	return (true);
+	do_cpuid(0x16, regs);
+	if (regs[0] != 0) {
+		tsc_freq = (uint64_t)regs[0] * 1000000;
+		return (true);
+	}
+
+	return (false);
 }
 
 static void
@@ -213,24 +228,19 @@ tsc_freq_intel(void)
 static void
 probe_tsc_freq(void)
 {
-	u_int regs[4];
 	uint64_t tsc1, tsc2;
 	uint16_t bootflags;
 
-	if (cpu_high >= 6) {
-		do_cpuid(6, regs);
-		if ((regs[2] & CPUID_PERF_STAT) != 0) {
-			/*
-			 * XXX Some emulators expose host CPUID without actual
-			 * support for these MSRs.  We must test whether they
-			 * really work.
-			 */
-			wrmsr(MSR_MPERF, 0);
-			wrmsr(MSR_APERF, 0);
-			DELAY(10);
-			if (rdmsr(MSR_MPERF) > 0 && rdmsr(MSR_APERF) > 0)
-				tsc_perf_stat = 1;
-		}
+	if (cpu_power_ecx & CPUID_PERF_STAT) {
+		/*
+		 * XXX Some emulators expose host CPUID without actual support
+		 * for these MSRs.  We must test whether they really work.
+		 */
+		wrmsr(MSR_MPERF, 0);
+		wrmsr(MSR_APERF, 0);
+		DELAY(10);
+		if (rdmsr(MSR_MPERF) > 0 && rdmsr(MSR_APERF) > 0)
+			tsc_perf_stat = 1;
 	}
 
 	if (vm_guest == VM_GUEST_VMWARE) {
@@ -240,6 +250,7 @@ probe_tsc_freq(void)
 
 	switch (cpu_vendor_id) {
 	case CPU_VENDOR_AMD:
+	case CPU_VENDOR_HYGON:
 		if ((amd_pminfo & AMDPM_TSC_INVARIANT) != 0 ||
 		    (vm_guest == VM_GUEST_NO &&
 		    CPUID_TO_FAMILY(cpu_id) >= 0x10))
@@ -503,6 +514,7 @@ retry:
 	if (smp_tsc && tsc_is_invariant) {
 		switch (cpu_vendor_id) {
 		case CPU_VENDOR_AMD:
+		case CPU_VENDOR_HYGON:
 			/*
 			 * Starting with Family 15h processors, TSC clock
 			 * source is in the north bridge.  Check whether
@@ -600,7 +612,8 @@ init:
 	for (shift = 0; shift <= 31 && (tsc_freq >> shift) > max_freq; shift++)
 		;
 	if ((cpu_feature & CPUID_SSE2) != 0 && mp_ncpus > 1) {
-		if (cpu_vendor_id == CPU_VENDOR_AMD) {
+		if (cpu_vendor_id == CPU_VENDOR_AMD ||
+		    cpu_vendor_id == CPU_VENDOR_HYGON) {
 			tsc_timecounter.tc_get_timecount = shift > 0 ?
 			    tsc_get_timecount_low_mfence :
 			    tsc_get_timecount_mfence;
@@ -741,8 +754,10 @@ sysctl_machdep_tsc_freq(SYSCTL_HANDLER_ARGS)
 	return (error);
 }
 
-SYSCTL_PROC(_machdep, OID_AUTO, tsc_freq, CTLTYPE_U64 | CTLFLAG_RW,
-    0, 0, sysctl_machdep_tsc_freq, "QU", "Time Stamp Counter frequency");
+SYSCTL_PROC(_machdep, OID_AUTO, tsc_freq,
+    CTLTYPE_U64 | CTLFLAG_RW | CTLFLAG_NEEDGIANT,
+    0, 0, sysctl_machdep_tsc_freq, "QU",
+    "Time Stamp Counter frequency");
 
 static u_int
 tsc_get_timecount(struct timecounter *tc __unused)

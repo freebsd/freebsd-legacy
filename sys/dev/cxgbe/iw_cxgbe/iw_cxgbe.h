@@ -91,6 +91,7 @@ static inline void *cplhdr(struct mbuf *m)
 
 #define C4IW_ID_TABLE_F_RANDOM 1       /* Pseudo-randomize the id's returned */
 #define C4IW_ID_TABLE_F_EMPTY  2       /* Table is initially empty */
+#define C4IW_MAX_PAGE_SIZE 0x8000000
 
 struct c4iw_id_table {
 	u32 flags;
@@ -862,7 +863,6 @@ struct c4iw_ep {
 	u32 tx_chan;
 	u32 mtu;
 	u16 mss;
-	u16 emss;
 	u16 plen;
 	u16 rss_qid;
 	u16 txq_idx;

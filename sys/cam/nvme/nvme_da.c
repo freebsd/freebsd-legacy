@@ -48,6 +48,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/cons.h>
 #include <sys/proc.h>
 #include <sys/reboot.h>
+#include <geom/geom.h>
 #include <geom/geom_disk.h>
 #endif /* _KERNEL */
 
@@ -129,12 +130,11 @@ struct nda_softc {
 };
 
 struct nda_trim_request {
-	union {
-		struct nvme_dsm_range dsm;
-		uint8_t		data[NVME_MAX_DSM_TRIM];
-	};
+	struct nvme_dsm_range	dsm[NVME_MAX_DSM_TRIM / sizeof(struct nvme_dsm_range)];
 	TAILQ_HEAD(, bio) bps;
 };
+_Static_assert(NVME_MAX_DSM_TRIM % sizeof(struct nvme_dsm_range) == 0,
+    "NVME_MAX_DSM_TRIM must be an integral number of ranges");
 
 /* Need quirk table */
 
@@ -168,16 +168,19 @@ static void		ndasuspend(void *arg);
 #define NDA_MAX_TRIM_ENTRIES  (NVME_MAX_DSM_TRIM / sizeof(struct nvme_dsm_range))/* Number of DSM trims to use, max 256 */
 #endif
 
-static SYSCTL_NODE(_kern_cam, OID_AUTO, nda, CTLFLAG_RD, 0,
-            "CAM Direct Access Disk driver");
+static SYSCTL_NODE(_kern_cam, OID_AUTO, nda, CTLFLAG_RD | CTLFLAG_MPSAFE, 0,
+    "CAM Direct Access Disk driver");
 
 //static int nda_retry_count = NDA_DEFAULT_RETRY;
 static int nda_send_ordered = NDA_DEFAULT_SEND_ORDERED;
 static int nda_default_timeout = NDA_DEFAULT_TIMEOUT;
 static int nda_max_trim_entries = NDA_MAX_TRIM_ENTRIES;
+static int nda_enable_biospeedup = 1;
 SYSCTL_INT(_kern_cam_nda, OID_AUTO, max_trim, CTLFLAG_RDTUN,
     &nda_max_trim_entries, NDA_MAX_TRIM_ENTRIES,
     "Maximum number of BIO_DELETE to send down as a DSM TRIM.");
+SYSCTL_INT(_kern_cam_nda, OID_AUTO, enable_biospeedup, CTLFLAG_RDTUN,
+    &nda_enable_biospeedup, 0, "Enable BIO_SPEEDUP processing");
 
 /*
  * All NVMe media is non-rotational, so all nvme device instances
@@ -624,7 +627,7 @@ ndasysctlinit(void *context, int pending)
 	softc->flags |= NDA_FLAG_SCTX_INIT;
 	softc->sysctl_tree = SYSCTL_ADD_NODE_WITH_LABEL(&softc->sysctl_ctx,
 		SYSCTL_STATIC_CHILDREN(_kern_cam_nda), OID_AUTO, tmpstr2,
-		CTLFLAG_RD, 0, tmpstr, "device_index");
+		CTLFLAG_RD | CTLFLAG_MPSAFE, 0, tmpstr, "device_index");
 	if (softc->sysctl_tree == NULL) {
 		printf("ndasysctlinit: unable to allocate sysctl tree\n");
 		cam_periph_release(periph);
@@ -659,7 +662,7 @@ ndasysctlinit(void *context, int pending)
 #ifdef CAM_IO_STATS
 	softc->sysctl_stats_tree = SYSCTL_ADD_NODE(&softc->sysctl_stats_ctx,
 		SYSCTL_CHILDREN(softc->sysctl_tree), OID_AUTO, "stats",
-		CTLFLAG_RD, 0, "Statistics");
+		CTLFLAG_RD | CTLFLAG_MPSAFE, 0, "Statistics");
 	if (softc->sysctl_stats_tree == NULL) {
 		printf("ndasysctlinit: unable to allocate sysctl tree for stats\n");
 		cam_periph_release(periph);
@@ -700,6 +703,9 @@ ndagetattr(struct bio *bp)
 {
 	int ret;
 	struct cam_periph *periph;
+
+	if (g_handleattr_int(bp, "GEOM::canspeedup", nda_enable_biospeedup))
+		return (EJUSTRETURN);
 
 	periph = (struct cam_periph *)bp->bio_disk->d_drv1;
 	cam_periph_lock(periph);
@@ -809,13 +815,15 @@ ndaregister(struct cam_periph *periph, void *arg)
 	 *  the serial or model number strings.
 	 */
 	cam_strvis(disk->d_descr, cd->mn,
-	    sizeof(disk->d_descr), NVME_MODEL_NUMBER_LENGTH);
+	    NVME_MODEL_NUMBER_LENGTH, sizeof(disk->d_descr));
 	cam_strvis(disk->d_ident, cd->sn,
-	    sizeof(disk->d_ident), NVME_SERIAL_NUMBER_LENGTH);
+	    NVME_SERIAL_NUMBER_LENGTH, sizeof(disk->d_ident));
 	disk->d_hba_vendor = cpi.hba_vendor;
 	disk->d_hba_device = cpi.hba_device;
 	disk->d_hba_subvendor = cpi.hba_subvendor;
 	disk->d_hba_subdevice = cpi.hba_subdevice;
+	snprintf(disk->d_attachment, sizeof(disk->d_attachment),
+	    "%s%d", cpi.dev_name, cpi.unit_number);
 	disk->d_stripesize = disk->d_sectorsize;
 	disk->d_stripeoffset = 0;
 	disk->d_devstat = devstat_new_entry(periph->periph_name,
@@ -957,9 +965,8 @@ ndastart(struct cam_periph *periph, union ccb *start_ccb)
 			}
 			TAILQ_INIT(&trim->bps);
 			bp1 = bp;
-			ents = sizeof(trim->data) / sizeof(struct nvme_dsm_range);
-			ents = min(ents, nda_max_trim_entries);
-			dsm_range = &trim->dsm;
+			ents = min(nitems(trim->dsm), nda_max_trim_entries);
+			dsm_range = trim->dsm;
 			dsm_end = dsm_range + ents;
 			do {
 				TAILQ_INSERT_TAIL(&trim->bps, bp1, bio_queue);
@@ -977,8 +984,8 @@ ndastart(struct cam_periph *periph, union ccb *start_ccb)
 				/* XXX -- Could limit based on total payload size */
 			} while (bp1 != NULL);
 			start_ccb->ccb_trim = trim;
-			nda_nvme_trim(softc, &start_ccb->nvmeio, &trim->dsm,
-			    dsm_range - &trim->dsm);
+			nda_nvme_trim(softc, &start_ccb->nvmeio, trim->dsm,
+			    dsm_range - trim->dsm);
 			start_ccb->ccb_state = NDA_CCB_TRIM;
 			softc->trim_count++;
 			softc->trim_ranges += ranges;
@@ -994,6 +1001,11 @@ ndastart(struct cam_periph *periph, union ccb *start_ccb)
 		case BIO_FLUSH:
 			nda_nvme_flush(softc, nvmeio);
 			break;
+		default:
+			biofinish(bp, NULL, EOPNOTSUPP);
+			xpt_release_ccb(start_ccb);
+			ndaschedule(periph);
+			return;
 		}
 		start_ccb->ccb_state = NDA_CCB_BUFFER_IO;
 		start_ccb->ccb_bp = bp;

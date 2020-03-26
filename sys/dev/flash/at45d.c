@@ -1,11 +1,10 @@
 /*-
  * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
  *
- * Copyright (c) 2006 M. Warner Losh
- * Copyright (c) 2011-2012 Ian Lepore
- * Copyright (c) 2012 Marius Strobl <marius@FreeBSD.org>
- * All rights reserved.
- *
+ * Copyright (c) 2011-2012 Ian Lepore All rights reserved.
+ * Copyright (c) 2012 Marius Strobl <marius@FreeBSD.org> All rights reserved.
+ * Copyright (c) 2006 M. Warner Losh <imp@FreeBSD.org>
+
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
@@ -494,7 +493,7 @@ at45d_task(void *arg)
 				len = sc->pagesize - offset;
 			break;
 		default:
-			berr = EINVAL;
+			berr = EOPNOTSUPP;
 			goto out;
 		}
 
@@ -606,6 +605,6 @@ DRIVER_MODULE(at45d, spibus, at45d_driver, at45d_devclass, NULL, NULL);
 MODULE_DEPEND(at45d, spibus, 1, 1, 1);
 #ifdef FDT
 MODULE_DEPEND(at45d, fdt_slicer, 1, 1, 1);
-SPIBUS_PNP_INFO(compat_data);
+SPIBUS_FDT_PNP_INFO(compat_data);
 #endif
 

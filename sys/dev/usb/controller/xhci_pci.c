@@ -107,6 +107,9 @@ xhci_pci_match(device_t self)
 	case 0x78141022:
 		return ("AMD FCH USB 3.0 controller");
 
+	case 0x145f1d94:
+		return ("Hygon USB 3.0 controller");
+
 	case 0x01941033:
 		return ("NEC uPD720200 USB 3.0 controller");
 	case 0x00151912:
@@ -149,7 +152,7 @@ xhci_pci_match(device_t self)
 		return ("Intel Lewisburg USB 3.0 controller");
 	case 0xa2af8086:
 		return ("Intel Union Point USB 3.0 controller");
-	case 0x36d88086:
+	case 0xa36d8086:
 		return ("Intel Cannon Lake USB 3.1 controller");
 
 	case 0xa01b177d:

@@ -59,13 +59,14 @@ __FBSDID("$FreeBSD$");
 #include <machine/atomic.h>
 
 #include "bhyverun.h"
+#include "debug.h"
 #include "mevent.h"
 #include "block_if.h"
 
 #define BLOCKIF_SIG	0xb109b109
 
 #define BLOCKIF_NUMTHR	8
-#define BLOCKIF_MAXREQ	(64 + BLOCKIF_NUMTHR)
+#define BLOCKIF_MAXREQ	(BLOCKIF_RING_MAX + BLOCKIF_NUMTHR)
 
 enum blockop {
 	BOP_READ,
@@ -442,7 +443,7 @@ blockif_open(const char *optstr, const char *ident)
 		else if (sscanf(cp, "sectorsize=%d", &ssopt) == 1)
 			pssopt = ssopt;
 		else {
-			fprintf(stderr, "Invalid device option \"%s\"\n", cp);
+			EPRINTLN("Invalid device option \"%s\"", cp);
 			goto err;
 		}
 	}
@@ -514,7 +515,7 @@ blockif_open(const char *optstr, const char *ident)
 	if (ssopt != 0) {
 		if (!powerof2(ssopt) || !powerof2(pssopt) || ssopt < 512 ||
 		    ssopt > pssopt) {
-			fprintf(stderr, "Invalid sector size %d/%d\n",
+			EPRINTLN("Invalid sector size %d/%d",
 			    ssopt, pssopt);
 			goto err;
 		}
@@ -528,8 +529,8 @@ blockif_open(const char *optstr, const char *ident)
 		 */
 		if (S_ISCHR(sbuf.st_mode)) {
 			if (ssopt < sectsz || (ssopt % sectsz) != 0) {
-				fprintf(stderr, "Sector size %d incompatible "
-				    "with underlying device sector size %d\n",
+				EPRINTLN("Sector size %d incompatible "
+				    "with underlying device sector size %d",
 				    ssopt, sectsz);
 				goto err;
 			}

@@ -1,6 +1,5 @@
 /*-
  * Copyright (c) 2016 Jared McNeill <jmcneill@invisible.ca>
- * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -35,6 +34,7 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
+#include <sys/eventhandler.h>
 #include <sys/bus.h>
 #include <sys/rman.h>
 #include <sys/kernel.h>
@@ -676,7 +676,7 @@ aw_thermal_attach(device_t dev)
 		SYSCTL_ADD_PROC(device_get_sysctl_ctx(dev),
 		    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)),
 		    OID_AUTO, sc->conf->sensors[i].name,
-		    CTLTYPE_INT | CTLFLAG_RD,
+		    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_NEEDGIANT,
 		    sc, i, aw_thermal_sysctl, "IK0",
 		    sc->conf->sensors[i].desc);
 
@@ -728,3 +728,5 @@ static devclass_t aw_thermal_devclass;
 DRIVER_MODULE(aw_thermal, simplebus, aw_thermal_driver, aw_thermal_devclass,
     0, 0);
 MODULE_VERSION(aw_thermal, 1);
+MODULE_DEPEND(aw_thermal, aw_sid, 1, 1, 1);
+SIMPLEBUS_PNP_INFO(compat_data);

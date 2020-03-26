@@ -37,12 +37,16 @@ __FBSDID("$FreeBSD$");
 #else /* !_KERNEL */
 #include <sys/param.h>
 #include <sys/types.h>
+#include <assert.h>
 #include <inttypes.h>
+#include <signal.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <threads.h>
-#include "unit_test.h"
+#define KASSERT(x, y)	assert(x)
+#define CTASSERT(x)	_Static_assert(x, "CTASSERT " #x)
 #endif /* _KERNEL */
 
 #define CHACHA_EMBED
@@ -64,18 +68,18 @@ CTASSERT(RANDOM_KEYSIZE == 2*RANDOM_BLOCKSIZE);
 _Static_assert(CHACHA_STATELEN == RANDOM_BLOCKSIZE, "");
 
 /*
- * Experimental Chacha20-based PRF for Fortuna keystream primitive.  For now,
- * disabled by default.  But we may enable it in the future.
+ * Knob to control use of Chacha20-based PRF for Fortuna keystream primitive.
  *
  * Benefits include somewhat faster keystream generation compared with
- * unaccelerated AES-ICM.
+ * unaccelerated AES-ICM; reseeding is much cheaper than computing AES key
+ * schedules.
  */
-bool random_chachamode = false;
+bool random_chachamode __read_frequently = true;
 #ifdef _KERNEL
 SYSCTL_BOOL(_kern_random, OID_AUTO, use_chacha20_cipher, CTLFLAG_RDTUN,
     &random_chachamode, 0,
-    "If non-zero, use the ChaCha20 cipher for randomdev PRF.  "
-    "If zero, use AES-ICM cipher for randomdev PRF (default).");
+    "If non-zero, use the ChaCha20 cipher for randomdev PRF (default). "
+    "If zero, use AES-ICM cipher for randomdev PRF (12.x default).");
 #endif
 
 /* Initialise the hash */
@@ -121,16 +125,18 @@ randomdev_encrypt_init(union randomdev_key *context, const void *data)
 }
 
 /*
- * Create a psuedorandom output stream of 'blockcount' blocks using a CTR-mode
+ * Create a psuedorandom output stream of 'bytecount' bytes using a CTR-mode
  * cipher or similar.  The 128-bit counter is supplied in the in-out parmeter
- * 'ctr.'  The output stream goes to 'd_out.'  'blockcount' RANDOM_BLOCKSIZE
- * bytes are generated.
+ * 'ctr.'  The output stream goes to 'd_out.'
+ *
+ * If AES is used, 'bytecount' is guaranteed to be a multiple of
+ * RANDOM_BLOCKSIZE.
  */
 void
 randomdev_keystream(union randomdev_key *context, uint128_t *ctr,
-    void *d_out, u_int blockcount)
+    void *d_out, size_t bytecount)
 {
-	u_int i;
+	size_t i, blockcount, read_chunk;
 
 	if (random_chachamode) {
 		uint128_t lectr;
@@ -143,8 +149,20 @@ randomdev_keystream(union randomdev_key *context, uint128_t *ctr,
 		le128enc(&lectr, *ctr);
 
 		chacha_ivsetup(&context->chacha, NULL, (const void *)&lectr);
-		chacha_encrypt_bytes(&context->chacha, NULL, d_out,
-		    RANDOM_BLOCKSIZE * blockcount);
+		while (bytecount > 0) {
+			/*
+			 * We are limited by the chacha_encrypt_bytes API to
+			 * u32 bytes per chunk.
+			 */
+			read_chunk = MIN(bytecount,
+			    rounddown((size_t)UINT32_MAX, CHACHA_BLOCKLEN));
+
+			chacha_encrypt_bytes(&context->chacha, NULL, d_out,
+			    read_chunk);
+
+			d_out = (char *)d_out + read_chunk;
+			bytecount -= read_chunk;
+		}
 
 		/*
 		 * Decode Chacha-updated LE counter to native endian and store
@@ -152,7 +170,14 @@ randomdev_keystream(union randomdev_key *context, uint128_t *ctr,
 		 */
 		chacha_ctrsave(&context->chacha, (void *)&lectr);
 		*ctr = le128dec(&lectr);
+
+		explicit_bzero(&lectr, sizeof(lectr));
 	} else {
+		KASSERT(bytecount % RANDOM_BLOCKSIZE == 0,
+		    ("%s: AES mode invalid bytecount, not a multiple of native "
+		     "block size", __func__));
+
+		blockcount = bytecount / RANDOM_BLOCKSIZE;
 		for (i = 0; i < blockcount; i++) {
 			/*-
 			 * FS&K - r = r|E(K,C)

@@ -1789,7 +1789,13 @@ nfscl_cleanupkext(struct nfsclclient *clp, struct nfscllockownerfhhead *lhp)
 	struct nfscllockowner *lp, *nlp;
 	struct nfscldeleg *dp;
 
-	NFSPROCLISTLOCK();
+	/*
+	 * All the pidhash locks must be acquired, since they are sx locks
+	 * and must be acquired before the mutexes.  The pid(s) that will
+	 * be used aren't known yet, so all the locks need to be acquired.
+	 * Fortunately, this function is only performed once/sec.
+	 */
+	pidhash_slockall();
 	NFSLOCKCLSTATE();
 	LIST_FOREACH_SAFE(owp, &clp->nfsc_owner, nfsow_list, nowp) {
 		LIST_FOREACH(op, &owp->nfsow_open, nfso_list) {
@@ -1816,7 +1822,7 @@ nfscl_cleanupkext(struct nfsclclient *clp, struct nfscllockownerfhhead *lhp)
 		}
 	}
 	NFSUNLOCKCLSTATE();
-	NFSPROCLISTUNLOCK();
+	pidhash_sunlockall();
 }
 
 /*
@@ -3286,7 +3292,9 @@ nfscl_docb(struct nfsrv_descript *nd, NFSPROC_T *p)
 	NFSM_BUILD(retopsp, u_int32_t *, NFSX_UNSIGNED);
 	NFSM_DISSECT(tl, u_int32_t *, 3 * NFSX_UNSIGNED);
 	minorvers = fxdr_unsigned(u_int32_t, *tl++);
-	if (minorvers != NFSV4_MINORVERSION && minorvers != NFSV41_MINORVERSION)
+	if (minorvers != NFSV4_MINORVERSION &&
+	    minorvers != NFSV41_MINORVERSION &&
+	    minorvers != NFSV42_MINORVERSION)
 		nd->nd_repstat = NFSERR_MINORVERMISMATCH;
 	cbident = fxdr_unsigned(u_int32_t, *tl++);
 	if (nd->nd_repstat)
@@ -3304,14 +3312,16 @@ nfscl_docb(struct nfsrv_descript *nd, NFSPROC_T *p)
 		if (op < NFSV4OP_CBGETATTR ||
 		   (op > NFSV4OP_CBRECALL && minorvers == NFSV4_MINORVERSION) ||
 		   (op > NFSV4OP_CBNOTIFYDEVID &&
-		    minorvers == NFSV41_MINORVERSION)) {
+		    minorvers == NFSV41_MINORVERSION) ||
+		   (op > NFSV4OP_CBOFFLOAD &&
+		    minorvers == NFSV42_MINORVERSION)) {
 		    nd->nd_repstat = NFSERR_OPILLEGAL;
 		    *repp = nfscl_errmap(nd, minorvers);
 		    retops++;
 		    break;
 		}
 		nd->nd_procnum = op;
-		if (op < NFSV41_CBNOPS)
+		if (op < NFSV42_CBNOPS)
 			nfsstatsv1.cbrpccnt[nd->nd_procnum]++;
 		switch (op) {
 		case NFSV4OP_CBGETATTR:
@@ -3613,7 +3623,7 @@ nfscl_docb(struct nfsrv_descript *nd, NFSPROC_T *p)
 			}
 			break;
 		default:
-			if (i == 0 && minorvers == NFSV41_MINORVERSION)
+			if (i == 0 && minorvers != NFSV4_MINORVERSION)
 				error = NFSERR_OPNOTINSESS;
 			else {
 				NFSCL_DEBUG(1, "unsupp callback %d\n", op);

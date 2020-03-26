@@ -49,7 +49,7 @@ __FBSDID("$FreeBSD$");
 #include <netinet/ip_icmp.h>
 #include <netinet/ip_var.h>
 
-extern int	in_inithead(void **head, int off);
+extern int	in_inithead(void **head, int off, u_int fibnum);
 #ifdef VIMAGE
 extern int	in_detachhead(void **head, int off);
 #endif
@@ -80,12 +80,17 @@ in_addroute(void *v_arg, void *n_arg, struct radix_head *head,
 	 * dubious since it's so easy to inspect the address).
 	 */
 	if (rt->rt_flags & RTF_HOST) {
-		if (in_broadcast(sin->sin_addr, rt->rt_ifp)) {
+		struct epoch_tracker et;
+		bool bcast;
+
+		NET_EPOCH_ENTER(et);
+		bcast = in_broadcast(sin->sin_addr, rt->rt_ifp);
+		NET_EPOCH_EXIT(et);
+		if (bcast)
 			rt->rt_flags |= RTF_BROADCAST;
-		} else if (satosin(rt->rt_ifa->ifa_addr)->sin_addr.s_addr ==
-		    sin->sin_addr.s_addr) {
+		else if (satosin(rt->rt_ifa->ifa_addr)->sin_addr.s_addr ==
+		    sin->sin_addr.s_addr)
 			rt->rt_flags |= RTF_LOCAL;
-		}
 	}
 	if (IN_MULTICAST(ntohl(sin->sin_addr.s_addr)))
 		rt->rt_flags |= RTF_MULTICAST;
@@ -111,11 +116,11 @@ static int _in_rt_was_here;
  * Initialize our routing tree.
  */
 int
-in_inithead(void **head, int off)
+in_inithead(void **head, int off, u_int fibnum)
 {
 	struct rib_head *rh;
 
-	rh = rt_table_init(32);
+	rh = rt_table_init(32, AF_INET, fibnum);
 	if (rh == NULL)
 		return (0);
 
@@ -182,7 +187,7 @@ in_ifadown(struct ifaddr *ifa, int delete)
 }
 
 /*
- * inet versions of rt functions. These have fib extensions and 
+ * inet versions of rt functions. These have fib extensions and
  * for now will just reference the _fib variants.
  * eventually this order will be reversed,
  */
@@ -192,14 +197,3 @@ in_rtalloc_ign(struct route *ro, u_long ignflags, u_int fibnum)
 	rtalloc_ign_fib(ro, ignflags, fibnum);
 }
 
-void
-in_rtredirect(struct sockaddr *dst,
-	struct sockaddr *gateway,
-	struct sockaddr *netmask,
-	int flags,
-	struct sockaddr *src,
-	u_int fibnum)
-{
-	rtredirect_fib(dst, gateway, netmask, flags, src, fibnum);
-}
- 

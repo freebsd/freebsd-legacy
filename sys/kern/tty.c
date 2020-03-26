@@ -93,7 +93,7 @@ static const char	*dev_console_filename;
 			FLUSHO|NOKERNINFO|NOFLSH)
 #define TTYSUP_CFLAG	(CIGNORE|CSIZE|CSTOPB|CREAD|PARENB|PARODD|\
 			HUPCL|CLOCAL|CCTS_OFLOW|CRTS_IFLOW|CDTR_IFLOW|\
-			CDSR_OFLOW|CCAR_OFLOW)
+			CDSR_OFLOW|CCAR_OFLOW|CNO_RTSDTR)
 
 #define	TTY_CALLOUT(tp,d) (dev2unit(d) & TTYUNIT_CALLOUT)
 
@@ -238,9 +238,6 @@ ttydev_leave(struct tty *tp)
 
 	tp->t_flags |= TF_OPENCLOSE;
 
-	/* Stop asynchronous I/O. */
-	funsetown(&tp->t_sigio);
-
 	/* Remove console TTY. */
 	if (constty == tp)
 		constty_clear();
@@ -332,7 +329,8 @@ ttydev_open(struct cdev *dev, int oflags, int devtype __unused,
 		if (TTY_CALLOUT(tp, dev) || dev == dev_console)
 			tp->t_termios.c_cflag |= CLOCAL;
 
-		ttydevsw_modem(tp, SER_DTR|SER_RTS, 0);
+		if ((tp->t_termios.c_cflag & CNO_RTSDTR) == 0)
+			ttydevsw_modem(tp, SER_DTR|SER_RTS, 0);
 
 		error = ttydevsw_open(tp);
 		if (error != 0)
@@ -1133,6 +1131,9 @@ tty_rel_free(struct tty *tp)
 		return;
 	}
 
+	/* Stop asynchronous I/O. */
+	funsetown(&tp->t_sigio);
+
 	/* TTY can be deallocated. */
 	dev = tp->t_dev;
 	tp->t_dev = NULL;
@@ -1179,6 +1180,7 @@ void
 tty_rel_gone(struct tty *tp)
 {
 
+	tty_lock_assert(tp, MA_OWNED);
 	MPASS(!tty_gone(tp));
 
 	/* Simulate carrier removal. */
@@ -1191,6 +1193,71 @@ tty_rel_gone(struct tty *tp)
 
 	tp->t_flags |= TF_GONE;
 	tty_rel_free(tp);
+}
+
+static int
+tty_drop_ctty(struct tty *tp, struct proc *p)
+{
+	struct session *session;
+	struct vnode *vp;
+
+	/*
+	 * This looks terrible, but it's generally safe as long as the tty
+	 * hasn't gone away while we had the lock dropped.  All of our sanity
+	 * checking that this operation is OK happens after we've picked it back
+	 * up, so other state changes are generally not fatal and the potential
+	 * for this particular operation to happen out-of-order in a
+	 * multithreaded scenario is likely a non-issue.
+	 */
+	tty_unlock(tp);
+	sx_xlock(&proctree_lock);
+	tty_lock(tp);
+	if (tty_gone(tp)) {
+		sx_xunlock(&proctree_lock);
+		return (ENODEV);
+	}
+
+	/*
+	 * If the session doesn't have a controlling TTY, or if we weren't
+	 * invoked on the controlling TTY, we'll return ENOIOCTL as we've
+	 * historically done.
+	 */
+	session = p->p_session;
+	if (session->s_ttyp == NULL || session->s_ttyp != tp) {
+		sx_xunlock(&proctree_lock);
+		return (ENOTTY);
+	}
+
+	if (!SESS_LEADER(p)) {
+		sx_xunlock(&proctree_lock);
+		return (EPERM);
+	}
+
+	PROC_LOCK(p);
+	SESS_LOCK(session);
+	vp = session->s_ttyvp;
+	session->s_ttyp = NULL;
+	session->s_ttyvp = NULL;
+	session->s_ttydp = NULL;
+	SESS_UNLOCK(session);
+
+	tp->t_sessioncnt--;
+	p->p_flag &= ~P_CONTROLT;
+	PROC_UNLOCK(p);
+	sx_xunlock(&proctree_lock);
+
+	/*
+	 * If we did have a vnode, release our reference.  Ordinarily we manage
+	 * these at the devfs layer, but we can't necessarily know that we were
+	 * invoked on the vnode referenced in the session (i.e. the vnode we
+	 * hold a reference to).  We explicitly don't check VBAD/VIRF_DOOMED here
+	 * to avoid a vnode leak -- in circumstances elsewhere where we'd hit a
+	 * VIRF_DOOMED vnode, release has been deferred until the controlling TTY
+	 * is either changed or released.
+	 */
+	if (vp != NULL)
+		vrele(vp);
+	return (0);
 }
 
 /*
@@ -1707,6 +1774,8 @@ tty_generic_ioctl(struct tty *tp, u_long cmd, void *data, int fflag,
 		MPASS(tp->t_session);
 		*(int *)data = tp->t_session->s_sid;
 		return (0);
+	case TIOCNOTTY:
+		return (tty_drop_ctty(tp, td->td_proc));
 	case TIOCSCTTY: {
 		struct proc *p = td->td_proc;
 
@@ -1990,7 +2059,7 @@ ttyhook_register(struct tty **rtp, struct proc *p, int fd, struct ttyhook *th,
 	/* Validate the file descriptor. */
 	fdp = p->p_fd;
 	error = fget_unlocked(fdp, fd, cap_rights_init(&rights, CAP_TTYHOOK),
-	    &fp, NULL);
+	    &fp);
 	if (error != 0)
 		return (error);
 	if (fp->f_ops == &badfileops) {

@@ -114,7 +114,7 @@ static int acfd = (int) INVALID_SOCKET;
 static int index_changed(CA_DB *);
 static void spawn_loop(void);
 static int print_syslog(const char *str, size_t len, void *levPtr);
-static void sock_timeout(int signum);
+static void socket_timeout(int signum);
 # endif
 
 # ifndef OPENSSL_NO_SOCK
@@ -597,7 +597,7 @@ int ocsp_main(int argc, char **argv)
     if (multi && acbio != NULL)
         spawn_loop();
     if (acbio != NULL && req_timeout > 0)
-        signal(SIGALRM, sock_timeout);
+        signal(SIGALRM, socket_timeout);
 #endif
 
     if (acbio != NULL)
@@ -641,8 +641,10 @@ redo_accept:
         goto end;
     }
 
-    if (req != NULL && add_nonce)
-        OCSP_request_add1_nonce(req, NULL, -1);
+    if (req != NULL && add_nonce) {
+        if (!OCSP_request_add1_nonce(req, NULL, -1))
+            goto end;
+    }
 
     if (signfile != NULL) {
         if (keyfile == NULL)
@@ -1245,7 +1247,10 @@ static void make_ocsp_response(BIO *err, OCSP_RESPONSE **resp, OCSP_REQUEST *req
             goto end;
         }
     }
-    OCSP_basic_sign_ctx(bs, rcert, mctx, rother, flags);
+    if (!OCSP_basic_sign_ctx(bs, rcert, mctx, rother, flags)) {
+        *resp = OCSP_response_create(OCSP_RESPONSE_STATUS_INTERNALERROR, bs);
+        goto end;
+    }
 
     if (badsig) {
         const ASN1_OCTET_STRING *sig = OCSP_resp_get0_signature(bs);
@@ -1347,7 +1352,7 @@ static int urldecode(char *p)
 # endif
 
 # ifdef OCSP_DAEMON
-static void sock_timeout(int signum)
+static void socket_timeout(int signum)
 {
     if (acfd != (int)INVALID_SOCKET)
         (void)shutdown(acfd, SHUT_RD);
@@ -1411,9 +1416,11 @@ static int do_responder(OCSP_REQUEST **preq, BIO **pcbio, BIO *acbio,
         *q = '\0';
 
         /*
-         * Skip "GET / HTTP..." requests often used by load-balancers
+         * Skip "GET / HTTP..." requests often used by load-balancers.  Note:
+         * 'p' was incremented above to point to the first byte *after* the
+         * leading slash, so with 'GET / ' it is now an empty string.
          */
-        if (p[1] == '\0')
+        if (p[0] == '\0')
             goto out;
 
         len = urldecode(p);

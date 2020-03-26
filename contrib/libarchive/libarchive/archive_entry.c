@@ -168,6 +168,7 @@ archive_entry_clear(struct archive_entry *entry)
 	archive_entry_xattr_clear(entry);
 	archive_entry_sparse_clear(entry);
 	free(entry->stat);
+	entry->ae_symlink_type = AE_SYMLINK_TYPE_UNDEFINED;
 	memset(entry, 0, sizeof(*entry));
 	return entry;
 }
@@ -201,6 +202,9 @@ archive_entry_clone(struct archive_entry *entry)
 	archive_mstring_copy(&entry2->ae_symlink, &entry->ae_symlink);
 	entry2->ae_set = entry->ae_set;
 	archive_mstring_copy(&entry2->ae_uname, &entry->ae_uname);
+
+	/* Copy symlink type */
+	entry2->ae_symlink_type = entry->ae_symlink_type;
 
 	/* Copy encryption status */
 	entry2->encryption = entry->encryption;
@@ -253,6 +257,7 @@ archive_entry_new2(struct archive *a)
 	if (entry == NULL)
 		return (NULL);
 	entry->archive = a;
+	entry->ae_symlink_type = AE_SYMLINK_TYPE_UNDEFINED;
 	return (entry);
 }
 
@@ -673,6 +678,12 @@ archive_entry_symlink(struct archive_entry *entry)
 	if (errno == ENOMEM)
 		__archive_errx(1, "No memory");
 	return (NULL);
+}
+
+int
+archive_entry_symlink_type(struct archive_entry *entry)
+{
+	return (entry->ae_symlink_type);
 }
 
 const char *
@@ -1246,6 +1257,12 @@ archive_entry_set_symlink(struct archive_entry *entry, const char *linkname)
 }
 
 void
+archive_entry_set_symlink_type(struct archive_entry *entry, int type)
+{
+	entry->ae_symlink_type = type;
+}
+
+void
 archive_entry_set_symlink_utf8(struct archive_entry *entry, const char *linkname)
 {
 	archive_mstring_copy_utf8(&entry->ae_symlink, linkname);
@@ -1682,7 +1699,7 @@ static const struct flag {
 	const wchar_t	*wname;
 	unsigned long	 set;
 	unsigned long	 clear;
-} flags[] = {
+} fileflags[] = {
 	/* Preferred (shorter) names per flag first, all prefixed by "no" */
 #ifdef SF_APPEND
 	{ "nosappnd",	L"nosappnd",		SF_APPEND,	0},
@@ -1749,6 +1766,10 @@ static const struct flag {
 	{ "nohidden",	L"nohidden",		UF_HIDDEN,	0},
 	{ "nouhidden",	L"nouhidden",		UF_HIDDEN,	0},
 #endif
+#ifdef FILE_ATTRIBUTE_HIDDEN
+	{ "nohidden",	L"nohidden",	FILE_ATTRIBUTE_HIDDEN,	0},
+	{ "nouhidden",	L"nouhidden",	FILE_ATTRIBUTE_HIDDEN,	0},
+#endif
 #ifdef UF_OFFLINE
 	{ "nooffline",	L"nooffline",		UF_OFFLINE,	0},
 	{ "nouoffline",	L"nouoffline",		UF_OFFLINE,	0},
@@ -1757,6 +1778,11 @@ static const struct flag {
 	{ "nordonly",	L"nordonly",		UF_READONLY,	0},
 	{ "nourdonly",	L"nourdonly",		UF_READONLY,	0},
 	{ "noreadonly",	L"noreadonly",		UF_READONLY,	0},
+#endif
+#ifdef FILE_ATTRIBUTE_READONLY
+	{ "nordonly",	L"nordonly",	FILE_ATTRIBUTE_READONLY,	0},
+	{ "nourdonly",	L"nourdonly",	FILE_ATTRIBUTE_READONLY,	0},
+	{ "noreadonly",	L"noreadonly",	FILE_ATTRIBUTE_READONLY,	0},
 #endif
 #ifdef UF_SPARSE
 	{ "nosparse",	L"nosparse",		UF_SPARSE,	0},
@@ -1769,6 +1795,10 @@ static const struct flag {
 #ifdef UF_SYSTEM
 	{ "nosystem",	L"nosystem",		UF_SYSTEM,	0},
 	{ "nousystem",	L"nousystem",		UF_SYSTEM,	0},
+#endif
+#ifdef FILE_ATTRIBUTE_SYSTEM
+	{ "nosystem",	L"nosystem",	FILE_ATTRIBUTE_SYSTEM,	0},
+	{ "nousystem",	L"nousystem",	FILE_ATTRIBUTE_SYSTEM,	0},
 #endif
 #if defined(FS_UNRM_FL)		/* 'u' */
 	{ "noundel",	L"noundel",		FS_UNRM_FL,	0},
@@ -1846,7 +1876,7 @@ ae_fflagstostr(unsigned long bitset, unsigned long bitclear)
 
 	bits = bitset | bitclear;
 	length = 0;
-	for (flag = flags; flag->name != NULL; flag++)
+	for (flag = fileflags; flag->name != NULL; flag++)
 		if (bits & (flag->set | flag->clear)) {
 			length += strlen(flag->name) + 1;
 			bits &= ~(flag->set | flag->clear);
@@ -1859,7 +1889,7 @@ ae_fflagstostr(unsigned long bitset, unsigned long bitclear)
 		return (NULL);
 
 	dp = string;
-	for (flag = flags; flag->name != NULL; flag++) {
+	for (flag = fileflags; flag->name != NULL; flag++) {
 		if (bitset & flag->set || bitclear & flag->clear) {
 			sp = flag->name + 2;
 		} else if (bitset & flag->clear  ||  bitclear & flag->set) {
@@ -1911,7 +1941,7 @@ ae_strtofflags(const char *s, unsigned long *setp, unsigned long *clrp)
 		    *end != ' '  &&  *end != ',')
 			end++;
 		length = end - start;
-		for (flag = flags; flag->name != NULL; flag++) {
+		for (flag = fileflags; flag->name != NULL; flag++) {
 			size_t flag_length = strlen(flag->name);
 			if (length == flag_length
 			    && memcmp(start, flag->name, length) == 0) {
@@ -1979,7 +2009,7 @@ ae_wcstofflags(const wchar_t *s, unsigned long *setp, unsigned long *clrp)
 		    *end != L' '  &&  *end != L',')
 			end++;
 		length = end - start;
-		for (flag = flags; flag->wname != NULL; flag++) {
+		for (flag = fileflags; flag->wname != NULL; flag++) {
 			size_t flag_length = wcslen(flag->wname);
 			if (length == flag_length
 			    && wmemcmp(start, flag->wname, length) == 0) {

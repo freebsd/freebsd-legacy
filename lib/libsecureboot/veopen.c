@@ -86,9 +86,11 @@ fingerprint_info_add(const char *filename, const char *prefix,
 		}
 		nfip->fi_prefix = strdup(filename);
 		cp = strrchr(nfip->fi_prefix, '/');
-		if (cp)
+		if (cp == nfip->fi_prefix) {
+			cp[1] = '\0';
+		} else if (cp) {
 			*cp = '\0';
-		else {
+		} else {
 			free(nfip->fi_prefix);
 			free(nfip);
 			return;
@@ -96,7 +98,7 @@ fingerprint_info_add(const char *filename, const char *prefix,
 	}
 	/* collapse any trailing ..[/] */
 	n = 0;
-	while ((cp = strrchr(nfip->fi_prefix, '/')) != NULL) {
+	while ((cp = strrchr(nfip->fi_prefix, '/')) > nfip->fi_prefix) {
 		if (cp[1] == '\0') {	/* trailing "/" */
 			*cp = '\0';
 			continue;
@@ -345,7 +347,9 @@ verify_fingerprint(int fd, const char *path, const char *cp, off_t off)
 	size_t hlen;
 	int n;
 
-	if (strncmp(cp, "sha256=", 7) == 0) {
+	if (strncmp(cp, "no_hash", 7) == 0) {
+		return (VE_FINGERPRINT_IGNORE);
+	} else if (strncmp(cp, "sha256=", 7) == 0) {
 		md = &br_sha256_vtable;
 		hlen = br_sha256_SIZE;
 		cp += 7;
@@ -423,6 +427,7 @@ verify_fd(int fd, const char *path, off_t off, struct stat *stp)
 	rc = verify_fingerprint(fd, path, cp, off);
 	switch (rc) {
 	case VE_FINGERPRINT_OK:
+	case VE_FINGERPRINT_IGNORE:
 	case VE_FINGERPRINT_UNKNOWN:
 		return (rc);
 	default:

@@ -75,6 +75,9 @@
 #define ISCI_NUM_PCI_BARS  2
 #define ISCI_MAX_LUN		 8
 
+/* This device cannot DMA across a 4GB boundary */
+#define	ISCI_DMA_BOUNDARY		((bus_addr_t)((uint64_t)1 << 32))
+
 MALLOC_DECLARE(M_ISCI);
 
 struct ISCI_TIMER {
@@ -300,10 +303,8 @@ void isci_request_construct(struct ISCI_REQUEST *request,
 void isci_io_request_execute_scsi_io(union ccb *ccb,
     struct ISCI_CONTROLLER *controller);
 
-#if __FreeBSD_version >= 900026
 void isci_io_request_execute_smp_io(
     union ccb *ccb, struct ISCI_CONTROLLER *controller);
-#endif
 
 void isci_io_request_timeout(void *);
 

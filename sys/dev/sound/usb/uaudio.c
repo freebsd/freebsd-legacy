@@ -102,7 +102,8 @@ static int uaudio_buffer_ms = 8;
 #ifdef USB_DEBUG
 static int uaudio_debug;
 
-static SYSCTL_NODE(_hw_usb, OID_AUTO, uaudio, CTLFLAG_RW, 0, "USB uaudio");
+static SYSCTL_NODE(_hw_usb, OID_AUTO, uaudio, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+    "USB uaudio");
 
 SYSCTL_INT(_hw_usb_uaudio, OID_AUTO, debug, CTLFLAG_RWTUN,
     &uaudio_debug, 0, "uaudio debug level");
@@ -133,8 +134,9 @@ uaudio_buffer_ms_sysctl(SYSCTL_HANDLER_ARGS)
 
 	return (0);
 }
-SYSCTL_PROC(_hw_usb_uaudio, OID_AUTO, buffer_ms, CTLTYPE_INT | CTLFLAG_RWTUN,
-    0, sizeof(int), uaudio_buffer_ms_sysctl, "I",
+SYSCTL_PROC(_hw_usb_uaudio, OID_AUTO, buffer_ms,
+    CTLTYPE_INT | CTLFLAG_RWTUN | CTLFLAG_MPSAFE, 0, sizeof(int),
+    uaudio_buffer_ms_sysctl, "I",
     "uaudio buffering delay from 2ms to 8ms");
 #else
 #define	uaudio_debug 0
@@ -554,10 +556,7 @@ static void	uaudio_mixer_add_ctl(struct uaudio_softc *,
 		    struct uaudio_mixer_node *);
 static void	uaudio_mixer_fill_info(struct uaudio_softc *,
 		    struct usb_device *, void *);
-static void	uaudio_mixer_ctl_set(struct uaudio_softc *,
-		    struct uaudio_mixer_node *, uint8_t, int32_t val);
 static int	uaudio_mixer_signext(uint8_t, int);
-static int	uaudio_mixer_bsd2value(struct uaudio_mixer_node *, int32_t val);
 static void	uaudio_mixer_init(struct uaudio_softc *);
 static const struct uaudio_terminal_node *uaudio_mixer_get_input(
 		    const struct uaudio_terminal_node *, uint8_t);
@@ -2905,7 +2904,7 @@ uaudio_mixer_register_sysctl(struct uaudio_softc *sc, device_t dev)
 
 	mixer_tree = SYSCTL_ADD_NODE(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO, "mixer",
-	    CTLFLAG_RD, NULL, "");
+	    CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, "");
 
 	if (mixer_tree == NULL)
 		return;
@@ -2925,15 +2924,17 @@ uaudio_mixer_register_sysctl(struct uaudio_softc *sc, device_t dev)
 
 			control_tree = SYSCTL_ADD_NODE(device_get_sysctl_ctx(dev),
 			    SYSCTL_CHILDREN(mixer_tree), OID_AUTO, buf,
-			    CTLFLAG_RD, NULL, "Mixer control nodes");
+			    CTLFLAG_RD | CTLFLAG_MPSAFE, NULL,
+			    "Mixer control nodes");
 
 			if (control_tree == NULL)
 				continue;
 
 			SYSCTL_ADD_PROC(device_get_sysctl_ctx(dev),
 			    SYSCTL_CHILDREN(control_tree),
-			    OID_AUTO, "val", CTLTYPE_INT | CTLFLAG_RWTUN, sc,
-			    pmc->wValue[chan],
+			    OID_AUTO, "val",
+			    CTLTYPE_INT | CTLFLAG_RWTUN | CTLFLAG_MPSAFE,
+			    sc, pmc->wValue[chan],
 			    uaudio_mixer_sysctl_handler, "I", "Current value");
 
 			SYSCTL_ADD_INT(device_get_sysctl_ctx(dev),
@@ -3578,7 +3579,7 @@ uaudio_mixer_add_feature(struct uaudio_softc *sc,
 		switch (ctl) {
 		case MUTE_CONTROL:
 			MIX(sc).type = MIX_ON_OFF;
-			MIX(sc).ctl = SOUND_MIXER_NRDEVICES;
+			MIX(sc).ctl = SOUND_MIXER_MUTE;
 			MIX(sc).name = "mute";
 			break;
 
@@ -3693,7 +3694,7 @@ uaudio20_mixer_add_feature(struct uaudio_softc *sc,
 		switch (ctl) {
 		case (3 << 0):
 			MIX(sc).type = MIX_ON_OFF;
-			MIX(sc).ctl = SOUND_MIXER_NRDEVICES;
+			MIX(sc).ctl = SOUND_MIXER_MUTE;
 			MIX(sc).name = "mute";
 			what = MUTE_CONTROL;
 			break;
@@ -4514,52 +4515,61 @@ static const struct uaudio_tt_to_feature uaudio_tt_to_feature[] = {
 	{UATF_MULTITRACK, SOUND_MIXER_VOLUME},
 	{0xffff, SOUND_MIXER_VOLUME},
 
-	/* default */
-	{0x0000, SOUND_MIXER_VOLUME},
+	/* end */
+	{}
 };
+
+static uint16_t
+uaudio_mixer_feature_name_sub(uint16_t terminal_type)
+{
+	const struct uaudio_tt_to_feature *uat = uaudio_tt_to_feature;
+	uint16_t retval;
+
+	while (1) {
+		if (uat->terminal_type == 0) {
+			switch (terminal_type >> 8) {
+			case UATI_UNDEFINED >> 8:
+				retval = SOUND_MIXER_RECLEV;
+				goto done;
+			case UATO_UNDEFINED >> 8:
+				retval = SOUND_MIXER_PCM;
+				goto done;
+			default:
+				retval = SOUND_MIXER_VOLUME;
+				goto done;
+			}
+		} else if (uat->terminal_type == terminal_type) {
+			retval = uat->feature;
+			goto done;
+		}
+		uat++;
+	}
+done:
+	DPRINTF("terminal_type=0x%04x -> %d\n",
+	    terminal_type, retval);
+	return (retval);
+}
 
 static uint16_t
 uaudio_mixer_feature_name(const struct uaudio_terminal_node *iot,
     struct uaudio_mixer_node *mix)
 {
-	const struct uaudio_tt_to_feature *uat = uaudio_tt_to_feature;
 	uint16_t terminal_type = uaudio_mixer_determine_class(iot, mix);
 
-	if ((mix->class == UAC_RECORD) && (terminal_type == 0)) {
+	if (mix->class == UAC_RECORD && terminal_type == 0)
 		return (SOUND_MIXER_IMIX);
-	}
-	while (uat->terminal_type) {
-		if (uat->terminal_type == terminal_type) {
-			break;
-		}
-		uat++;
-	}
-
-	DPRINTF("terminal_type=0x%04x -> %d\n",
-	    terminal_type, uat->feature);
-
-	return (uat->feature);
+	return (uaudio_mixer_feature_name_sub(terminal_type));
 }
 
 static uint16_t
 uaudio20_mixer_feature_name(const struct uaudio_terminal_node *iot,
     struct uaudio_mixer_node *mix)
 {
-	const struct uaudio_tt_to_feature *uat;
 	uint16_t terminal_type = uaudio20_mixer_determine_class(iot, mix);
 
-	if ((mix->class == UAC_RECORD) && (terminal_type == 0))
+	if (mix->class == UAC_RECORD && terminal_type == 0)
 		return (SOUND_MIXER_IMIX);
-	
-	for (uat = uaudio_tt_to_feature; uat->terminal_type != 0; uat++) {
-		if (uat->terminal_type == terminal_type)
-			break;
-	}
-
-	DPRINTF("terminal_type=0x%04x -> %d\n",
-	    terminal_type, uat->feature);
-
-	return (uat->feature);
+	return (uaudio_mixer_feature_name_sub(terminal_type));
 }
 
 static const struct uaudio_terminal_node *
@@ -5375,29 +5385,23 @@ uaudio_mixer_signext(uint8_t type, int val)
 }
 
 static int
-uaudio_mixer_bsd2value(struct uaudio_mixer_node *mc, int32_t val)
+uaudio_mixer_bsd2value(struct uaudio_mixer_node *mc, int val)
 {
 	if (mc->type == MIX_ON_OFF) {
 		val = (val != 0);
-	} else if (mc->type == MIX_SELECTOR) {
-		if ((val < mc->minval) ||
-		    (val > mc->maxval)) {
-			val = mc->minval;
-		}
-	} else {
+	} else if (mc->type != MIX_SELECTOR) {
 
 		/* compute actual volume */
-		val = (val * mc->mul) / 255;
+		val = (val * mc->mul) / 100;
 
 		/* add lower offset */
 		val = val + mc->minval;
-
-		/* make sure we don't write a value out of range */
-		if (val > mc->maxval)
-			val = mc->maxval;
-		else if (val < mc->minval)
-			val = mc->minval;
 	}
+	/* make sure we don't write a value out of range */
+	if (val > mc->maxval)
+		val = mc->maxval;
+	else if (val < mc->minval)
+		val = mc->minval;
 
 	DPRINTFN(6, "type=0x%03x val=%d min=%d max=%d val=%d\n",
 	    mc->type, val, mc->minval, mc->maxval, val);
@@ -5406,7 +5410,7 @@ uaudio_mixer_bsd2value(struct uaudio_mixer_node *mc, int32_t val)
 
 static void
 uaudio_mixer_ctl_set(struct uaudio_softc *sc, struct uaudio_mixer_node *mc,
-    uint8_t chan, int32_t val)
+    uint8_t chan, int val)
 {
 	val = uaudio_mixer_bsd2value(mc, val);
 
@@ -5495,8 +5499,7 @@ uaudio_mixer_set(struct uaudio_softc *sc, unsigned type,
 		if (mc->ctl == type) {
 			for (chan = 0; chan < mc->nchan; chan++) {
 				uaudio_mixer_ctl_set(sc, mc, chan,
-				    (int)((chan == 0 ? left : right) *
-				    255) / 100);
+				    chan == 0 ? left : right);
 			}
 		}
 	}

@@ -42,6 +42,7 @@
 
 #include <bearssl.h>
 
+unsigned char * read_fd(int, size_t);
 #ifndef NEED_BRSSL_H
 unsigned char * read_file(const char *, size_t *);
 #endif
@@ -51,8 +52,12 @@ extern int DebugVe;
 #define DEBUG_PRINTF(n, x) if (DebugVe >= n) printf x
 
 int ve_trust_init(void);
+size_t ve_trust_anchors_add_buf(unsigned char *, size_t);
+size_t ve_trust_anchors_revoke(unsigned char *, size_t);
 int ve_trust_add(const char *);
 void ve_debug_set(int);
+void ve_anchor_verbose_set(int);
+int ve_anchor_verbose_get(void);
 void ve_utc_set(time_t utc);
 char *ve_error_get(void);
 int ve_error_set(const char *, ...) __printflike(1,2);
@@ -64,12 +69,6 @@ void fingerprint_info_add(const char *, const char *, const char *,
 int ve_check_hash(br_hash_compat_context *, const br_hash_class *,
     const char *, const char *, size_t);
 
-struct vectx;
-struct vectx* vectx_open(int, const char *, off_t, struct stat *, int *);
-ssize_t vectx_read(struct vectx *, void *, size_t);
-off_t vectx_lseek(struct vectx *, off_t, int);
-int vectx_close(struct vectx *);
-
 char * hexdigest(char *, size_t, unsigned char *, size_t);
 int  verify_fd(int, const char *, off_t, struct stat *);
 int  verify_open(const char *, int);
@@ -79,13 +78,17 @@ unsigned char *verify_sig(const char *, int);
 unsigned char *verify_asc(const char *, int); /* OpenPGP */
 
 void ve_pcr_init(void);
-void ve_pcr_update(unsigned char *, size_t);
+void ve_pcr_update(const char *, unsigned char *, size_t);
 ssize_t ve_pcr_get(unsigned char *, size_t);
+int ve_pcr_updating_get(void);
+void ve_pcr_updating_set(int);
+char * ve_pcr_hashed_get(int);
 
 /* flags for verify_{asc,sig,signed} */
 #define VEF_VERBOSE		1
 
 #define VE_FINGERPRINT_OK	1
+#define VE_FINGERPRINT_IGNORE	2
 /* errors from verify_fd */
 #define VE_FINGERPRINT_NONE	-2
 #define VE_FINGERPRINT_WRONG	-3

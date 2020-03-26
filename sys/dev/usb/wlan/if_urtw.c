@@ -67,7 +67,8 @@ __FBSDID("$FreeBSD$");
 #define	URTW_RIDX_OFDM6		4
 #define	URTW_RIDX_OFDM24	8
 
-static SYSCTL_NODE(_hw_usb, OID_AUTO, urtw, CTLFLAG_RW, 0, "USB Realtek 8187L");
+static SYSCTL_NODE(_hw_usb, OID_AUTO, urtw, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+    "USB Realtek 8187L");
 #ifdef URTW_DEBUG
 int urtw_debug = 0;
 SYSCTL_INT(_hw_usb_urtw, OID_AUTO, debug, CTLFLAG_RWTUN, &urtw_debug, 0,
@@ -752,6 +753,7 @@ static void		urtw_free_tx_data_list(struct urtw_softc *);
 static void		urtw_free_rx_data_list(struct urtw_softc *);
 static void		urtw_free_data_list(struct urtw_softc *,
 			    struct urtw_data data[], int, int);
+static usb_error_t	urtw_set_macaddr(struct urtw_softc *, const uint8_t *);
 static usb_error_t	urtw_adapter_start(struct urtw_softc *);
 static usb_error_t	urtw_adapter_start_b(struct urtw_softc *);
 static usb_error_t	urtw_set_mode(struct urtw_softc *, uint32_t);
@@ -1187,9 +1189,23 @@ fail:
 }
 
 static usb_error_t
+urtw_set_macaddr(struct urtw_softc *sc, const uint8_t *macaddr)
+{
+	usb_error_t error;
+
+	urtw_write32_m(sc, URTW_MAC0, ((const uint32_t *)macaddr)[0]);
+	urtw_write16_m(sc, URTW_MAC4, ((const uint32_t *)macaddr)[1] & 0xffff);
+
+fail:
+	return (error);
+}
+
+static usb_error_t
 urtw_adapter_start(struct urtw_softc *sc)
 {
 	struct ieee80211com *ic = &sc->sc_ic;
+	struct ieee80211vap *vap = TAILQ_FIRST(&ic->ic_vaps);
+	const uint8_t *macaddr;
 	usb_error_t error;
 
 	error = urtw_reset(sc);
@@ -1209,8 +1225,11 @@ urtw_adapter_start(struct urtw_softc *sc)
 	if (error)
 		goto fail;
 	/* applying MAC address again.  */
-	urtw_write32_m(sc, URTW_MAC0, ((uint32_t *)ic->ic_macaddr)[0]);
-	urtw_write16_m(sc, URTW_MAC4, ((uint32_t *)ic->ic_macaddr)[1] & 0xffff);
+	macaddr = vap ? vap->iv_myaddr : ic->ic_macaddr;
+	urtw_set_macaddr(sc, macaddr);
+	if (error)
+		goto fail;
+
 	error = urtw_set_mode(sc, URTW_EPROM_CMD_NORMAL);
 	if (error)
 		goto fail;
@@ -3180,6 +3199,8 @@ static usb_error_t
 urtw_8225v2b_rf_init(struct urtw_softc *sc)
 {
 	struct ieee80211com *ic = &sc->sc_ic;
+	struct ieee80211vap *vap = TAILQ_FIRST(&ic->ic_vaps);
+	const uint8_t *macaddr;
 	unsigned int i;
 	uint8_t data8;
 	usb_error_t error;
@@ -3227,8 +3248,10 @@ urtw_8225v2b_rf_init(struct urtw_softc *sc)
 	urtw_write8_m(sc, URTW_CONFIG1, data8);
 
 	/* applying MAC address again.  */
-	urtw_write32_m(sc, URTW_MAC0, ((uint32_t *)ic->ic_macaddr)[0]);
-	urtw_write16_m(sc, URTW_MAC4, ((uint32_t *)ic->ic_macaddr)[1] & 0xffff);
+	macaddr = vap ? vap->iv_myaddr : ic->ic_macaddr;
+	error = urtw_set_macaddr(sc, macaddr);
+	if (error)
+		goto fail;
 
 	error = urtw_set_mode(sc, URTW_EPROM_CMD_NORMAL);
 	if (error)
@@ -4020,6 +4043,7 @@ urtw_bulk_rx_callback(struct usb_xfer *xfer, usb_error_t error)
 	struct urtw_softc *sc = usbd_xfer_softc(xfer);
 	struct ieee80211com *ic = &sc->sc_ic;
 	struct ieee80211_node *ni;
+	struct epoch_tracker et;
 	struct mbuf *m = NULL;
 	struct urtw_data *data;
 	int8_t nf = -95;
@@ -4063,12 +4087,14 @@ setup:
 			} else
 				ni = NULL;
 
+			NET_EPOCH_ENTER(et);
 			if (ni != NULL) {
 				(void) ieee80211_input(ni, m, rssi, nf);
 				/* node is no longer needed */
 				ieee80211_free_node(ni);
 			} else
 				(void) ieee80211_input_all(ic, m, rssi, nf);
+			NET_EPOCH_EXIT(et);
 			m = NULL;
 		}
 		URTW_LOCK(sc);
@@ -4360,13 +4386,13 @@ urtw_sysctl_node(struct urtw_softc *sc)
 	ctx = device_get_sysctl_ctx(sc->sc_dev);
 	child = SYSCTL_CHILDREN(device_get_sysctl_tree(sc->sc_dev));
 
-	tree = SYSCTL_ADD_NODE(ctx, child, OID_AUTO, "stats", CTLFLAG_RD,
-	    NULL, "URTW statistics");
+	tree = SYSCTL_ADD_NODE(ctx, child, OID_AUTO, "stats",
+	    CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, "URTW statistics");
 	parent = SYSCTL_CHILDREN(tree);
 
 	/* Tx statistics. */
-	tree = SYSCTL_ADD_NODE(ctx, parent, OID_AUTO, "tx", CTLFLAG_RD,
-	    NULL, "Tx MAC statistics");
+	tree = SYSCTL_ADD_NODE(ctx, parent, OID_AUTO, "tx",
+	    CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, "Tx MAC statistics");
 	child = SYSCTL_CHILDREN(tree);
 	URTW_SYSCTL_STAT_ADD32(ctx, child, "1m", &stats->txrates[0],
 	    "1 Mbit/s");

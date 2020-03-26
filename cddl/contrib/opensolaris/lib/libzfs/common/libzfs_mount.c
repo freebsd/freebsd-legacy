@@ -301,6 +301,17 @@ zfs_is_mounted(zfs_handle_t *zhp, char **where)
 	return (is_mounted(zhp->zfs_hdl, zfs_get_name(zhp), where));
 }
 
+static boolean_t
+zfs_is_mountable_internal(zfs_handle_t *zhp, const char *mountpoint)
+{
+
+	if (zfs_prop_get_int(zhp, ZFS_PROP_ZONED) &&
+	    getzoneid() == GLOBAL_ZONEID)
+		return (B_FALSE);
+
+	return (B_TRUE);
+}
+
 /*
  * Returns true if the given dataset is mountable, false otherwise.  Returns the
  * mountpoint in 'buf'.
@@ -325,8 +336,7 @@ zfs_is_mountable(zfs_handle_t *zhp, char *buf, size_t buflen,
 	if (zfs_prop_get_int(zhp, ZFS_PROP_CANMOUNT) == ZFS_CANMOUNT_OFF)
 		return (B_FALSE);
 
-	if (zfs_prop_get_int(zhp, ZFS_PROP_ZONED) &&
-	    getzoneid() == GLOBAL_ZONEID)
+	if (!zfs_is_mountable_internal(zhp, buf))
 		return (B_FALSE);
 
 	if (source)
@@ -341,8 +351,19 @@ zfs_is_mountable(zfs_handle_t *zhp, char *buf, size_t buflen,
 int
 zfs_mount(zfs_handle_t *zhp, const char *options, int flags)
 {
-	struct stat buf;
 	char mountpoint[ZFS_MAXPROPLEN];
+
+	if (!zfs_is_mountable(zhp, mountpoint, sizeof (mountpoint), NULL))
+		return (0);
+
+	return (zfs_mount_at(zhp, options, flags, mountpoint));
+}
+
+int
+zfs_mount_at(zfs_handle_t *zhp, const char *options, int flags,
+    const char *mountpoint)
+{
+	struct stat buf;
 	char mntopts[MNT_LINE_MAX];
 	libzfs_handle_t *hdl = zhp->zfs_hdl;
 
@@ -357,8 +378,8 @@ zfs_mount(zfs_handle_t *zhp, const char *options, int flags)
 	if (zpool_get_prop_int(zhp->zpool_hdl, ZPOOL_PROP_READONLY, NULL))
 		flags |= MS_RDONLY;
 
-	if (!zfs_is_mountable(zhp, mountpoint, sizeof (mountpoint), NULL))
-		return (0);
+	if (!zfs_is_mountable_internal(zhp, mountpoint))
+		return (B_FALSE);
 
 	/* Create the directory if it doesn't already exist */
 	if (lstat(mountpoint, &buf) != 0) {
@@ -1281,12 +1302,14 @@ mountpoint_cmp(const void *arga, const void *argb)
 }
 
 /*
- * Reutrn true if path2 is a child of path1
+ * Return true if path2 is a child of path1 or path2 equals path1 or
+ * path1 is "/" (path2 is always a child of "/").
  */
 static boolean_t
 libzfs_path_contains(const char *path1, const char *path2)
 {
-	return (strstr(path2, path1) == path2 && path2[strlen(path1)] == '/');
+	return (strcmp(path1, path2) == 0 || strcmp(path1, "/") == 0 ||
+	    (strstr(path2, path1) == path2 && path2[strlen(path1)] == '/')); 
 }
 
 

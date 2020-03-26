@@ -52,6 +52,7 @@ __FBSDID("$FreeBSD$");
 #include <vm/uma.h>
 
 #include <geom/geom.h>
+#include <geom/geom_dbg.h>
 #include <geom/eli/g_eli.h>
 #include <geom/eli/pkcs5v2.h>
 
@@ -62,7 +63,8 @@ FEATURE(geom_eli, "GEOM crypto module");
 MALLOC_DEFINE(M_ELI, "eli data", "GEOM_ELI Data");
 
 SYSCTL_DECL(_kern_geom);
-SYSCTL_NODE(_kern_geom, OID_AUTO, eli, CTLFLAG_RW, 0, "GEOM_ELI stuff");
+SYSCTL_NODE(_kern_geom, OID_AUTO, eli, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+    "GEOM_ELI stuff");
 static int g_eli_version = G_ELI_VERSION;
 SYSCTL_INT(_kern_geom_eli, OID_AUTO, version, CTLFLAG_RD, &g_eli_version, 0,
     "GELI version");
@@ -428,6 +430,7 @@ g_eli_start(struct bio *bp)
 	case BIO_GETATTR:
 	case BIO_FLUSH:
 	case BIO_ZONE:
+	case BIO_SPEEDUP:
 		break;
 	case BIO_DELETE:
 		/*
@@ -467,6 +470,7 @@ g_eli_start(struct bio *bp)
 	case BIO_GETATTR:
 	case BIO_FLUSH:
 	case BIO_DELETE:
+	case BIO_SPEEDUP:
 	case BIO_ZONE:
 		if (bp->bio_cmd == BIO_GETATTR)
 			cbp->bio_done = g_eli_getattr_done;
@@ -827,7 +831,7 @@ g_eli_create(struct gctl_req *req, struct g_class *mp, struct g_provider *bpp,
 	struct g_provider *pp;
 	struct g_consumer *cp;
 	u_int i, threads;
-	int error;
+	int dcw, error;
 
 	G_ELI_DEBUG(1, "Creating device %s%s.", bpp->name, G_ELI_SUFFIX);
 
@@ -881,10 +885,8 @@ g_eli_create(struct gctl_req *req, struct g_class *mp, struct g_provider *bpp,
 	 * We don't open provider for writing only when user requested read-only
 	 * access.
 	 */
-	if (sc->sc_flags & G_ELI_FLAG_RO)
-		error = g_access(cp, 1, 0, 1);
-	else
-		error = g_access(cp, 1, 1, 1);
+	dcw = (sc->sc_flags & G_ELI_FLAG_RO) ? 0 : 1;
+	error = g_access(cp, 1, dcw, 1);
 	if (error != 0) {
 		if (req != NULL) {
 			gctl_error(req, "Cannot access %s (error=%d).",
@@ -960,8 +962,25 @@ g_eli_create(struct gctl_req *req, struct g_class *mp, struct g_provider *bpp,
 	G_ELI_DEBUG(0, "Device %s created.", pp->name);
 	G_ELI_DEBUG(0, "Encryption: %s %u", g_eli_algo2str(sc->sc_ealgo),
 	    sc->sc_ekeylen);
-	if (sc->sc_flags & G_ELI_FLAG_AUTH)
+	switch (sc->sc_ealgo) {
+	case CRYPTO_3DES_CBC:
+		gone_in(13,
+		    "support for GEOM_ELI volumes encrypted with 3des");
+		break;
+	case CRYPTO_BLF_CBC:
+		gone_in(13,
+		    "support for GEOM_ELI volumes encrypted with blowfish");
+		break;
+	}
+	if (sc->sc_flags & G_ELI_FLAG_AUTH) {
 		G_ELI_DEBUG(0, " Integrity: %s", g_eli_algo2str(sc->sc_aalgo));
+		switch (sc->sc_aalgo) {
+		case CRYPTO_MD5_HMAC:
+			gone_in(13,
+		    "support for GEOM_ELI volumes authenticated with hmac/md5");
+			break;
+		}
+	}
 	G_ELI_DEBUG(0, "    Crypto: %s",
 	    sc->sc_crypto == G_ELI_CRYPTO_SW ? "software" : "hardware");
 	return (gp);
@@ -979,7 +998,7 @@ failed:
 	mtx_destroy(&sc->sc_queue_mtx);
 	if (cp->provider != NULL) {
 		if (cp->acr == 1)
-			g_access(cp, -1, -1, -1);
+			g_access(cp, -1, -dcw, -1);
 		g_detach(cp);
 	}
 	g_destroy_consumer(cp);
@@ -1032,8 +1051,7 @@ g_eli_destroy(struct g_eli_softc *sc, boolean_t force)
 	bzero(sc, sizeof(*sc));
 	free(sc, M_ELI);
 
-	if (pp == NULL || (pp->acr == 0 && pp->acw == 0 && pp->ace == 0))
-		G_ELI_DEBUG(0, "Device %s destroyed.", gp->name);
+	G_ELI_DEBUG(0, "Device %s destroyed.", gp->name);
 	g_wither_geom_close(gp, ENXIO);
 
 	return (0);
@@ -1152,7 +1170,8 @@ g_eli_taste(struct g_class *mp, struct g_provider *pp, int flags __unused)
 	if (md.md_provsize != pp->mediasize)
 		return (NULL);
 	/* Should we attach it on boot? */
-	if (!(md.md_flags & G_ELI_FLAG_BOOT))
+	if (!(md.md_flags & G_ELI_FLAG_BOOT) &&
+	    !(md.md_flags & G_ELI_FLAG_GELIBOOT))
 		return (NULL);
 	if (md.md_keys == 0x00) {
 		G_ELI_DEBUG(0, "No valid keys on %s.", pp->name);
@@ -1311,17 +1330,17 @@ g_eli_dumpconf(struct sbuf *sb, const char *indent, struct g_geom *gp,
 	    (uintmax_t)sc->sc_ekeys_allocated);
 	sbuf_printf(sb, "%s<Flags>", indent);
 	if (sc->sc_flags == 0)
-		sbuf_printf(sb, "NONE");
+		sbuf_cat(sb, "NONE");
 	else {
 		int first = 1;
 
 #define ADD_FLAG(flag, name)	do {					\
 	if (sc->sc_flags & (flag)) {					\
 		if (!first)						\
-			sbuf_printf(sb, ", ");				\
+			sbuf_cat(sb, ", ");				\
 		else							\
 			first = 0;					\
-		sbuf_printf(sb, name);					\
+		sbuf_cat(sb, name);					\
 	}								\
 } while (0)
 		ADD_FLAG(G_ELI_FLAG_SUSPEND, "SUSPEND");
@@ -1341,7 +1360,7 @@ g_eli_dumpconf(struct sbuf *sb, const char *indent, struct g_geom *gp,
 		ADD_FLAG(G_ELI_FLAG_AUTORESIZE, "AUTORESIZE");
 #undef  ADD_FLAG
 	}
-	sbuf_printf(sb, "</Flags>\n");
+	sbuf_cat(sb, "</Flags>\n");
 
 	if (!(sc->sc_flags & G_ELI_FLAG_ONETIME)) {
 		sbuf_printf(sb, "%s<UsedKey>%u</UsedKey>\n", indent,
@@ -1351,16 +1370,16 @@ g_eli_dumpconf(struct sbuf *sb, const char *indent, struct g_geom *gp,
 	sbuf_printf(sb, "%s<Crypto>", indent);
 	switch (sc->sc_crypto) {
 	case G_ELI_CRYPTO_HW:
-		sbuf_printf(sb, "hardware");
+		sbuf_cat(sb, "hardware");
 		break;
 	case G_ELI_CRYPTO_SW:
-		sbuf_printf(sb, "software");
+		sbuf_cat(sb, "software");
 		break;
 	default:
-		sbuf_printf(sb, "UNKNOWN");
+		sbuf_cat(sb, "UNKNOWN");
 		break;
 	}
-	sbuf_printf(sb, "</Crypto>\n");
+	sbuf_cat(sb, "</Crypto>\n");
 	if (sc->sc_flags & G_ELI_FLAG_AUTH) {
 		sbuf_printf(sb,
 		    "%s<AuthenticationAlgorithm>%s</AuthenticationAlgorithm>\n",

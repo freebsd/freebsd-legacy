@@ -1073,7 +1073,7 @@ ctl_backend_ramdisk_create(struct ctl_be_ramdisk_softc *softc,
 	params->lun_size_bytes = be_lun->size_bytes;
 
 	value = dnvlist_get_string(cbe_lun->options, "unmap", NULL);
-	if (value != NULL && strcmp(value, "off") != 0)
+	if (value == NULL || strcmp(value, "off") != 0)
 		cbe_lun->flags |= CTL_LUN_FLAG_UNMAP;
 	value = dnvlist_get_string(cbe_lun->options, "readonly", NULL);
 	if (value != NULL) {
@@ -1147,9 +1147,10 @@ ctl_backend_ramdisk_create(struct ctl_be_ramdisk_softc *softc,
 		goto bailout_error;
 	}
 
-	retval = taskqueue_start_threads(&be_lun->io_taskqueue,
+	retval = taskqueue_start_threads_in_proc(&be_lun->io_taskqueue,
 					 /*num threads*/1,
 					 /*priority*/PUSER,
+					 /*proc*/control_softc->ctl_proc,
 					 /*thread name*/
 					 "%s taskq", be_lun->lunname);
 	if (retval != 0)

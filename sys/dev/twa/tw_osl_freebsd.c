@@ -309,8 +309,8 @@ twa_attach(device_t dev)
 
 	sysctl_ctx_init(&sc->sysctl_ctxt);
 	sc->sysctl_tree = SYSCTL_ADD_NODE(&sc->sysctl_ctxt,
-		SYSCTL_STATIC_CHILDREN(_hw), OID_AUTO,
-		device_get_nameunit(dev), CTLFLAG_RD, 0, "");
+	    SYSCTL_STATIC_CHILDREN(_hw), OID_AUTO, device_get_nameunit(dev),
+	    CTLFLAG_RD | CTLFLAG_MPSAFE, 0, "");
 	if (sc->sysctl_tree == NULL) {
 		tw_osli_printf(sc, "error = %d",
 			TW_CL_SEVERITY_ERROR_STRING,
@@ -551,7 +551,7 @@ tw_osli_alloc_mem(struct twa_softc *sc)
 	/* Create the parent dma tag. */
 	if (bus_dma_tag_create(bus_get_dma_tag(sc->bus_dev), /* parent */
 				sc->alignment,		/* alignment */
-				0,			/* boundary */
+				TW_OSLI_DMA_BOUNDARY,	/* boundary */
 				BUS_SPACE_MAXADDR,	/* lowaddr */
 				BUS_SPACE_MAXADDR, 	/* highaddr */
 				NULL, NULL, 		/* filter, filterarg */

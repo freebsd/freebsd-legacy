@@ -50,6 +50,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/sysctl.h>
 
 #include <net/if.h>	/* IFNAMSIZ, struct ifaddr, ifq head, lock.h mutex.h */
+#include <net/if_var.h>	/* NET_EPOCH_... */
 #include <net/netisr.h>
 #include <net/vnet.h>
 
@@ -158,9 +159,12 @@ SYSBEGIN(f4)
 SYSCTL_DECL(_net_inet);
 SYSCTL_DECL(_net_inet_ip);
 #ifdef NEW_AQM
-SYSCTL_NODE(_net_inet_ip, OID_AUTO, dummynet, CTLFLAG_RW, 0, "Dummynet");
+SYSCTL_NODE(_net_inet_ip, OID_AUTO, dummynet, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+    "Dummynet");
 #else
-static SYSCTL_NODE(_net_inet_ip, OID_AUTO, dummynet, CTLFLAG_RW, 0, "Dummynet");
+static SYSCTL_NODE(_net_inet_ip, OID_AUTO, dummynet,
+    CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+    "Dummynet");
 #endif
 
 /* wrapper to pass dn_cfg fields to SYSCTL_* */
@@ -170,16 +174,19 @@ static SYSCTL_NODE(_net_inet_ip, OID_AUTO, dummynet, CTLFLAG_RW, 0, "Dummynet");
 
 
 SYSCTL_PROC(_net_inet_ip_dummynet, OID_AUTO, hash_size,
-    CTLTYPE_INT | CTLFLAG_RW, 0, 0, sysctl_hash_size,
-    "I", "Default hash table size");
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_NEEDGIANT,
+    0, 0, sysctl_hash_size, "I",
+    "Default hash table size");
 
 
 SYSCTL_PROC(_net_inet_ip_dummynet, OID_AUTO, pipe_slot_limit,
-    CTLTYPE_LONG | CTLFLAG_RW, 0, 1, sysctl_limits,
-    "L", "Upper limit in slots for pipe queue.");
+    CTLTYPE_LONG | CTLFLAG_RW | CTLFLAG_NEEDGIANT,
+    0, 1, sysctl_limits, "L",
+    "Upper limit in slots for pipe queue.");
 SYSCTL_PROC(_net_inet_ip_dummynet, OID_AUTO, pipe_byte_limit,
-    CTLTYPE_LONG | CTLFLAG_RW, 0, 0, sysctl_limits,
-    "L", "Upper limit in bytes for pipe queue.");
+    CTLTYPE_LONG | CTLFLAG_RW | CTLFLAG_NEEDGIANT,
+    0, 0, sysctl_limits, "L",
+    "Upper limit in bytes for pipe queue.");
 SYSCTL_INT(_net_inet_ip_dummynet, OID_AUTO, io_fast,
     CTLFLAG_RW, DC(io_fast), 0, "Enable fast dummynet io.");
 SYSCTL_INT(_net_inet_ip_dummynet, OID_AUTO, debug,
@@ -740,6 +747,8 @@ static void
 dummynet_send(struct mbuf *m)
 {
 	struct mbuf *n;
+
+	NET_EPOCH_ASSERT();
 
 	for (; m != NULL; m = n) {
 		struct ifnet *ifp = NULL;	/* gcc 3.4.6 complains */

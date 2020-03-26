@@ -11,12 +11,7 @@ DTC?=		dtc
 .if defined(S)
 SYSDIR=	${S}
 .else
-# Search for kernel source tree in standard places.
-.for _dir in ${.CURDIR}/../.. ${.CURDIR}/../../.. /sys /usr/src/sys
-.if exists(${_dir}/kern/)
-SYSDIR=	${_dir:tA}
-.endif
-.endfor
+.include <bsd.sysdir.mk>
 .endif	# defined(S)
 .endif	# defined(SYSDIR)
 
@@ -24,7 +19,16 @@ SYSDIR=	${_dir:tA}
 .error "can't find kernel source tree"
 .endif
 
-DTB=${DTS:T:R:S/$/.dtb/}
+.for _dts in ${DTS}
+# DTB for aarch64 needs to preserve the immediate parent of the .dts, because
+# these DTS are vendored and should be installed into their vendored directory.
+.if ${MACHINE_ARCH} == "aarch64"
+DTB+=	${_dts:R:S/$/.dtb/}
+.else
+DTB+=	${_dts:T:R:S/$/.dtb/}
+.endif
+.endfor
+
 DTBO=${DTSO:T:R:S/$/.dtbo/}
 
 .SUFFIXES: .dtb .dts .dtbo .dtso
@@ -43,7 +47,7 @@ DTBO=${DTSO:T:R:S/$/.dtbo/}
 
 # Add dependencies on the source file so that out-of-tree things can be included
 # without any .PATH additions.
-.for _dts in ${DTS}
+.for _dts in ${DTS} ${FDT_DTS_FILE}
 ${_dts:R:T}.dtb: ${_dts}
 .endfor
 

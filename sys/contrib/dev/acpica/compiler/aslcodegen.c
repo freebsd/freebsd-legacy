@@ -8,7 +8,7 @@
  *
  * 1. Copyright Notice
  *
- * Some or all of this work - Copyright (c) 1999 - 2019, Intel Corp.
+ * Some or all of this work - Copyright (c) 1999 - 2020, Intel Corp.
  * All rights reserved.
  *
  * 2. License
@@ -174,11 +174,11 @@ CgWriteTableHeader (
     ACPI_PARSE_OBJECT       *Op);
 
 static void
-CgCloseTable (
-    void);
+CgWriteNode (
+    ACPI_PARSE_OBJECT       *Op);
 
 static void
-CgWriteNode (
+CgUpdateHeader (
     ACPI_PARSE_OBJECT       *Op);
 
 
@@ -202,15 +202,12 @@ CgGenerateAmlOutput (
 
     /* Generate the AML output file */
 
-    FlSeekFile (ASL_FILE_SOURCE_OUTPUT, 0);
-    AslGbl_SourceLine = 0;
-    AslGbl_NextError = AslGbl_ErrorLog;
-
-    TrWalkParseTree (AslGbl_ParseTreeRoot, ASL_WALK_VISIT_DOWNWARD,
+    TrWalkParseTree (AslGbl_CurrentDB,
+        ASL_WALK_VISIT_DOWNWARD | ASL_WALK_VISIT_DB_SEPARATELY,
         CgAmlWriteWalk, NULL, NULL);
 
     DbgPrint (ASL_TREE_OUTPUT, ASL_PARSE_TREE_HEADER2);
-    CgCloseTable ();
+    CgUpdateHeader (AslGbl_CurrentDB);
 }
 
 
@@ -621,8 +618,8 @@ CgWriteTableHeader (
         Op->Asl.AmlSubtreeLength +=
             strlen (AslGbl_ParseTreeRoot->Asl.Filename) + 3;
 
-        CvDbgPrint ("     Length: %lu\n",
-            strlen (AslGbl_ParseTreeRoot->Asl.Filename) + 3);
+        CvDbgPrint ("     Length: %u\n",
+            (UINT32) strlen (AslGbl_ParseTreeRoot->Asl.Filename) + 3);
 
         if (Op->Asl.CommentList)
         {
@@ -693,7 +690,8 @@ CgUpdateHeader (
     {
         if (FlReadFile (ASL_FILE_AML_OUTPUT, &FileByte, 1) != AE_OK)
         {
-            printf ("EOF while reading checksum bytes\n");
+            AslError (ASL_ERROR, ASL_MSG_COMPILER_INTERNAL, NULL,
+                "Table length is greater than size of the input file");
             return;
         }
 
@@ -708,38 +706,13 @@ CgUpdateHeader (
         ACPI_OFFSET (ACPI_TABLE_HEADER, Checksum));
 
     FlWriteFile (ASL_FILE_AML_OUTPUT, &Checksum, 1);
-}
 
-
-/*******************************************************************************
- *
- * FUNCTION:    CgCloseTable
- *
- * PARAMETERS:  None.
- *
- * RETURN:      None.
- *
- * DESCRIPTION: Complete the ACPI table by calculating the checksum and
- *              re-writing each table header. This allows support for
- *              multiple definition blocks in a single source file.
- *
- ******************************************************************************/
-
-static void
-CgCloseTable (
-    void)
-{
-    ACPI_PARSE_OBJECT   *Op;
-
-
-    /* Process all definition blocks */
-
-    Op = AslGbl_ParseTreeRoot->Asl.Child;
-    while (Op)
-    {
-        CgUpdateHeader (Op);
-        Op = Op->Asl.Next;
-    }
+    /*
+     * Seek to the end of the file. This is done to support multiple file
+     * compilation. Doing this simplifies other parts of the codebase because
+     * it eliminates the need to seek for a different starting place.
+     */
+    FlSeekFile (ASL_FILE_AML_OUTPUT, Op->Asl.FinalAmlOffset + Length);
 }
 
 
