@@ -24,7 +24,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd May 18, 2019
+.Dd March 25, 2020
 .Dt RC.CONF 5
 .Os
 .Sh NAME
@@ -425,7 +425,7 @@ is used to set the hostname via DHCP,
 this variable should be set to an empty string.
 Within a
 .Xr jail 8
-the hostname is generally already set and this variable may absent.
+the hostname is generally already set and this variable may be absent.
 If this value remains unset when the system is done booting
 your console login will display the default hostname of
 .Dq Amnesiac .
@@ -1182,11 +1182,20 @@ break some legitimate applications.
 .It Va icmp_drop_redirect
 .Pq Vt bool
 Set to
-.Dq Li NO
+.Dq Li AUTO
 by default.
+This setting will be identical to
+.Dq Li YES ,
+if a dynamicrouting daemon is enabled, because redirect processing may
+cause perfomance issues for large routing tables.
+If no such service is enabled, this setting behaves like a
+.Dq Li NO .
 Setting to
 .Dq Li YES
 will cause the kernel to ignore ICMP REDIRECT packets.
+Setting to
+.Dq Li NO
+will cause the kernel to process ICMP REDIRECT packets.
 Refer to
 .Xr icmp 4
 for more information.
@@ -1317,12 +1326,12 @@ ifconfig_em0_alias3="inet 192.0.2.1-5/28"
 .Pp
 and so on.
 .Pp
-Note that
+Note that deprecated
 .Va ipv4_addrs_ Ns Aq Ar interface
 variable was supported for IPv4 CIDR address notation.
-It is now deprecated because the functionality was integrated into
+The
 .Va ifconfig_ Ns Ao Ar interface Ac Ns Va _alias Ns Aq Ar n
-though
+variable replaces it, though
 .Va ipv4_addrs_ Ns Aq Ar interface
 is still supported for backward compatibility.
 .Pp
@@ -1665,7 +1674,8 @@ This static setting may be overridden by commands
 started with dynamic interface configuration utilities
 like
 .Xr dhclient 8
-hooks. The description can be seen with
+hooks.
+The description can be seen with
 .Xr ifconfig 8
 command and it may be exported with
 .Xr bsnmpd 1
@@ -1779,10 +1789,10 @@ or
 .Dq Li ipv6_prefer
 is specified,
 .Xr ip6addrctl 8
-installs a pre-defined policy table described in Section 2.1
-.Pq IPv6-preferred
-or 10.3
+installs a pre-defined policy table described in Section 10.3
 .Pq IPv4-preferred
+or 2.1
+.Pq IPv6-preferred
 of RFC 3484.
 .Pp
 If
@@ -3738,6 +3748,41 @@ is set to
 these are the flags passed to the
 .Xr watchdogd 8
 daemon.
+.It Va watchdogd_timeout
+.Pq Vt int
+If
+.Va watchdogd_enable
+is set to
+.Dq Li YES ,
+this is a timeout that will be used by the
+.Xr watchdogd 8
+daemon.
+If this option is set, it overrides
+.Fl t
+in
+.Va watchdogd_flags .
+.It Va watchdogd_shutdown_timeout
+.Pq Vt int
+If
+.Va watchdogd_enable
+is set to
+.Dq Li YES ,
+this is a timeout that will be set by the
+.Xr watchdogd 8
+daemon when it exits during the system shutdown.
+This timeout will not be set when returning to the single-user mode
+or when the watchdogd service is stopped individually using the
+.Xr service 8
+command or the rc.d script.
+Note that the timeout will be applied if
+.Xr watchdogd 8
+is stopped outside of
+.Xr rc 8
+framework.
+If this option is set, it overrides
+.Fl x
+in
+.Va watchdogd_flags .
 .It Va devfs_rulesets
 .Pq Vt str
 List of files containing sets of rules for
@@ -3842,7 +3887,7 @@ When set to
 all configured jails in
 .Va jail_list
 are stopped in reverse order.
-.It Va jail_* variables
+.It Va jail_ Ns * variables
 Note that older releases supported per-jail configuration via
 .Nm
 variables.

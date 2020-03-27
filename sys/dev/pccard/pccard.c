@@ -63,7 +63,8 @@ __FBSDID("$FreeBSD$");
 #define PCCARDDEBUG
 
 /* sysctl vars */
-static SYSCTL_NODE(_hw, OID_AUTO, pccard, CTLFLAG_RD, 0, "PCCARD parameters");
+static SYSCTL_NODE(_hw, OID_AUTO, pccard, CTLFLAG_RD | CTLFLAG_MPSAFE, 0,
+    "PCCARD parameters");
 
 int	pccard_debug = 0;
 SYSCTL_INT(_hw_pccard, OID_AUTO, debug, CTLFLAG_RWTUN,
@@ -266,7 +267,7 @@ pccard_probe_and_attach_child(device_t dev, device_t child,
 	 * In NetBSD, the drivers are responsible for activating each
 	 * function of a card and selecting the config to use.  In
 	 * FreeBSD, all that's done automatically in the typical lazy
-	 * way we do device resoruce allocation (except we pick the
+	 * way we do device resource allocation (except we pick the
 	 * cfe up front).  This is the biggest depature from the
 	 * inherited NetBSD model, apart from the FreeBSD resource code.
 	 *

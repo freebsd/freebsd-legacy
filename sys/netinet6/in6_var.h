@@ -785,6 +785,8 @@ in6m_ifmultiaddr_get_inm(struct ifmultiaddr *ifma)
  * Look up an in6_multi record for an IPv6 multicast address
  * on the interface ifp.
  * If no record found, return NULL.
+ *
+ * SMPng: The IN6_MULTI_LOCK and must be held and must be in network epoch.
  */
 static __inline struct in6_multi *
 in6m_lookup_locked(struct ifnet *ifp, const struct in6_addr *mcaddr)
@@ -805,18 +807,17 @@ in6m_lookup_locked(struct ifnet *ifp, const struct in6_addr *mcaddr)
 /*
  * Wrapper for in6m_lookup_locked().
  *
- * SMPng: Assumes that neithr the IN6_MULTI_LOCK() or IF_ADDR_LOCK() are held.
+ * SMPng: Assumes network epoch entered and that IN6_MULTI_LOCK() isn't held.
  */
 static __inline struct in6_multi *
 in6m_lookup(struct ifnet *ifp, const struct in6_addr *mcaddr)
 {
-	struct epoch_tracker et;
 	struct in6_multi *inm;
 
+	NET_EPOCH_ASSERT();
+
 	IN6_MULTI_LIST_LOCK();
-	NET_EPOCH_ENTER(et);
 	inm = in6m_lookup_locked(ifp, mcaddr);
-	NET_EPOCH_EXIT(et);
 	IN6_MULTI_LIST_UNLOCK();
 
 	return (inm);
@@ -861,8 +862,6 @@ struct inpcbinfo;
 int	im6o_mc_filter(const struct ip6_moptions *, const struct ifnet *,
 	    const struct sockaddr *, const struct sockaddr *);
 int in6_joingroup(struct ifnet *, const struct in6_addr *,
-	    struct in6_mfilter *, struct in6_multi **, int);
-int	in6_joingroup_locked(struct ifnet *, const struct in6_addr *,
 	    struct in6_mfilter *, struct in6_multi **, int);
 int	in6_leavegroup(struct in6_multi *, struct in6_mfilter *);
 int	in6_leavegroup_locked(struct in6_multi *, struct in6_mfilter *);
@@ -916,8 +915,6 @@ void	in6_newaddrmsg(struct in6_ifaddr *, int);
  * Extended API for IPv6 FIB support.
  */
 struct mbuf *ip6_tryforward(struct mbuf *);
-void	in6_rtredirect(struct sockaddr *, struct sockaddr *, struct sockaddr *,
-	    int, struct sockaddr *, u_int);
 int	in6_rtrequest(int, struct sockaddr *, struct sockaddr *,
 	    struct sockaddr *, int, struct rtentry **, u_int);
 void	in6_rtalloc(struct route_in6 *, u_int);

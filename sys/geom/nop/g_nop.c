@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
  *
  * Copyright (c) 2004-2006 Pawel Jakub Dawidek <pjd@FreeBSD.org>
+ * Copyright (c) 2019 Mariusz Zaborski <oshogbo@FreeBSD.org>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,6 +31,7 @@
 __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
+#include <sys/ctype.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
 #include <sys/module.h>
@@ -40,11 +42,13 @@ __FBSDID("$FreeBSD$");
 #include <sys/sysctl.h>
 #include <sys/malloc.h>
 #include <geom/geom.h>
+#include <geom/geom_dbg.h>
 #include <geom/nop/g_nop.h>
 
 
 SYSCTL_DECL(_kern_geom);
-static SYSCTL_NODE(_kern_geom, OID_AUTO, nop, CTLFLAG_RW, 0, "GEOM_NOP stuff");
+static SYSCTL_NODE(_kern_geom, OID_AUTO, nop, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+    "GEOM_NOP stuff");
 static u_int g_nop_debug = 0;
 SYSCTL_UINT(_kern_geom_nop, OID_AUTO, debug, CTLFLAG_RW, &g_nop_debug, 0,
     "Debug level");
@@ -79,6 +83,20 @@ struct g_nop_delay {
 	struct bio			*dl_bio;
 	TAILQ_ENTRY(g_nop_delay)	 dl_next;
 };
+
+static bool
+g_nop_verify_nprefix(const char *name)
+{
+	int i;
+
+	for (i = 0; i < strlen(name); i++) {
+		if (isalpha(name[i]) == 0 && isdigit(name[i]) == 0) {
+			return (false);
+		}
+	}
+
+	return (true);
+}
 
 static void
 g_nop_orphan(struct g_consumer *cp)
@@ -187,7 +205,7 @@ g_nop_start(struct bio *bp)
 	struct bio *cbp;
 	u_int failprob, delayprob, delaytime;
 
-	failprob = delayprob = 0;
+	failprob = delayprob = delaytime = 0;
 
 	gp = bp->bio_to->geom;
 	sc = gp->softc;
@@ -198,16 +216,24 @@ g_nop_start(struct bio *bp)
 	case BIO_READ:
 		sc->sc_reads++;
 		sc->sc_readbytes += bp->bio_length;
-		failprob = sc->sc_rfailprob;
-		delayprob = sc->sc_rdelayprob;
-		delaytime = sc->sc_delaymsec;
+		if (sc->sc_count_until_fail != 0) {
+			sc->sc_count_until_fail -= 1;
+		} else {
+			failprob = sc->sc_rfailprob;
+			delayprob = sc->sc_rdelayprob;
+			delaytime = sc->sc_delaymsec;
+		}
 		break;
 	case BIO_WRITE:
 		sc->sc_writes++;
 		sc->sc_wrotebytes += bp->bio_length;
-		failprob = sc->sc_wfailprob;
-		delayprob = sc->sc_wdelayprob;
-		delaytime = sc->sc_delaymsec;
+		if (sc->sc_count_until_fail != 0) {
+			sc->sc_count_until_fail -= 1;
+		} else {
+			failprob = sc->sc_wfailprob;
+			delayprob = sc->sc_wdelayprob;
+			delaytime = sc->sc_delaymsec;
+		}
 		break;
 	case BIO_DELETE:
 		sc->sc_deletes++;
@@ -230,6 +256,9 @@ g_nop_start(struct bio *bp)
 	case BIO_FLUSH:
 		sc->sc_flushes++;
 		break;
+	case BIO_SPEEDUP:
+		sc->sc_speedups++;
+		break;
 	case BIO_CMD0:
 		sc->sc_cmd0s++;
 		break;
@@ -241,6 +270,7 @@ g_nop_start(struct bio *bp)
 		break;
 	}
 	mtx_unlock(&sc->sc_lock);
+
 	if (failprob > 0) {
 		u_int rval;
 
@@ -307,7 +337,8 @@ g_nop_access(struct g_provider *pp, int dr, int dw, int de)
 
 static int
 g_nop_create(struct gctl_req *req, struct g_class *mp, struct g_provider *pp,
-    int ioerror, u_int rfailprob, u_int wfailprob, u_int delaymsec, u_int rdelayprob,
+    const char *gnopname, int ioerror, u_int count_until_fail,
+    u_int rfailprob, u_int wfailprob, u_int delaymsec, u_int rdelayprob,
     u_int wdelayprob, off_t offset, off_t size, u_int secsize, off_t stripesize,
     off_t stripeoffset, const char *physpath)
 {
@@ -316,7 +347,7 @@ g_nop_create(struct gctl_req *req, struct g_class *mp, struct g_provider *pp,
 	struct g_provider *newpp;
 	struct g_consumer *cp;
 	char name[64];
-	int error;
+	int error, n;
 	off_t explicitsize;
 
 	g_topology_assert();
@@ -367,7 +398,22 @@ g_nop_create(struct gctl_req *req, struct g_class *mp, struct g_provider *pp,
 		gctl_error(req, "stripeoffset is too big.");
 		return (EINVAL);
 	}
-	snprintf(name, sizeof(name), "%s%s", pp->name, G_NOP_SUFFIX);
+	if (gnopname != NULL && !g_nop_verify_nprefix(gnopname)) {
+		gctl_error(req, "Name %s is invalid.", gnopname);
+		return (EINVAL);
+	}
+
+	if (gnopname != NULL) {
+		n = snprintf(name, sizeof(name), "%s%s", gnopname,
+		    G_NOP_SUFFIX);
+	} else {
+		n = snprintf(name, sizeof(name), "%s%s", pp->name,
+		    G_NOP_SUFFIX);
+	}
+	if (n <= 0 || n >= sizeof(name)) {
+		gctl_error(req, "Invalid provider name.");
+		return (EINVAL);
+	}
 	LIST_FOREACH(gp, &mp->geom, geom) {
 		if (strcmp(gp->name, name) == 0) {
 			gctl_error(req, "Provider %s already exists.", name);
@@ -385,6 +431,7 @@ g_nop_create(struct gctl_req *req, struct g_class *mp, struct g_provider *pp,
 	} else
 		sc->sc_physpath = NULL;
 	sc->sc_error = ioerror;
+	sc->sc_count_until_fail = count_until_fail;
 	sc->sc_rfailprob = rfailprob;
 	sc->sc_wfailprob = wfailprob;
 	sc->sc_delaymsec = delaymsec;
@@ -395,6 +442,7 @@ g_nop_create(struct gctl_req *req, struct g_class *mp, struct g_provider *pp,
 	sc->sc_deletes = 0;
 	sc->sc_getattrs = 0;
 	sc->sc_flushes = 0;
+	sc->sc_speedups = 0;
 	sc->sc_cmd0s = 0;
 	sc->sc_cmd1s = 0;
 	sc->sc_cmd2s = 0;
@@ -490,13 +538,27 @@ static void
 g_nop_ctl_create(struct gctl_req *req, struct g_class *mp)
 {
 	struct g_provider *pp;
-	intmax_t *error, *rfailprob, *wfailprob, *offset, *secsize, *size,
-	    *stripesize, *stripeoffset, *delaymsec, *rdelayprob, *wdelayprob;
-	const char *name, *physpath;
+	intmax_t *val, error, rfailprob, wfailprob, count_until_fail, offset,
+	    secsize, size, stripesize, stripeoffset, delaymsec,
+	    rdelayprob, wdelayprob;
+	const char *name, *physpath, *gnopname;
 	char param[16];
 	int i, *nargs;
 
 	g_topology_assert();
+
+	error = -1;
+	rfailprob = -1;
+	wfailprob = -1;
+	count_until_fail = -1;
+	offset = 0;
+	secsize = 0;
+	size = 0;
+	stripesize = 0;
+	stripeoffset = 0;
+	delaymsec = -1;
+	rdelayprob = -1;
+	wdelayprob = -1;
 
 	nargs = gctl_get_paraml(req, "nargs", sizeof(*nargs));
 	if (nargs == NULL) {
@@ -507,102 +569,102 @@ g_nop_ctl_create(struct gctl_req *req, struct g_class *mp)
 		gctl_error(req, "Missing device(s).");
 		return;
 	}
-	error = gctl_get_paraml(req, "error", sizeof(*error));
-	if (error == NULL) {
-		gctl_error(req, "No '%s' argument", "error");
-		return;
+	val = gctl_get_paraml_opt(req, "error", sizeof(*val));
+	if (val != NULL) {
+		error = *val;
 	}
-	rfailprob = gctl_get_paraml(req, "rfailprob", sizeof(*rfailprob));
-	if (rfailprob == NULL) {
-		gctl_error(req, "No '%s' argument", "rfailprob");
-		return;
+	val = gctl_get_paraml_opt(req, "rfailprob", sizeof(*val));
+	if (val != NULL) {
+		rfailprob = *val;
+		if (rfailprob < -1 || rfailprob > 100) {
+			gctl_error(req, "Invalid '%s' argument", "rfailprob");
+			return;
+		}
 	}
-	if (*rfailprob < -1 || *rfailprob > 100) {
-		gctl_error(req, "Invalid '%s' argument", "rfailprob");
-		return;
+	val = gctl_get_paraml_opt(req, "wfailprob", sizeof(*val));
+	if (val != NULL) {
+		wfailprob = *val;
+		if (wfailprob < -1 || wfailprob > 100) {
+			gctl_error(req, "Invalid '%s' argument", "wfailprob");
+			return;
+		}
 	}
-	wfailprob = gctl_get_paraml(req, "wfailprob", sizeof(*wfailprob));
-	if (wfailprob == NULL) {
-		gctl_error(req, "No '%s' argument", "wfailprob");
-		return;
+	val = gctl_get_paraml_opt(req, "delaymsec", sizeof(*val));
+	if (val != NULL) {
+		delaymsec = *val;
+		if (delaymsec < 1 && delaymsec != -1) {
+			gctl_error(req, "Invalid '%s' argument", "delaymsec");
+			return;
+		}
 	}
-	if (*wfailprob < -1 || *wfailprob > 100) {
-		gctl_error(req, "Invalid '%s' argument", "wfailprob");
-		return;
+	val = gctl_get_paraml_opt(req, "rdelayprob", sizeof(*val));
+	if (val != NULL) {
+		rdelayprob = *val;
+		if (rdelayprob < -1 || rdelayprob > 100) {
+			gctl_error(req, "Invalid '%s' argument", "rdelayprob");
+			return;
+		}
 	}
-	delaymsec = gctl_get_paraml(req, "delaymsec", sizeof(*delaymsec));
-	if (delaymsec == NULL) {
-		gctl_error(req, "No '%s' argument", "delaymsec");
-		return;
+	val = gctl_get_paraml_opt(req, "wdelayprob", sizeof(*val));
+	if (val != NULL) {
+		wdelayprob = *val;
+		if (wdelayprob < -1 || wdelayprob > 100) {
+			gctl_error(req, "Invalid '%s' argument", "wdelayprob");
+			return;
+		}
 	}
-	if (*delaymsec < 1 && *delaymsec != -1) {
-		gctl_error(req, "Invalid '%s' argument", "delaymsec");
-		return;
+	val = gctl_get_paraml_opt(req, "count_until_fail", sizeof(*val));
+	if (val != NULL) {
+		count_until_fail = *val;
+		if (count_until_fail < -1) {
+			gctl_error(req, "Invalid '%s' argument",
+			    "count_until_fail");
+			return;
+		}
 	}
-	rdelayprob = gctl_get_paraml(req, "rdelayprob", sizeof(*rdelayprob));
-	if (rdelayprob == NULL) {
-		gctl_error(req, "No '%s' argument", "rdelayprob");
-		return;
+	val = gctl_get_paraml_opt(req, "offset", sizeof(*val));
+	if (val != NULL) {
+		offset = *val;
+		if (offset < 0) {
+			gctl_error(req, "Invalid '%s' argument", "offset");
+			return;
+		}
 	}
-	if (*rdelayprob < -1 || *rdelayprob > 100) {
-		gctl_error(req, "Invalid '%s' argument", "rdelayprob");
-		return;
+	val = gctl_get_paraml_opt(req, "size", sizeof(*val));
+	if (val != NULL) {
+		size = *val;
+		if (size < 0) {
+			gctl_error(req, "Invalid '%s' argument", "size");
+			return;
+		}
 	}
-	wdelayprob = gctl_get_paraml(req, "wdelayprob", sizeof(*wdelayprob));
-	if (wdelayprob == NULL) {
-		gctl_error(req, "No '%s' argument", "wdelayprob");
-		return;
+	val = gctl_get_paraml_opt(req, "secsize", sizeof(*val));
+	if (val != NULL) {
+		secsize = *val;
+		if (secsize < 0) {
+			gctl_error(req, "Invalid '%s' argument", "secsize");
+			return;
+		}
 	}
-	if (*wdelayprob < -1 || *wdelayprob > 100) {
-		gctl_error(req, "Invalid '%s' argument", "wdelayprob");
-		return;
+	val = gctl_get_paraml_opt(req, "stripesize", sizeof(*val));
+	if (val != NULL) {
+		stripesize = *val;
+		if (stripesize < 0) {
+			gctl_error(req, "Invalid '%s' argument", "stripesize");
+			return;
+		}
 	}
-	offset = gctl_get_paraml(req, "offset", sizeof(*offset));
-	if (offset == NULL) {
-		gctl_error(req, "No '%s' argument", "offset");
-		return;
-	}
-	if (*offset < 0) {
-		gctl_error(req, "Invalid '%s' argument", "offset");
-		return;
-	}
-	size = gctl_get_paraml(req, "size", sizeof(*size));
-	if (size == NULL) {
-		gctl_error(req, "No '%s' argument", "size");
-		return;
-	}
-	if (*size < 0) {
-		gctl_error(req, "Invalid '%s' argument", "size");
-		return;
-	}
-	secsize = gctl_get_paraml(req, "secsize", sizeof(*secsize));
-	if (secsize == NULL) {
-		gctl_error(req, "No '%s' argument", "secsize");
-		return;
-	}
-	if (*secsize < 0) {
-		gctl_error(req, "Invalid '%s' argument", "secsize");
-		return;
-	}
-	stripesize = gctl_get_paraml(req, "stripesize", sizeof(*stripesize));
-	if (stripesize == NULL) {
-		gctl_error(req, "No '%s' argument", "stripesize");
-		return;
-	}
-	if (*stripesize < 0) {
-		gctl_error(req, "Invalid '%s' argument", "stripesize");
-		return;
-	}
-	stripeoffset = gctl_get_paraml(req, "stripeoffset", sizeof(*stripeoffset));
-	if (stripeoffset == NULL) {
-		gctl_error(req, "No '%s' argument", "stripeoffset");
-		return;
-	}
-	if (*stripeoffset < 0) {
-		gctl_error(req, "Invalid '%s' argument", "stripeoffset");
-		return;
+	val = gctl_get_paraml_opt(req, "stripeoffset", sizeof(*val));
+	if (val != NULL) {
+		stripeoffset = *val;
+		if (stripeoffset < 0) {
+			gctl_error(req, "Invalid '%s' argument",
+			    "stripeoffset");
+			return;
+		}
 	}
 	physpath = gctl_get_asciiparam(req, "physpath");
+	gnopname = gctl_get_asciiparam(req, "gnopname");
 
 	for (i = 0; i < *nargs; i++) {
 		snprintf(param, sizeof(param), "arg%d", i);
@@ -620,14 +682,16 @@ g_nop_ctl_create(struct gctl_req *req, struct g_class *mp)
 			return;
 		}
 		if (g_nop_create(req, mp, pp,
-		    *error == -1 ? EIO : (int)*error,
-		    *rfailprob == -1 ? 0 : (u_int)*rfailprob,
-		    *wfailprob == -1 ? 0 : (u_int)*wfailprob,
-		    *delaymsec == -1 ? 1 : (u_int)*delaymsec,
-		    *rdelayprob == -1 ? 0 : (u_int)*rdelayprob,
-		    *wdelayprob == -1 ? 0 : (u_int)*wdelayprob,
-		    (off_t)*offset, (off_t)*size, (u_int)*secsize,
-		    (off_t)*stripesize, (off_t)*stripeoffset,
+		    gnopname,
+		    error == -1 ? EIO : (int)error,
+		    count_until_fail == -1 ? 0 : (u_int)count_until_fail,
+		    rfailprob == -1 ? 0 : (u_int)rfailprob,
+		    wfailprob == -1 ? 0 : (u_int)wfailprob,
+		    delaymsec == -1 ? 1 : (u_int)delaymsec,
+		    rdelayprob == -1 ? 0 : (u_int)rdelayprob,
+		    wdelayprob == -1 ? 0 : (u_int)wdelayprob,
+		    (off_t)offset, (off_t)size, (u_int)secsize,
+		    (off_t)stripesize, (off_t)stripeoffset,
 		    physpath) != 0) {
 			return;
 		}
@@ -639,12 +703,21 @@ g_nop_ctl_configure(struct gctl_req *req, struct g_class *mp)
 {
 	struct g_nop_softc *sc;
 	struct g_provider *pp;
-	intmax_t *delaymsec, *error, *rdelayprob, *rfailprob, *wdelayprob, *wfailprob;
+	intmax_t *val, delaymsec, error, rdelayprob, rfailprob, wdelayprob,
+	    wfailprob, count_until_fail;
 	const char *name;
 	char param[16];
 	int i, *nargs;
 
 	g_topology_assert();
+
+	count_until_fail = -1;
+	delaymsec = -1;
+	error = -1;
+	rdelayprob = -1;
+	rfailprob = -1;
+	wdelayprob = -1;
+	wfailprob = -1;
 
 	nargs = gctl_get_paraml(req, "nargs", sizeof(*nargs));
 	if (nargs == NULL) {
@@ -655,56 +728,53 @@ g_nop_ctl_configure(struct gctl_req *req, struct g_class *mp)
 		gctl_error(req, "Missing device(s).");
 		return;
 	}
-	error = gctl_get_paraml(req, "error", sizeof(*error));
-	if (error == NULL) {
-		gctl_error(req, "No '%s' argument", "error");
-		return;
+	val = gctl_get_paraml_opt(req, "error", sizeof(*val));
+	if (val != NULL) {
+		error = *val;
 	}
-	rfailprob = gctl_get_paraml(req, "rfailprob", sizeof(*rfailprob));
-	if (rfailprob == NULL) {
-		gctl_error(req, "No '%s' argument", "rfailprob");
-		return;
+	val = gctl_get_paraml_opt(req, "count_until_fail", sizeof(*val));
+	if (val != NULL) {
+		count_until_fail = *val;
 	}
-	if (*rfailprob < -1 || *rfailprob > 100) {
-		gctl_error(req, "Invalid '%s' argument", "rfailprob");
-		return;
+	val = gctl_get_paraml_opt(req, "rfailprob", sizeof(*val));
+	if (val != NULL) {
+		rfailprob = *val;
+		if (rfailprob < -1 || rfailprob > 100) {
+			gctl_error(req, "Invalid '%s' argument", "rfailprob");
+			return;
+		}
 	}
-	wfailprob = gctl_get_paraml(req, "wfailprob", sizeof(*wfailprob));
-	if (wfailprob == NULL) {
-		gctl_error(req, "No '%s' argument", "wfailprob");
-		return;
+	val = gctl_get_paraml_opt(req, "wfailprob", sizeof(*val));
+	if (val != NULL) {
+		wfailprob = *val;
+		if (wfailprob < -1 || wfailprob > 100) {
+			gctl_error(req, "Invalid '%s' argument", "wfailprob");
+			return;
+		}
 	}
-	if (*wfailprob < -1 || *wfailprob > 100) {
-		gctl_error(req, "Invalid '%s' argument", "wfailprob");
-		return;
+	val = gctl_get_paraml_opt(req, "delaymsec", sizeof(*val));
+	if (val != NULL) {
+		delaymsec = *val;
+		if (delaymsec < 1 && delaymsec != -1) {
+			gctl_error(req, "Invalid '%s' argument", "delaymsec");
+			return;
+		}
 	}
-
-	delaymsec = gctl_get_paraml(req, "delaymsec", sizeof(*delaymsec));
-	if (delaymsec == NULL) {
-		gctl_error(req, "No '%s' argument", "delaymsec");
-		return;
+	val = gctl_get_paraml_opt(req, "rdelayprob", sizeof(*val));
+	if (val != NULL) {
+		rdelayprob = *val;
+		if (rdelayprob < -1 || rdelayprob > 100) {
+			gctl_error(req, "Invalid '%s' argument", "rdelayprob");
+			return;
+		}
 	}
-	if (*delaymsec < 1 && *delaymsec != -1) {
-		gctl_error(req, "Invalid '%s' argument", "delaymsec");
-		return;
-	}
-	rdelayprob = gctl_get_paraml(req, "rdelayprob", sizeof(*rdelayprob));
-	if (rdelayprob == NULL) {
-		gctl_error(req, "No '%s' argument", "rdelayprob");
-		return;
-	}
-	if (*rdelayprob < -1 || *rdelayprob > 100) {
-		gctl_error(req, "Invalid '%s' argument", "rdelayprob");
-		return;
-	}
-	wdelayprob = gctl_get_paraml(req, "wdelayprob", sizeof(*wdelayprob));
-	if (wdelayprob == NULL) {
-		gctl_error(req, "No '%s' argument", "wdelayprob");
-		return;
-	}
-	if (*wdelayprob < -1 || *wdelayprob > 100) {
-		gctl_error(req, "Invalid '%s' argument", "wdelayprob");
-		return;
+	val = gctl_get_paraml_opt(req, "wdelayprob", sizeof(*val));
+	if (val != NULL) {
+		wdelayprob = *val;
+		if (wdelayprob < -1 || wdelayprob > 100) {
+			gctl_error(req, "Invalid '%s' argument", "wdelayprob");
+			return;
+		}
 	}
 
 	for (i = 0; i < *nargs; i++) {
@@ -723,18 +793,20 @@ g_nop_ctl_configure(struct gctl_req *req, struct g_class *mp)
 			return;
 		}
 		sc = pp->geom->softc;
-		if (*error != -1)
-			sc->sc_error = (int)*error;
-		if (*rfailprob != -1)
-			sc->sc_rfailprob = (u_int)*rfailprob;
-		if (*wfailprob != -1)
-			sc->sc_wfailprob = (u_int)*wfailprob;
-		if (*rdelayprob != -1)
-			sc->sc_rdelayprob = (u_int)*rdelayprob;
-		if (*wdelayprob != -1)
-			sc->sc_wdelayprob = (u_int)*wdelayprob;
-		if (*delaymsec != -1)
-			sc->sc_delaymsec = (u_int)*delaymsec;
+		if (error != -1)
+			sc->sc_error = (int)error;
+		if (rfailprob != -1)
+			sc->sc_rfailprob = (u_int)rfailprob;
+		if (wfailprob != -1)
+			sc->sc_wfailprob = (u_int)wfailprob;
+		if (rdelayprob != -1)
+			sc->sc_rdelayprob = (u_int)rdelayprob;
+		if (wdelayprob != -1)
+			sc->sc_wdelayprob = (u_int)wdelayprob;
+		if (delaymsec != -1)
+			sc->sc_delaymsec = (u_int)delaymsec;
+		if (count_until_fail != -1)
+			sc->sc_count_until_fail = (u_int)count_until_fail;
 	}
 }
 
@@ -841,6 +913,7 @@ g_nop_ctl_reset(struct gctl_req *req, struct g_class *mp)
 		sc->sc_deletes = 0;
 		sc->sc_getattrs = 0;
 		sc->sc_flushes = 0;
+		sc->sc_speedups = 0;
 		sc->sc_cmd0s = 0;
 		sc->sc_cmd1s = 0;
 		sc->sc_cmd2s = 0;
@@ -903,12 +976,15 @@ g_nop_dumpconf(struct sbuf *sb, const char *indent, struct g_geom *gp,
 	sbuf_printf(sb, "%s<WriteDelayedProb>%u</WriteDelayedProb>\n", indent,
 	    sc->sc_wdelayprob);
 	sbuf_printf(sb, "%s<Delay>%d</Delay>\n", indent, sc->sc_delaymsec);
+	sbuf_printf(sb, "%s<CountUntilFail>%u</CountUntilFail>\n", indent,
+	    sc->sc_count_until_fail);
 	sbuf_printf(sb, "%s<Error>%d</Error>\n", indent, sc->sc_error);
 	sbuf_printf(sb, "%s<Reads>%ju</Reads>\n", indent, sc->sc_reads);
 	sbuf_printf(sb, "%s<Writes>%ju</Writes>\n", indent, sc->sc_writes);
 	sbuf_printf(sb, "%s<Deletes>%ju</Deletes>\n", indent, sc->sc_deletes);
 	sbuf_printf(sb, "%s<Getattrs>%ju</Getattrs>\n", indent, sc->sc_getattrs);
 	sbuf_printf(sb, "%s<Flushes>%ju</Flushes>\n", indent, sc->sc_flushes);
+	sbuf_printf(sb, "%s<Speedups>%ju</Speedups>\n", indent, sc->sc_speedups);
 	sbuf_printf(sb, "%s<Cmd0s>%ju</Cmd0s>\n", indent, sc->sc_cmd0s);
 	sbuf_printf(sb, "%s<Cmd1s>%ju</Cmd1s>\n", indent, sc->sc_cmd1s);
 	sbuf_printf(sb, "%s<Cmd2s>%ju</Cmd2s>\n", indent, sc->sc_cmd2s);

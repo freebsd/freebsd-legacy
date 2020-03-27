@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 2019 Ian Lepore.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -62,6 +64,7 @@ __FBSDID("$FreeBSD$");
 #define	  ADS111x_CONF_GAIN_SHIFT	 9	/* Programmable gain amp */
 #define	  ADS111x_CONF_MODE_SHIFT	 8	/* Operational mode */
 #define	  ADS111x_CONF_RATE_SHIFT	 5	/* Sample rate */
+#define	  ADS111x_CONF_COMP_DISABLE	 3	/* Comparator disable */
 
 #define	ADS111x_LOTHRESH		2	/* Compare lo threshold (rw) */
 
@@ -81,7 +84,8 @@ __FBSDID("$FreeBSD$");
  * comparator and we'll leave it alone if they do.  That allows them connect the
  * alert pin to something and use the feature without any help from this driver.
  */
-#define	ADS111x_CONF_DEFAULT	(1 << ADS111x_CONF_MODE_SHIFT)
+#define	ADS111x_CONF_DEFAULT    \
+    ((1 << ADS111x_CONF_MODE_SHIFT) | ADS111x_CONF_COMP_DISABLE)
 #define	ADS111x_CONF_USERMASK   0x001f
 
 /*
@@ -165,11 +169,21 @@ struct ads111x_softc {
 static int
 ads111x_write_2(struct ads111x_softc *sc, int reg, int val) 
 {
-	uint8_t data[2];
+	uint8_t data[3];
+	struct iic_msg msgs[1];
+	uint8_t slaveaddr;
 
-	be16enc(data, val);
+	slaveaddr = iicbus_get_addr(sc->dev);
 
-	return (iic2errno(iicdev_writeto(sc->dev, reg, data, 2, IIC_WAIT)));
+	data[0] = reg;
+	be16enc(&data[1], val);
+
+	msgs[0].slave = slaveaddr;
+	msgs[0].flags = IIC_M_WR;
+	msgs[0].len   = sizeof(data);
+	msgs[0].buf   = data;
+
+	return (iicbus_transfer_excl(sc->dev, msgs, nitems(msgs), IIC_WAIT));
 }
 
 static int
@@ -189,7 +203,7 @@ static int
 ads111x_sample_voltage(struct ads111x_softc *sc, int channum, int *voltage) 
 {
 	struct ads111x_channel *chan;
-	int err, cfgword, convword, rate, waitns;
+	int err, cfgword, convword, rate, retries, waitns;
 	int64_t fsrange;
 
 	chan = &sc->channels[channum];
@@ -205,7 +219,8 @@ ads111x_sample_voltage(struct ads111x_softc *sc, int channum, int *voltage)
 
 	/*
 	 * Calculate how long it will take to make the measurement at the
-	 * current sampling rate (round up), and sleep at least that long.
+	 * current sampling rate (round up).  The measurement averaging time
+	 * ranges from 300us to 125ms, so we yield the cpu while waiting.
 	 */
 	rate = sc->chipinfo->ratetab[chan->rateidx];
 	waitns = (1000000000 + rate - 1) / rate;
@@ -213,20 +228,27 @@ ads111x_sample_voltage(struct ads111x_softc *sc, int channum, int *voltage)
 	if (err != 0 && err != EWOULDBLOCK)
 		return (err);
 
-#if 0
 	/*
-	 * Sanity-check that the measurement is complete.  Not enabled by
-	 * default because checking wastes 200-800us just in moving the status
-	 * command and result across the i2c bus, which could double the time it
-	 * takes to get one measurement.  Unlike most i2c slaves, this device
-	 * does not auto-increment the register number on reads, so we can't
-	 * read both status and measurement in one operation.
+	 * In theory the measurement should be available now; we waited long
+	 * enough.  However, the chip times its averaging intervals using an
+	 * internal 1 MHz oscillator which likely isn't running at the same rate
+	 * as the system clock, so we have to double-check that the measurement
+	 * is complete before reading the result.  If it's not ready yet, yield
+	 * the cpu again for 5% of the time we originally calculated.
+	 *
+	 * Unlike most i2c slaves, this device does not auto-increment the
+	 * register number on reads, so we can't read both status and
+	 * measurement in one operation.
 	 */
-	if ((err = ads111x_read_2(sc, ADS111x_CONF, &cfgword)) != 0)
-		return (err);
-	if (!(cfgword & ADS111x_CONF_IDLE))
-		return (EIO);
-#endif
+	for (retries = 5; ; --retries) {
+		if (retries == 0)
+			return (EWOULDBLOCK);
+		if ((err = ads111x_read_2(sc, ADS111x_CONF, &cfgword)) != 0)
+			return (err);
+		if (cfgword & ADS111x_CONF_IDLE)
+			break;
+		pause_sbt("ads111x", nstosbt(waitns / 20), 0, C_PREL(2));
+	}
 
 	/* Retrieve the sample and convert it to microvolts. */
 	if ((err = ads111x_read_2(sc, ADS111x_CONV, &convword)) != 0)
@@ -385,16 +407,18 @@ ads111x_setup_channel(struct ads111x_softc *sc, int chan, int gainidx, int ratei
 	devtree = device_get_sysctl_tree(sc->dev);
 	snprintf(chanstr, sizeof(chanstr), "%d", chan);
 	chantree = SYSCTL_ADD_NODE(ctx, SYSCTL_CHILDREN(devtree), OID_AUTO,
-	    chanstr, CTLFLAG_RD, NULL, "channel data");
+	    chanstr, CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, "channel data");
 	SYSCTL_ADD_PROC(ctx, SYSCTL_CHILDREN(chantree), OID_AUTO,
-	    "gain_index", CTLTYPE_INT | CTLFLAG_RWTUN, sc, chan,
-	    ads111x_sysctl_gainidx, "I", "programmable gain amp setting, 0-7");
+	    "gain_index", CTLTYPE_INT | CTLFLAG_RWTUN | CTLFLAG_NEEDGIANT,
+	    sc, chan, ads111x_sysctl_gainidx, "I",
+	    "programmable gain amp setting, 0-7");
 	SYSCTL_ADD_PROC(ctx, SYSCTL_CHILDREN(chantree), OID_AUTO,
-	    "rate_index", CTLTYPE_INT | CTLFLAG_RWTUN, sc, chan,
-	    ads111x_sysctl_rateidx, "I", "sample rate setting, 0-7");
+	    "rate_index", CTLTYPE_INT | CTLFLAG_RWTUN | CTLFLAG_NEEDGIANT,
+	    sc, chan, ads111x_sysctl_rateidx, "I", "sample rate setting, 0-7");
 	SYSCTL_ADD_PROC(ctx, SYSCTL_CHILDREN(chantree), OID_AUTO,
-	    "voltage", CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_SKIP, sc, chan,
-	    ads111x_sysctl_voltage, "I", "sampled voltage in microvolts");
+	    "voltage",
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_SKIP | CTLFLAG_NEEDGIANT, sc,
+	    chan, ads111x_sysctl_voltage, "I", "sampled voltage in microvolts");
 
 	c->configured = true;
 }
@@ -534,13 +558,13 @@ ads111x_attach(device_t dev)
 	ctx = device_get_sysctl_ctx(dev);
 	tree = device_get_sysctl_tree(dev);
 	SYSCTL_ADD_PROC(ctx, SYSCTL_CHILDREN(tree), OID_AUTO,
-	    "config", CTLTYPE_INT | CTLFLAG_RWTUN, sc, 0,
+	    "config", CTLTYPE_INT | CTLFLAG_RWTUN | CTLFLAG_NEEDGIANT, sc, 0,
 	    ads111x_sysctl_config, "I", "configuration register word");
 	SYSCTL_ADD_PROC(ctx, SYSCTL_CHILDREN(tree), OID_AUTO,
-	    "lo_thresh", CTLTYPE_INT | CTLFLAG_RWTUN, sc, 0,
+	    "lo_thresh", CTLTYPE_INT | CTLFLAG_RWTUN | CTLFLAG_NEEDGIANT, sc, 0,
 	    ads111x_sysctl_lothresh, "I", "comparator low threshold");
 	SYSCTL_ADD_PROC(ctx, SYSCTL_CHILDREN(tree), OID_AUTO,
-	    "hi_thresh", CTLTYPE_INT | CTLFLAG_RWTUN, sc, 0,
+	    "hi_thresh", CTLTYPE_INT | CTLFLAG_RWTUN | CTLFLAG_NEEDGIANT, sc, 0,
 	    ads111x_sysctl_hithresh, "I", "comparator high threshold");
 
 	/* Set up channels based on metadata or default config. */

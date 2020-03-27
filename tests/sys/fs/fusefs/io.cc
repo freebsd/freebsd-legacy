@@ -26,6 +26,8 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
+ *
+ * $FreeBSD$
  */
 
 extern "C" {
@@ -44,34 +46,9 @@ extern "C" {
 /* 
  * For testing I/O like fsx does, but deterministically and without a real
  * underlying file system
- *
- * TODO: after fusefs gains the options to select cache mode for each mount
- * point, run each of these tests for all cache modes.
  */
 
 using namespace testing;
-
-enum cache_mode {
-	Uncached,
-	Writethrough,
-	Writeback,
-	WritebackAsync
-};
-
-const char *cache_mode_to_s(enum cache_mode cm) {
-	switch (cm) {
-	case Uncached:
-		return "Uncached";
-	case Writethrough:
-		return "Writethrough";
-	case Writeback:
-		return "Writeback";
-	case WritebackAsync:
-		return "WritebackAsync";
-	default:
-		return "Unknown";
-	}
-}
 
 const char FULLPATH[] = "mountpoint/some_file.txt";
 const char RELPATH[] = "some_file.txt";
@@ -106,11 +83,11 @@ int m_backing_fd, m_control_fd, m_test_fd;
 off_t m_filesize;
 bool m_direct_io;
 
-Io(): m_backing_fd(-1), m_control_fd(-1), m_direct_io(false) {};
+Io(): m_backing_fd(-1), m_control_fd(-1), m_test_fd(-1), m_filesize(0),
+	m_direct_io(false) {};
 
 void SetUp()
 {
-	m_filesize = 0;
 	m_backing_fd = open("backing_file", O_RDWR | O_CREAT | O_TRUNC, 0644);
 	if (m_backing_fd < 0)
 		FAIL() << strerror(errno);

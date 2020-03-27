@@ -735,12 +735,9 @@ typedef	struct	frentry {
 	u_char	fr_icode;	/* return ICMP code */
 	int	fr_group;	/* group to which this rule belongs */
 	int	fr_grhead;	/* group # which this rule starts */
-	int	fr_ifnames[4];
 	int	fr_isctag;
 	int	fr_rpc;		/* XID Filtering */ 
 	ipftag_t fr_nattag;
-	frdest_t fr_tifs[2];	/* "to"/"reply-to" interface */
-	frdest_t fr_dif;	/* duplicate packet interface */
 	/*
 	 * These are all options related to stateful filtering
 	 */
@@ -749,6 +746,12 @@ typedef	struct	frentry {
 	int	fr_statemax;	/* max reference count */
 	int	fr_icmphead;	/* ICMP group  for state options */
 	u_int	fr_age[2];	/* non-TCP state timeouts */
+	/*
+	 * These are compared separately.
+	 */
+	int	fr_ifnames[4];
+	frdest_t fr_tifs[2];	/* "to"/"reply-to" interface */
+	frdest_t fr_dif;	/* duplicate packet interface */
 	/*
 	 * How big is the name buffer at the end?
 	 */
@@ -827,9 +830,10 @@ typedef	struct	frentry {
 
 #define	FR_NOLOGTAG	0
 
-#define	FR_CMPSIZ(_f)	((_f)->fr_size - \
-			 offsetof(struct frentry, fr_func))
+#define	FR_CMPSIZ	(offsetof(struct frentry, fr_ifnames) - \
+			offsetof(struct frentry, fr_func))
 #define	FR_NAME(_f, _n)	(_f)->fr_names + (_f)->_n
+#define FR_NUM(_a)	(sizeof(_a) / sizeof(*_a))
 
 
 /*
@@ -1416,8 +1420,7 @@ typedef	struct	ipftune	{
 ** HPUX Port
 */
 
-#if !defined(CDEV_MAJOR) && defined (__FreeBSD_version) && \
-    (__FreeBSD_version >= 220000)
+#if !defined(CDEV_MAJOR) && defined (__FreeBSD_version)
 # define	CDEV_MAJOR	79
 #endif
 
@@ -1835,6 +1838,10 @@ extern	int		ipf_matchicmpqueryreply __P((int, icmpinfo_t *,
 						     struct icmp *, int));
 extern	u_32_t		ipf_newisn __P((fr_info_t *));
 extern	u_int		ipf_pcksum __P((fr_info_t *, int, u_int));
+#ifdef	USE_INET6
+extern	u_int		ipf_pcksum6 __P((struct mbuf *, ip6_t *,
+						u_int32_t, u_int32_t));
+#endif
 extern	void		ipf_rule_expire __P((ipf_main_softc_t *));
 extern	int		ipf_scanlist __P((fr_info_t *, u_32_t));
 extern	frentry_t 	*ipf_srcgrpmap __P((fr_info_t *, u_32_t *));

@@ -66,7 +66,7 @@ refcount_init(volatile u_int *count, u_int value)
 	*count = value;
 }
 
-static __inline void
+static __inline u_int
 refcount_acquire(volatile u_int *count)
 {
 	u_int old;
@@ -74,6 +74,22 @@ refcount_acquire(volatile u_int *count)
 	old = atomic_fetchadd_int(count, 1);
 	if (__predict_false(REFCOUNT_SATURATED(old)))
 		_refcount_update_saturated(count);
+
+	return (old);
+}
+
+static __inline u_int
+refcount_acquiren(volatile u_int *count, u_int n)
+{
+	u_int old;
+
+	KASSERT(n < REFCOUNT_SATURATION_VALUE / 2,
+	    ("refcount_acquiren: n=%u too large", n));
+	old = atomic_fetchadd_int(count, n);
+	if (__predict_false(REFCOUNT_SATURATED(old)))
+		_refcount_update_saturated(count);
+
+	return (old);
 }
 
 static __inline __result_use_check bool
@@ -90,47 +106,18 @@ refcount_acquire_checked(volatile u_int *count)
 	}
 }
 
-static __inline bool
-refcount_release(volatile u_int *count)
-{
-	u_int old;
-
-	atomic_thread_fence_rel();
-	old = atomic_fetchadd_int(count, -1);
-	if (__predict_false(old == 0 || REFCOUNT_SATURATED(old))) {
-		/*
-		 * Avoid multiple destructor invocations if underflow occurred.
-		 * This is not perfect since the memory backing the containing
-		 * object may already have been reallocated.
-		 */
-		_refcount_update_saturated(count);
-		return (false);
-	}
-	if (old > 1)
-		return (false);
-
-	/*
-	 * Last reference.  Signal the user to call the destructor.
-	 *
-	 * Ensure that the destructor sees all updates.  The fence_rel
-	 * at the start of the function synchronizes with this fence.
-	 */
-	atomic_thread_fence_acq();
-	return (true);
-}
-
 /*
  * This functions returns non-zero if the refcount was
  * incremented. Else zero is returned.
  */
 static __inline __result_use_check bool
-refcount_acquire_if_not_zero(volatile u_int *count)
+refcount_acquire_if_gt(volatile u_int *count, u_int n)
 {
 	u_int old;
 
 	old = *count;
 	for (;;) {
-		if (old == 0)
+		if (old <= n)
 			return (false);
 		if (__predict_false(REFCOUNT_SATURATED(old)))
 			return (true);
@@ -140,19 +127,72 @@ refcount_acquire_if_not_zero(volatile u_int *count)
 }
 
 static __inline __result_use_check bool
-refcount_release_if_not_last(volatile u_int *count)
+refcount_acquire_if_not_zero(volatile u_int *count)
+{
+
+	return (refcount_acquire_if_gt(count, 0));
+}
+
+static __inline bool
+refcount_releasen(volatile u_int *count, u_int n)
 {
 	u_int old;
 
+	KASSERT(n < REFCOUNT_SATURATION_VALUE / 2,
+	    ("refcount_releasen: n=%u too large", n));
+
+	atomic_thread_fence_rel();
+	old = atomic_fetchadd_int(count, -n);
+	if (__predict_false(old < n || REFCOUNT_SATURATED(old))) {
+		_refcount_update_saturated(count);
+		return (false);
+	}
+	if (old > n)
+		return (false);
+
+	/*
+	 * Last reference.  Signal the user to call the destructor.
+	 *
+	 * Ensure that the destructor sees all updates. This synchronizes with
+	 * release fences from all routines which drop the count.
+	 */
+	atomic_thread_fence_acq();
+	return (true);
+}
+
+static __inline bool
+refcount_release(volatile u_int *count)
+{
+
+	return (refcount_releasen(count, 1));
+}
+
+static __inline __result_use_check bool
+refcount_release_if_gt(volatile u_int *count, u_int n)
+{
+	u_int old;
+
+	KASSERT(n > 0,
+	    ("refcount_release_if_gt: Use refcount_release for final ref"));
 	old = *count;
 	for (;;) {
-		if (old == 1)
+		if (old <= n)
 			return (false);
 		if (__predict_false(REFCOUNT_SATURATED(old)))
 			return (true);
-		if (atomic_fcmpset_int(count, &old, old - 1))
+		/*
+		 * Paired with acquire fence in refcount_releasen().
+		 */
+		if (atomic_fcmpset_rel_int(count, &old, old - 1))
 			return (true);
 	}
 }
 
-#endif	/* ! __SYS_REFCOUNT_H__ */
+static __inline __result_use_check bool
+refcount_release_if_not_last(volatile u_int *count)
+{
+
+	return (refcount_release_if_gt(count, 1));
+}
+
+#endif /* !__SYS_REFCOUNT_H__ */

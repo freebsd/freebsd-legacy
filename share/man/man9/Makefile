@@ -34,6 +34,7 @@ MAN=	accept_filter.9 \
 	BUS_CHILD_DELETED.9 \
 	BUS_CHILD_DETACHED.9 \
 	BUS_CONFIG_INTR.9 \
+	bus_delayed_attach_children.9 \
 	BUS_DESCRIBE_INTR.9 \
 	bus_dma.9 \
 	bus_generic_attach.9 \
@@ -55,6 +56,7 @@ MAN=	accept_filter.9 \
 	BUS_SETUP_INTR.9 \
 	bus_space.9 \
 	byteorder.9 \
+	callout.9 \
 	casuword.9 \
 	cd.9 \
 	cnv.9 \
@@ -301,6 +303,7 @@ MAN=	accept_filter.9 \
 	store.9 \
 	style.9 \
 	style.lua.9 \
+	${_superio.9} \
 	swi.9 \
 	sx.9 \
 	syscall_helper_register.9 \
@@ -313,7 +316,6 @@ MAN=	accept_filter.9 \
 	tcp_functions.9 \
 	thread_exit.9 \
 	time.9 \
-	timeout.9 \
 	tvtohz.9 \
 	ucred.9 \
 	uidinfo.9 \
@@ -606,7 +608,7 @@ MLINKS+=bitset.9 BITSET_DEFINE.9 \
 	bitset.9 BIT_CMP.9 \
 	bitset.9 BIT_OR.9 \
 	bitset.9 BIT_AND.9 \
-	bitset.9 BIT_NAND.9 \
+	bitset.9 BIT_ANDNOT.9 \
 	bitset.9 BIT_CLR_ATOMIC.9 \
 	bitset.9 BIT_SET_ATOMIC.9 \
 	bitset.9 BIT_SET_ATOMIC_ACQ.9 \
@@ -764,6 +766,29 @@ MLINKS+=byteorder.9 be16dec.9 \
 	byteorder.9 le64dec.9 \
 	byteorder.9 le64enc.9 \
 	byteorder.9 le64toh.9
+MLINKS+=callout.9 callout_active.9 \
+	callout.9 callout_async_drain.9 \
+	callout.9 callout_deactivate.9 \
+	callout.9 callout_drain.9 \
+	callout.9 callout_init.9 \
+	callout.9 callout_init_mtx.9 \
+	callout.9 callout_init_rm.9 \
+	callout.9 callout_init_rw.9 \
+	callout.9 callout_pending.9 \
+	callout.9 callout_reset.9 \
+	callout.9 callout_reset_curcpu.9 \
+	callout.9 callout_reset_on.9 \
+	callout.9 callout_reset_sbt.9 \
+	callout.9 callout_reset_sbt_curcpu.9 \
+	callout.9 callout_reset_sbt_on.9 \
+	callout.9 callout_schedule.9 \
+	callout.9 callout_schedule_curcpu.9 \
+	callout.9 callout_schedule_on.9 \
+	callout.9 callout_schedule_sbt.9 \
+	callout.9 callout_schedule_sbt_curcpu.9 \
+	callout.9 callout_schedule_sbt_on.9 \
+	callout.9 callout_stop.9 \
+	callout.9 callout_when.9
 MLINKS+=cnv.9 cnvlist.9 \
 	cnv.9 cnvlist_free_binary.9 \
 	cnv.9 cnvlist_free_bool.9 \
@@ -855,7 +880,7 @@ MLINKS+=cpuset.9 CPUSET_T_INITIALIZER.9 \
 	cpuset.9 CPU_CMP.9 \
 	cpuset.9 CPU_OR.9 \
 	cpuset.9 CPU_AND.9 \
-	cpuset.9 CPU_NAND.9 \
+	cpuset.9 CPU_ANDNOT.9 \
 	cpuset.9 CPU_CLR_ATOMIC.9 \
 	cpuset.9 CPU_SET_ATOMIC.9 \
 	cpuset.9 CPU_SET_ATOMIC_ACQ.9 \
@@ -1004,6 +1029,7 @@ MLINKS+=g_bio.9 g_alloc_bio.9 \
 	g_bio.9 g_clone_bio.9 \
 	g_bio.9 g_destroy_bio.9 \
 	g_bio.9 g_duplicate_bio.9 \
+	g_bio.9 g_format_bio.9 \
 	g_bio.9 g_new_bio.9 \
 	g_bio.9 g_print_bio.9 \
 	g_bio.9 g_reset_bio.9
@@ -1789,6 +1815,7 @@ MLINKS+=sbuf.9 sbuf_bcat.9 \
 	sbuf.9 sbuf_new.9 \
 	sbuf.9 sbuf_new_auto.9 \
 	sbuf.9 sbuf_new_for_sysctl.9 \
+	sbuf.9 sbuf_nl_terminate.9 \
 	sbuf.9 sbuf_printf.9 \
 	sbuf.9 sbuf_printf_drain.9 \
 	sbuf.9 sbuf_putbuf.9 \
@@ -2022,6 +2049,8 @@ MLINKS+=sysctl.9 SYSCTL_DECL.9 \
 	sysctl.9 SYSCTL_ADD_UAUTO.9 \
 	sysctl.9 SYSCTL_ADD_UINT.9 \
 	sysctl.9 SYSCTL_ADD_ULONG.9 \
+	sysctl.9 SYSCTL_ADD_UMA_CUR.9 \
+	sysctl.9 SYSCTL_ADD_UMA_MAX.9 \
 	sysctl.9 SYSCTL_ADD_UQUAD.9 \
 	sysctl.9 SYSCTL_CHILDREN.9 \
 	sysctl.9 SYSCTL_STATIC_CHILDREN.9 \
@@ -2050,6 +2079,8 @@ MLINKS+=sysctl.9 SYSCTL_DECL.9 \
 	sysctl.9 SYSCTL_U64.9 \
 	sysctl.9 SYSCTL_UINT.9 \
 	sysctl.9 SYSCTL_ULONG.9 \
+	sysctl.9 SYSCTL_UMA_CUR.9 \
+	sysctl.9 SYSCTL_UMA_MAX.9 \
 	sysctl.9 SYSCTL_UQUAD.9
 MLINKS+=sysctl_add_oid.9 sysctl_move_oid.9 \
 	sysctl_add_oid.9 sysctl_remove_oid.9 \
@@ -2082,7 +2113,8 @@ MLINKS+=taskqueue.9 TASK_INIT.9 \
 	taskqueue.9 taskqueue_run.9 \
 	taskqueue.9 taskqueue_set_callback.9 \
 	taskqueue.9 taskqueue_start_threads.9 \
-	taskqueue.9 taskqueue_start_threads_pinned.9 \
+	taskqueue.9 taskqueue_start_threads_cpuset.9 \
+	taskqueue.9 taskqueue_start_threads_in_proc.9 \
 	taskqueue.9 taskqueue_unblock.9 \
 	taskqueue.9 TIMEOUT_TASK_INIT.9
 MLINKS+=tcp_functions.9 register_tcp_functions.9 \
@@ -2092,32 +2124,6 @@ MLINKS+=tcp_functions.9 register_tcp_functions.9 \
 MLINKS+=time.9 boottime.9 \
 	time.9 time_second.9 \
 	time.9 time_uptime.9
-MLINKS+=timeout.9 callout.9 \
-	timeout.9 callout_active.9 \
-	timeout.9 callout_async_drain.9 \
-	timeout.9 callout_deactivate.9 \
-	timeout.9 callout_drain.9 \
-	timeout.9 callout_handle_init.9 \
-	timeout.9 callout_init.9 \
-	timeout.9 callout_init_mtx.9 \
-	timeout.9 callout_init_rm.9 \
-	timeout.9 callout_init_rw.9 \
-	timeout.9 callout_pending.9 \
-	timeout.9 callout_reset.9 \
-	timeout.9 callout_reset_curcpu.9 \
-	timeout.9 callout_reset_on.9 \
-	timeout.9 callout_reset_sbt.9 \
-	timeout.9 callout_reset_sbt_curcpu.9 \
-	timeout.9 callout_reset_sbt_on.9 \
-	timeout.9 callout_schedule.9 \
-	timeout.9 callout_schedule_curcpu.9 \
-	timeout.9 callout_schedule_on.9 \
-	timeout.9 callout_schedule_sbt.9 \
-	timeout.9 callout_schedule_sbt_curcpu.9 \
-	timeout.9 callout_schedule_sbt_on.9 \
-	timeout.9 callout_stop.9 \
-	timeout.9 callout_when.9 \
-	timeout.9 untimeout.9
 MLINKS+=ucred.9 crcopy.9 \
 	ucred.9 crcopysafe.9 \
 	ucred.9 crdup.9 \
@@ -2221,7 +2227,9 @@ MLINKS+=vm_map_lookup.9 vm_map_lookup_done.9
 MLINKS+=vm_map_max.9 vm_map_min.9 \
 	vm_map_max.9 vm_map_pmap.9
 MLINKS+=vm_map_stack.9 vm_map_growstack.9
-MLINKS+=vm_map_wire.9 vm_map_unwire.9
+MLINKS+=vm_map_wire.9 vm_map_wire_mapped.9 \
+	vm_page_wire.9 vm_page_unwire.9 \
+	vm_page_wire.9 vm_page_unwire_noq.9
 MLINKS+=vm_page_bits.9 vm_page_clear_dirty.9 \
 	vm_page_bits.9 vm_page_dirty.9 \
 	vm_page_bits.9 vm_page_is_valid.9 \
@@ -2277,18 +2285,51 @@ MLINKS+=vrele.9 vput.9 \
 	vrele.9 vunref.9
 MLINKS+=vslock.9 vsunlock.9
 MLINKS+=zone.9 uma.9 \
+	zone.9 uma_prealloc.9 \
+	zone.9 uma_reclaim.9 \
 	zone.9 uma_zalloc.9 \
 	zone.9 uma_zalloc_arg.9 \
 	zone.9 uma_zalloc_domain.9 \
+	zone.9 uma_zalloc_pcpu.9 \
+	zone.9 uma_zalloc_pcpu_arg.9 \
+	zone.9 uma_zcache_create.9 \
 	zone.9 uma_zcreate.9 \
 	zone.9 uma_zdestroy.9 \
 	zone.9 uma_zfree.9 \
 	zone.9 uma_zfree_arg.9 \
 	zone.9 uma_zfree_domain.9 \
+	zone.9 uma_zfree_pcpu.9 \
+	zone.9 uma_zfree_pcpu_arg.9 \
 	zone.9 uma_zone_get_cur.9 \
 	zone.9 uma_zone_get_max.9 \
+	zone.9 uma_zone_reclaim.9 \
+	zone.9 uma_zone_reserve.9 \
+	zone.9 uma_zone_reserve_kva.9 \
+	zone.9 uma_zone_set_allocf.9 \
+	zone.9 uma_zone_set_freef.9 \
 	zone.9 uma_zone_set_max.9 \
+	zone.9 uma_zone_set_maxaction.9 \
+	zone.9 uma_zone_set_maxcache.9 \
 	zone.9 uma_zone_set_warning.9 \
-	zone.9 uma_zone_set_maxaction.9
+	zone.9 uma_zsecond_create.9
+
+.if ${MACHINE_CPUARCH} == "amd64" || ${MACHINE_CPUARCH} == "i386"
+_superio.9=	superio.9
+MLINKS+=superio.9 superio_devid.9 \
+	superio.9 superio_dev_disable.9 \
+	superio.9 superio_dev_enable.9 \
+	superio.9 superio_dev_enabled.9 \
+	superio.9 superio_find_dev.9 \
+	superio.9 superio_find_dev.9 \
+	superio.9 superio_get_dma.9 \
+	superio.9 superio_get_iobase.9 \
+	superio.9 superio_get_irq.9 \
+	superio.9 superio_get_ldn.9 \
+	superio.9 superio_get_type.9 \
+	superio.9 superio_read.9 \
+	superio.9 superio_revid.9 \
+	superio.9 superio_vendor.9 \
+	superio.9 superio_write.9
+.endif
 
 .include <bsd.prog.mk>

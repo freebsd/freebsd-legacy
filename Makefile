@@ -4,8 +4,9 @@
 # The user-driven targets are:
 #
 # universe            - *Really* build *everything* (buildworld and
-#                       all kernels on all architectures).  Define the
-#                       MAKE_JUST_KERNELS variable to only build kernels.
+#                       all kernels on all architectures).  Define
+#                       MAKE_JUST_KERNELS to only build kernels,
+#                       MAKE_JUST_WORLDS to only build userland.
 # tinderbox           - Same as universe, but presents a list of failed build
 #                       targets and exits with an error if there were any.
 # buildworld          - Rebuild *everything*, including glue to help do
@@ -34,6 +35,7 @@
 # targets             - Print a list of supported TARGET/TARGET_ARCH pairs
 #                       for world and kernel targets.
 # toolchains          - Build a toolchain for all world and kernel targets.
+# makeman             - Regenerate src.conf(5)
 # sysent              - (Re)build syscall entries from syscalls.master.
 # xdev                - xdev-build + xdev-install for the architecture
 #                       specified with TARGET and TARGET_ARCH.
@@ -80,14 +82,14 @@
 #  5.  `reboot'        (in single user mode: boot -s from the loader prompt).
 #  6.  `mergemaster -p'
 #  7.  `make installworld'
-#  8.  `mergemaster'		(you may wish to use -i, along with -U or -F).
+#  8.  `mergemaster'            (you may wish to use -i, along with -U or -F).
 #  9.  `make delete-old'
 # 10.  `reboot'
 # 11.  `make delete-old-libs' (in case no 3rd party program uses them anymore)
 #
 # See src/UPDATING `COMMON ITEMS' for more complete information.
 #
-# If TARGET=machine (e.g. powerpc, sparc64, ...) is specified you can
+# If TARGET=machine (e.g. powerpc, arm64, ...) is specified you can
 # cross build world for other machine types using the buildworld target,
 # and once the world is built you can cross build a kernel using the
 # buildkernel target.
@@ -132,7 +134,7 @@ TGTS=	all all-man buildenv buildenvvars buildkernel buildworld \
 	reinstallkernel reinstallkernel.debug \
 	installworld kernel-toolchain libraries maninstall \
 	obj objlink showconfig tags toolchain update \
-	sysent \
+	makeman sysent \
 	_worldtmp _legacy _bootstrap-tools _cleanobj _obj \
 	_build-tools _build-metadata _cross-tools _includes _libraries \
 	build32 distribute32 install32 buildsoft distributesoft installsoft \
@@ -272,7 +274,7 @@ MK_META_MODE= no
 # exceptions.
 .if !defined(TARGET_ARCH) && defined(TARGET)
 # T->TA mapping is usually TARGET with arm64 the odd man out
-_TARGET_ARCH=	${TARGET:S/arm64/aarch64/:S/riscv/riscv64/}
+_TARGET_ARCH=	${TARGET:S/arm64/aarch64/:S/riscv/riscv64/:S/arm/armv7/}
 .elif !defined(TARGET) && defined(TARGET_ARCH) && \
     ${TARGET_ARCH} != ${MACHINE_ARCH}
 # TA->T mapping is accidentally CPUARCH with aarch64 the odd man out
@@ -480,32 +482,40 @@ worlds: .PHONY
 #
 .if make(universe) || make(universe_kernels) || make(tinderbox) || \
     make(targets) || make(universe-toolchain)
-TARGETS?=amd64 arm arm64 i386 mips powerpc riscv sparc64
+#
+# Don't build rarely used architectures unless requested.
+#
+.if defined(EXTRA_TARGETS)
+EXTRA_ARCHES_mips=	mipsel mipshf mipselhf mips64el mips64hf mips64elhf
+EXTRA_ARCHES_mips+=	mipsn32
+.endif
+TARGETS?=amd64 arm arm64 i386 mips powerpc riscv
 _UNIVERSE_TARGETS=	${TARGETS}
-TARGET_ARCHES_arm?=	arm armv6 armv7
+TARGET_ARCHES_arm?=	armv6 armv7
 TARGET_ARCHES_arm64?=	aarch64
-TARGET_ARCHES_mips?=	mipsel mips mips64el mips64 mipsn32 mipselhf mipshf mips64elhf mips64hf
-TARGET_ARCHES_powerpc?=	powerpc powerpc64 powerpcspe
-# riscv64sf excluded due to PR 232085
-TARGET_ARCHES_riscv?=	riscv64
+TARGET_ARCHES_mips?=	mips mips64 ${EXTRA_ARCHES_mips}
+# powerpcspe excluded until clang fixed
+TARGET_ARCHES_powerpc?=	powerpc powerpc64
+TARGET_ARCHES_riscv?=	riscv64 riscv64sf
 .for target in ${TARGETS}
 TARGET_ARCHES_${target}?= ${target}
 .endfor
 
-MAKE_PARAMS_riscv?=	CROSS_TOOLCHAIN=riscv64-gcc MK_COVERAGE=no
-
-# XXX Remove architectures only supported by external toolchain from universe
-# if required toolchain packages are missing.
-TOOLCHAINS_riscv=	riscv64
-.for target in riscv
+# Remove architectures only supported by external toolchain from
+# universe if required toolchain packages are missing.
+# Note: We no longer have targets that require an external toolchain, but for
+# now keep this block in case a new non-LLVM architecture is added and to reuse
+# it for a future extenal GCC make universe variant.
+_external_toolchain_targets=
+.for target in ${_external_toolchain_targets}
 .if ${_UNIVERSE_TARGETS:M${target}}
 .for toolchain in ${TOOLCHAINS_${target}}
-.if !exists(/usr/local/share/toolchains/${toolchain}-gcc.mk)
+.if !exists(/usr/local/share/toolchains/${toolchain}.mk)
 _UNIVERSE_TARGETS:= ${_UNIVERSE_TARGETS:N${target}}
 universe: universe_${toolchain}_skip .PHONY
 universe_epilogue: universe_${toolchain}_skip .PHONY
 universe_${toolchain}_skip: universe_prologue .PHONY
-	@echo ">> ${target} skipped - install ${toolchain}-xtoolchain-gcc port or package to build"
+	@echo ">> ${target} skipped - install ${toolchain} port or package to build"
 .endif
 .endfor
 .endif
@@ -698,7 +708,7 @@ TARGET_ARCH_${kernel}!=	cd ${KERNSRCDIR}/${TARGET}/conf && \
 .if empty(TARGET_ARCH_${kernel})
 .error "Target architecture for ${TARGET}/conf/${kernel} unknown.  config(8) likely too old."
 .endif
-universe_kernconfs: universe_kernconf_${TARGET}_${kernel}
+universe_kernconfs_${TARGET_ARCH_${kernel}}: universe_kernconf_${TARGET}_${kernel}
 universe_kernconf_${TARGET}_${kernel}: .MAKE
 	@echo ">> ${TARGET}.${TARGET_ARCH_${kernel}} ${kernel} kernel started on `LC_ALL=C date`"
 	@(cd ${.CURDIR} && env __MAKE_CONF=/dev/null \
@@ -711,6 +721,10 @@ universe_kernconf_${TARGET}_${kernel}: .MAKE
 	    (echo "${TARGET} ${kernel} kernel failed," \
 	    "check _.${TARGET}.${kernel} for details"| ${MAKEFAIL}))
 	@echo ">> ${TARGET}.${TARGET_ARCH_${kernel}} ${kernel} kernel completed on `LC_ALL=C date`"
+.endfor
+.for target_arch in ${TARGET_ARCHES_${TARGET}}
+universe_kernconfs: universe_kernconfs_${target_arch} .PHONY
+universe_kernconfs_${target_arch}:
 .endfor
 .endif	# make(universe_kernels)
 universe: universe_epilogue

@@ -52,7 +52,6 @@ __FBSDID("$FreeBSD$");
 #include "opt_hwpmc_hooks.h"
 #include "opt_isa.h"
 #include "opt_kdb.h"
-#include "opt_stack.h"
 
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -111,7 +110,7 @@ void __noinline trap(struct trapframe *frame);
 void trap_check(struct trapframe *frame);
 void dblfault_handler(struct trapframe *frame);
 
-static int trap_pfault(struct trapframe *, int);
+static int trap_pfault(struct trapframe *, bool, int *, int *);
 static void trap_fatal(struct trapframe *, vm_offset_t);
 #ifdef KDTRACE_HOOKS
 static bool trap_user_dtrace(struct trapframe *,
@@ -155,10 +154,6 @@ static const char *const trap_msg[] = {
 	[T_DTRACE_RET] =	"DTrace pid return trap",
 };
 
-static int prot_fault_translation;
-SYSCTL_INT(_machdep, OID_AUTO, prot_fault_translation, CTLFLAG_RWTUN,
-    &prot_fault_translation, 0,
-    "Select signal to deliver on protection fault");
 static int uprintf_signal;
 SYSCTL_INT(_machdep, OID_AUTO, uprintf_signal, CTLFLAG_RWTUN,
     &uprintf_signal, 0,
@@ -192,14 +187,11 @@ trap(struct trapframe *frame)
 	struct thread *td;
 	struct proc *p;
 	register_t addr, dr6;
-	int signo, ucode;
+	int pf, signo, ucode;
 	u_int type;
 
 	td = curthread;
 	p = td->td_proc;
-	signo = 0;
-	ucode = 0;
-	addr = 0;
 	dr6 = 0;
 
 	VM_CNT_INC(v_trap);
@@ -233,11 +225,6 @@ trap(struct trapframe *frame)
 		 */
 		if (pmc_intr != NULL &&
 		    (*pmc_intr)(frame) != 0)
-			return;
-#endif
-
-#ifdef STACK
-		if (stack_nmi_handler(frame) != 0)
 			return;
 #endif
 	}
@@ -345,47 +332,18 @@ trap(struct trapframe *frame)
 
 		case T_PAGEFLT:		/* page fault */
 			/*
-			 * Emulator can take care about this trap?
+			 * Can emulator handle this trap?
 			 */
 			if (*p->p_sysent->sv_trap != NULL &&
 			    (*p->p_sysent->sv_trap)(td) == 0)
 				return;
 
-			addr = frame->tf_addr;
-			signo = trap_pfault(frame, TRUE);
-			if (signo == -1)
+			pf = trap_pfault(frame, true, &signo, &ucode);
+			if (pf == -1)
 				return;
-			if (signo == 0)
+			if (pf == 0)
 				goto userret;
-			if (signo == SIGSEGV) {
-				ucode = SEGV_MAPERR;
-			} else if (prot_fault_translation == 0) {
-				/*
-				 * Autodetect.  This check also covers
-				 * the images without the ABI-tag ELF
-				 * note.
-				 */
-				if (SV_CURPROC_ABI() == SV_ABI_FREEBSD &&
-				    p->p_osrel >= P_OSREL_SIGSEGV) {
-					signo = SIGSEGV;
-					ucode = SEGV_ACCERR;
-				} else {
-					signo = SIGBUS;
-					ucode = T_PAGEFLT;
-				}
-			} else if (prot_fault_translation == 1) {
-				/*
-				 * Always compat mode.
-				 */
-				signo = SIGBUS;
-				ucode = T_PAGEFLT;
-			} else {
-				/*
-				 * Always SIGSEGV mode.
-				 */
-				signo = SIGSEGV;
-				ucode = SEGV_ACCERR;
-			}
+			addr = frame->tf_addr;
 			break;
 
 		case T_DIVIDE:		/* integer divide fault */
@@ -440,7 +398,7 @@ trap(struct trapframe *frame)
 		    ("kernel trap doesn't have ucred"));
 		switch (type) {
 		case T_PAGEFLT:			/* page fault */
-			(void) trap_pfault(frame, FALSE);
+			(void)trap_pfault(frame, false, NULL, NULL);
 			return;
 
 		case T_DNA:
@@ -712,16 +670,28 @@ trap_is_pti(struct trapframe *frame)
 	    (PCPU_GET(curpmap)->pm_cr3 & ~CR3_PCID_MASK));
 }
 
+/*
+ * Handle all details of a page fault.
+ * Returns:
+ * -1 if this fault was fatal, typically from kernel mode
+ *    (cannot happen, but we need to return something).
+ * 0  if this fault was handled by updating either the user or kernel
+ *    page table, execution can continue.
+ * 1  if this fault was from usermode and it was not handled, a synchronous
+ *    signal should be delivered to the thread.  *signo returns the signal
+ *    number, *ucode gives si_code.
+ */
 static int
-trap_pfault(struct trapframe *frame, int usermode)
+trap_pfault(struct trapframe *frame, bool usermode, int *signo, int *ucode)
 {
 	struct thread *td;
 	struct proc *p;
 	vm_map_t map;
-	vm_offset_t va;
+	vm_offset_t eva;
 	int rv;
 	vm_prot_t ftype;
-	vm_offset_t eva;
+
+	MPASS(!usermode || (signo != NULL && ucode != NULL));
 
 	td = curthread;
 	p = td->td_proc;
@@ -771,13 +741,15 @@ trap_pfault(struct trapframe *frame, int usermode)
 			return (-1);
 		}
 	}
-	va = trunc_page(eva);
-	if (va >= VM_MIN_KERNEL_ADDRESS) {
+	if (eva >= VM_MIN_KERNEL_ADDRESS) {
 		/*
 		 * Don't allow user-mode faults in kernel address space.
 		 */
-		if (usermode)
-			return (SIGSEGV);
+		if (usermode) {
+			*signo = SIGSEGV;
+			*ucode = SEGV_MAPERR;
+			return (1);
+		}
 
 		map = kernel_map;
 	} else {
@@ -819,7 +791,11 @@ trap_pfault(struct trapframe *frame, int usermode)
 			trap_fatal(frame, eva);
 			return (-1);
 		}
-		rv = KERN_PROTECTION_FAILURE;
+		if (usermode) {
+			*signo = SIGSEGV;
+			*ucode = SEGV_PKUERR;
+			return (1);
+		}
 		goto after_vmfault;
 	}
 
@@ -843,7 +819,7 @@ trap_pfault(struct trapframe *frame, int usermode)
 		ftype = VM_PROT_READ;
 
 	/* Fault in the page. */
-	rv = vm_fault(map, va, ftype, VM_FAULT_NORMAL);
+	rv = vm_fault_trap(map, eva, ftype, VM_FAULT_NORMAL, signo, ucode);
 	if (rv == KERN_SUCCESS) {
 #ifdef HWPMC_HOOKS
 		if (ftype == VM_PROT_READ || ftype == VM_PROT_WRITE) {
@@ -858,17 +834,17 @@ trap_pfault(struct trapframe *frame, int usermode)
 #endif
 		return (0);
 	}
+
+	if (usermode)
+		return (1);
 after_vmfault:
-	if (!usermode) {
-		if (td->td_intr_nesting_level == 0 &&
-		    curpcb->pcb_onfault != NULL) {
-			frame->tf_rip = (long)curpcb->pcb_onfault;
-			return (0);
-		}
-		trap_fatal(frame, eva);
-		return (-1);
+	if (td->td_intr_nesting_level == 0 &&
+	    curpcb->pcb_onfault != NULL) {
+		frame->tf_rip = (long)curpcb->pcb_onfault;
+		return (0);
 	}
-	return ((rv == KERN_PROTECTION_FAILURE) ? SIGBUS : SIGSEGV);
+	trap_fatal(frame, eva);
+	return (-1);
 }
 
 static void
@@ -879,14 +855,15 @@ trap_fatal(frame, eva)
 	int code, ss;
 	u_int type;
 	struct soft_segment_descriptor softseg;
+	struct user_segment_descriptor *gdt;
 #ifdef KDB
 	bool handled;
 #endif
 
 	code = frame->tf_err;
 	type = frame->tf_trapno;
-	sdtossd(&gdt[NGDT * PCPU_GET(cpuid) + IDXSEL(frame->tf_cs & 0xffff)],
-	    &softseg);
+	gdt = *PCPU_PTR(gdt);
+	sdtossd(&gdt[IDXSEL(frame->tf_cs & 0xffff)], &softseg);
 
 	printf("\n\nFatal trap %d: %s while in %s mode\n", type,
 	    type < nitems(trap_msg) ? trap_msg[type] : UNKNOWN,
@@ -955,7 +932,7 @@ trap_user_dtrace(struct trapframe *frame, int (**hookp)(struct trapframe *))
 {
 	int (*hook)(struct trapframe *);
 
-	hook = (int (*)(struct trapframe *))atomic_load_ptr(hookp);
+	hook = atomic_load_ptr(hookp);
 	enable_intr();
 	if (hook != NULL)
 		return ((hook)(frame) == 0);
@@ -1015,8 +992,6 @@ cpu_fetch_syscall_args_fallback(struct thread *td, struct syscall_args *sa)
 	frame = td->td_frame;
 	reg = 0;
 	regcnt = NARGREGS;
-
-	sa->code = frame->tf_rax;
 
 	if (sa->code == SYS_syscall || sa->code == SYS___syscall) {
 		sa->code = frame->tf_rdi;
@@ -1093,25 +1068,32 @@ flush_l1d_hw(void)
 	wrmsr(MSR_IA32_FLUSH_CMD, IA32_FLUSH_CMD_L1D);
 }
 
-static void __inline
-amd64_syscall_ret_flush_l1d_inline(int error)
+static void __noinline
+amd64_syscall_ret_flush_l1d_check(int error)
 {
 	void (*p)(void);
 
-	if (error != 0 && error != EEXIST && error != EAGAIN &&
-	    error != EXDEV && error != ENOENT && error != ENOTCONN &&
-	    error != EINPROGRESS) {
-		p = syscall_ret_l1d_flush;
+	if (error != EEXIST && error != EAGAIN && error != EXDEV &&
+	    error != ENOENT && error != ENOTCONN && error != EINPROGRESS) {
+		p = atomic_load_ptr(&syscall_ret_l1d_flush);
 		if (p != NULL)
 			p();
 	}
+}
+
+static void __inline
+amd64_syscall_ret_flush_l1d_check_inline(int error)
+{
+
+	if (__predict_false(error != 0))
+		amd64_syscall_ret_flush_l1d_check(error);
 }
 
 void
 amd64_syscall_ret_flush_l1d(int error)
 {
 
-	amd64_syscall_ret_flush_l1d_inline(error);
+	amd64_syscall_ret_flush_l1d_check_inline(error);
 }
 
 void
@@ -1215,5 +1197,5 @@ amd64_syscall(struct thread *td, int traced)
 	if (__predict_false(td->td_frame->tf_rip >= VM_MAXUSER_ADDRESS))
 		set_pcb_flags(td->td_pcb, PCB_FULL_IRET);
 
-	amd64_syscall_ret_flush_l1d_inline(td->td_errno);
+	amd64_syscall_ret_flush_l1d_check_inline(td->td_errno);
 }

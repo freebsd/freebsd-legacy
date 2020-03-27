@@ -64,6 +64,8 @@ __FBSDID("$FreeBSD$");
 #include <dev/xilinx/if_xaereg.h>
 #include <dev/xilinx/if_xaevar.h>
 
+#include <dev/xilinx/axidma.h>
+
 #include "miibus_if.h"
 
 #define	READ4(_sc, _reg) \
@@ -514,14 +516,40 @@ xae_media_change(struct ifnet * ifp)
 	return (error);
 }
 
+static u_int
+xae_write_maddr(void *arg, struct sockaddr_dl *sdl, u_int cnt)
+{
+	struct xae_softc *sc = arg;
+	uint32_t reg;
+	uint8_t *ma;
+
+	if (cnt >= XAE_MULTICAST_TABLE_SIZE)
+		return (1);
+
+	ma = LLADDR(sdl);
+
+	reg = READ4(sc, XAE_FFC) & 0xffffff00;
+	reg |= cnt;
+	WRITE4(sc, XAE_FFC, reg);
+
+	reg = (ma[0]);
+	reg |= (ma[1] << 8);
+	reg |= (ma[2] << 16);
+	reg |= (ma[3] << 24);
+	WRITE4(sc, XAE_FFV(0), reg);
+
+	reg = ma[4];
+	reg |= ma[5] << 8;
+	WRITE4(sc, XAE_FFV(1), reg);
+
+	return (1);
+}
+
 static void
 xae_setup_rxfilter(struct xae_softc *sc)
 {
-	struct ifmultiaddr *ifma;
 	struct ifnet *ifp;
 	uint32_t reg;
-	uint8_t *ma;
-	int i;
 
 	XAE_ASSERT_LOCKED(sc);
 
@@ -539,33 +567,7 @@ xae_setup_rxfilter(struct xae_softc *sc)
 		reg &= ~FFC_PM;
 		WRITE4(sc, XAE_FFC, reg);
 
-		if_maddr_rlock(ifp);
-
-		i = 0;
-		CK_STAILQ_FOREACH(ifma, &sc->ifp->if_multiaddrs, ifma_link) {
-			if (ifma->ifma_addr->sa_family != AF_LINK)
-				continue;
-
-			if (i >= XAE_MULTICAST_TABLE_SIZE)
-				break;
-
-			ma = LLADDR((struct sockaddr_dl *)ifma->ifma_addr);
-
-			reg = READ4(sc, XAE_FFC) & 0xffffff00;
-			reg |= i++;
-			WRITE4(sc, XAE_FFC, reg);
-
-			reg = (ma[0]);
-			reg |= (ma[1] << 8);
-			reg |= (ma[2] << 16);
-			reg |= (ma[3] << 24);
-			WRITE4(sc, XAE_FFV(0), reg);
-
-			reg = ma[4];
-			reg |= ma[5] << 8;
-			WRITE4(sc, XAE_FFV(1), reg);
-		}
-		if_maddr_runlock(ifp);
+		if_foreach_llmaddr(ifp, xae_write_maddr, sc);
 	}
 
 	/*
@@ -775,6 +777,68 @@ xae_phy_fixup(struct xae_softc *sc)
 }
 
 static int
+get_xdma_std(struct xae_softc *sc)
+{
+
+	sc->xdma_tx = xdma_ofw_get(sc->dev, "tx");
+	if (sc->xdma_tx == NULL)
+		return (ENXIO);
+
+	sc->xdma_rx = xdma_ofw_get(sc->dev, "rx");
+	if (sc->xdma_rx == NULL) {
+		xdma_put(sc->xdma_tx);
+		return (ENXIO);
+	}
+
+	return (0);
+}
+
+static int
+get_xdma_axistream(struct xae_softc *sc)
+{
+	struct axidma_fdt_data *data;
+	device_t dma_dev;
+	phandle_t node;
+	pcell_t prop;
+	size_t len;
+
+	node = ofw_bus_get_node(sc->dev);
+	len = OF_getencprop(node, "axistream-connected", &prop, sizeof(prop));
+	if (len != sizeof(prop)) {
+		device_printf(sc->dev,
+		    "%s: Couldn't get axistream-connected prop.\n", __func__);
+		return (ENXIO);
+	}
+	dma_dev = OF_device_from_xref(prop);
+	if (dma_dev == NULL) {
+		device_printf(sc->dev, "Could not get DMA device by xref.\n");
+		return (ENXIO);
+	}
+
+	sc->xdma_tx = xdma_get(sc->dev, dma_dev);
+	if (sc->xdma_tx == NULL) {
+		device_printf(sc->dev, "Could not find DMA controller.\n");
+		return (ENXIO);
+	}
+	data = malloc(sizeof(struct axidma_fdt_data),
+	    M_DEVBUF, (M_WAITOK | M_ZERO));
+	data->id = AXIDMA_TX_CHAN;
+	sc->xdma_tx->data = data;
+
+	sc->xdma_rx = xdma_get(sc->dev, dma_dev);
+	if (sc->xdma_rx == NULL) {
+		device_printf(sc->dev, "Could not find DMA controller.\n");
+		return (ENXIO);
+	}
+	data = malloc(sizeof(struct axidma_fdt_data),
+	    M_DEVBUF, (M_WAITOK | M_ZERO));
+	data->id = AXIDMA_RX_CHAN;
+	sc->xdma_rx->data = data;
+
+	return (0);
+}
+
+static int
 setup_xdma(struct xae_softc *sc)
 {
 	device_t dev;
@@ -784,15 +848,16 @@ setup_xdma(struct xae_softc *sc)
 	dev = sc->dev;
 
 	/* Get xDMA controller */   
-	sc->xdma_tx = xdma_ofw_get(sc->dev, "tx");
-	if (sc->xdma_tx == NULL) {
-		device_printf(dev, "Could not find DMA controller.\n");
-		return (ENXIO);
+	error = get_xdma_std(sc);
+
+	if (error) {
+		device_printf(sc->dev,
+		    "Fallback to axistream-connected property\n");
+		error = get_xdma_axistream(sc);
 	}
 
-	sc->xdma_rx = xdma_ofw_get(sc->dev, "rx");
-	if (sc->xdma_rx == NULL) {
-		device_printf(dev, "Could not find DMA controller.\n");
+	if (error) {
+		device_printf(dev, "Could not find xDMA controllers.\n");
 		return (ENXIO);
 	}
 
@@ -804,7 +869,7 @@ setup_xdma(struct xae_softc *sc)
 	}
 
 	/* Setup interrupt handler. */
-	error = xdma_setup_intr(sc->xchan_tx,
+	error = xdma_setup_intr(sc->xchan_tx, 0,
 	    xae_xdma_tx_intr, sc, &sc->ih_tx);
 	if (error) {
 		device_printf(sc->dev,
@@ -820,7 +885,7 @@ setup_xdma(struct xae_softc *sc)
 	}
 
 	/* Setup interrupt handler. */
-	error = xdma_setup_intr(sc->xchan_rx,
+	error = xdma_setup_intr(sc->xchan_rx, XDMA_INTR_NET,
 	    xae_xdma_rx_intr, sc, &sc->ih_rx);
 	if (error) {
 		device_printf(sc->dev,

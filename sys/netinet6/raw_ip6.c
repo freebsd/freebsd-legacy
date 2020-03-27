@@ -165,7 +165,8 @@ rip6_input(struct mbuf **mp, int *offp, int proto)
 	struct inpcb *last = NULL;
 	struct mbuf *opts = NULL;
 	struct sockaddr_in6 fromsa;
-	struct epoch_tracker et;
+
+	NET_EPOCH_ASSERT();
 
 	RIP6STAT_INC(rip6s_ipackets);
 
@@ -173,7 +174,6 @@ rip6_input(struct mbuf **mp, int *offp, int proto)
 
 	ifp = m->m_pkthdr.rcvif;
 
-	INP_INFO_RLOCK_ET(&V_ripcbinfo, et);
 	CK_LIST_FOREACH(inp, &V_ripcb, inp_list) {
 		/* XXX inp locking */
 		if ((inp->inp_vflag & INP_IPV6) == 0)
@@ -303,7 +303,6 @@ rip6_input(struct mbuf **mp, int *offp, int proto)
 skip_2:
 		INP_RUNLOCK(inp);
 	}
-	INP_INFO_RUNLOCK_ET(&V_ripcbinfo, et);
 #if defined(IPSEC) || defined(IPSEC_SUPPORT)
 	/*
 	 * Check AH/ESP integrity.
@@ -390,6 +389,7 @@ rip6_ctlinput(int cmd, struct sockaddr *sa, void *d)
 int
 rip6_output(struct mbuf *m, struct socket *so, ...)
 {
+	struct epoch_tracker et;
 	struct mbuf *control;
 	struct m_tag *mtag;
 	struct sockaddr_in6 *dstsock;
@@ -537,7 +537,9 @@ rip6_output(struct mbuf *m, struct socket *so, ...)
 		}
 	}
 
+	NET_EPOCH_ENTER(et);
 	error = ip6_output(m, optp, NULL, 0, inp->in6p_moptions, &oifp, inp);
+	NET_EPOCH_EXIT(et);
 	if (so->so_proto->pr_protocol == IPPROTO_ICMPV6) {
 		if (oifp)
 			icmp6_ifoutstat_inc(oifp, type, code);

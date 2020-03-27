@@ -222,7 +222,7 @@ VNET_DEFINE_STATIC(int, current_state_timers_running6);
 
 SYSCTL_DECL(_net_inet6);	/* Note: Not in any common header. */
 
-SYSCTL_NODE(_net_inet6, OID_AUTO, mld, CTLFLAG_RW, 0,
+SYSCTL_NODE(_net_inet6, OID_AUTO, mld, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
     "IPv6 Multicast Listener Discovery");
 
 /*
@@ -283,6 +283,7 @@ mld_save_context(struct mbuf *m, struct ifnet *ifp)
 #ifdef VIMAGE
 	m->m_pkthdr.PH_loc.ptr = ifp->if_vnet;
 #endif /* VIMAGE */
+	m->m_pkthdr.rcvif = ifp;
 	m->m_pkthdr.flowid = ifp->if_index;
 }
 
@@ -636,7 +637,6 @@ static int
 mld_v1_input_query(struct ifnet *ifp, const struct ip6_hdr *ip6,
     /*const*/ struct mld_hdr *mld)
 {
-	struct epoch_tracker	 et;
 	struct ifmultiaddr	*ifma;
 	struct mld_ifsoftc	*mli;
 	struct in6_multi	*inm;
@@ -645,6 +645,8 @@ mld_v1_input_query(struct ifnet *ifp, const struct ip6_hdr *ip6,
 #ifdef KTR
 	char			 ip6tbuf[INET6_ADDRSTRLEN];
 #endif
+
+	NET_EPOCH_ASSERT();
 
 	is_general_query = 0;
 
@@ -704,7 +706,6 @@ mld_v1_input_query(struct ifnet *ifp, const struct ip6_hdr *ip6,
 	if (timer == 0)
 		timer = 1;
 
-	NET_EPOCH_ENTER(et);
 	if (is_general_query) {
 		/*
 		 * For each reporting group joined on this
@@ -735,7 +736,6 @@ mld_v1_input_query(struct ifnet *ifp, const struct ip6_hdr *ip6,
 		in6_clearscope(&mld->mld_addr);
 	}
 
-	NET_EPOCH_EXIT(et);
 	MLD_UNLOCK();
 	IN6_MULTI_LIST_UNLOCK();
 
@@ -823,6 +823,8 @@ mld_v2_input_query(struct ifnet *ifp, const struct ip6_hdr *ip6,
 #ifdef KTR
 	char			 ip6tbuf[INET6_ADDRSTRLEN];
 #endif
+
+	NET_EPOCH_ASSERT();
 
 	if (!mld_v2enable) {
 		CTR3(KTR_MLD, "ignore v2 query src %s on ifp %p(%s)",
@@ -937,8 +939,6 @@ mld_v2_input_query(struct ifnet *ifp, const struct ip6_hdr *ip6,
 			V_interface_timers_running6 = 1;
 		}
 	} else {
-		struct epoch_tracker et;
-
 		/*
 		 * MLDv2 Group-specific or Group-and-source-specific Query.
 		 *
@@ -947,18 +947,14 @@ mld_v2_input_query(struct ifnet *ifp, const struct ip6_hdr *ip6,
 		 * Queries for groups we are not a member of on this
 		 * link are simply ignored.
 		 */
-		NET_EPOCH_ENTER(et);
 		inm = in6m_lookup_locked(ifp, &mld->mld_addr);
-		if (inm == NULL) {
-			NET_EPOCH_EXIT(et);
+		if (inm == NULL)
 			goto out_locked;
-		}
 		if (nsrc > 0) {
 			if (!ratecheck(&inm->in6m_lastgsrtv,
 			    &V_mld_gsrdelay)) {
 				CTR1(KTR_MLD, "%s: GS query throttled.",
 				    __func__);
-				NET_EPOCH_EXIT(et);
 				goto out_locked;
 			}
 		}
@@ -976,7 +972,6 @@ mld_v2_input_query(struct ifnet *ifp, const struct ip6_hdr *ip6,
 
 		/* XXX Clear embedded scope ID as userland won't expect it. */
 		in6_clearscope(&mld->mld_addr);
-		NET_EPOCH_EXIT(et);
 	}
 
 out_locked:
@@ -1110,12 +1105,13 @@ mld_v1_input_report(struct ifnet *ifp, const struct ip6_hdr *ip6,
     /*const*/ struct mld_hdr *mld)
 {
 	struct in6_addr		 src, dst;
-	struct epoch_tracker	 et;
 	struct in6_ifaddr	*ia;
 	struct in6_multi	*inm;
 #ifdef KTR
 	char			 ip6tbuf[INET6_ADDRSTRLEN];
 #endif
+
+	NET_EPOCH_ASSERT();
 
 	if (!mld_v1enable) {
 		CTR3(KTR_MLD, "ignore v1 report %s on ifp %p(%s)",
@@ -1186,7 +1182,6 @@ mld_v1_input_report(struct ifnet *ifp, const struct ip6_hdr *ip6,
 
 	IN6_MULTI_LIST_LOCK();
 	MLD_LOCK();
-	NET_EPOCH_ENTER(et);
 
 	/*
 	 * MLDv1 report suppression.
@@ -1234,7 +1229,6 @@ mld_v1_input_report(struct ifnet *ifp, const struct ip6_hdr *ip6,
 	}
 
 out_locked:
-	NET_EPOCH_EXIT(et);
 	MLD_UNLOCK();
 	IN6_MULTI_LIST_UNLOCK();
 
@@ -1256,20 +1250,27 @@ out_locked:
  * Return IPPROTO_DONE if we freed m. Otherwise, return 0.
  */
 int
-mld_input(struct mbuf *m, int off, int icmp6len)
+mld_input(struct mbuf **mp, int off, int icmp6len)
 {
 	struct ifnet	*ifp;
 	struct ip6_hdr	*ip6;
+	struct mbuf	*m;
 	struct mld_hdr	*mld;
 	int		 mldlen;
 
+	m = *mp;
 	CTR3(KTR_MLD, "%s: called w/mbuf (%p,%d)", __func__, m, off);
 
 	ifp = m->m_pkthdr.rcvif;
 
-	ip6 = mtod(m, struct ip6_hdr *);
-
 	/* Pullup to appropriate size. */
+	if (m->m_len < off + sizeof(*mld)) {
+		m = m_pullup(m, off + sizeof(*mld));
+		if (m == NULL) {
+			ICMP6STAT_INC(icp6s_badlen);
+			return (IPPROTO_DONE);
+		}
+	}
 	mld = (struct mld_hdr *)(mtod(m, uint8_t *) + off);
 	if (mld->mld_type == MLD_LISTENER_QUERY &&
 	    icmp6len >= sizeof(struct mldv2_query)) {
@@ -1277,11 +1278,16 @@ mld_input(struct mbuf *m, int off, int icmp6len)
 	} else {
 		mldlen = sizeof(struct mld_hdr);
 	}
-	IP6_EXTHDR_GET(mld, struct mld_hdr *, m, off, mldlen);
-	if (mld == NULL) {
-		ICMP6STAT_INC(icp6s_badlen);
-		return (IPPROTO_DONE);
+	if (m->m_len < off + mldlen) {
+		m = m_pullup(m, off + mldlen);
+		if (m == NULL) {
+			ICMP6STAT_INC(icp6s_badlen);
+			return (IPPROTO_DONE);
+		}
 	}
+	*mp = m;
+	ip6 = mtod(m, struct ip6_hdr *);
+	mld = (struct mld_hdr *)(mtod(m, uint8_t *) + off);
 
 	/*
 	 * Userland needs to see all of this traffic for implementing
@@ -1412,8 +1418,8 @@ mld_fasttimo_vnet(struct in6_multi_head *inmh)
 			mbufq_init(&scq, MLD_MAX_STATE_CHANGE_PACKETS);
 		}
 
-		IF_ADDR_WLOCK(ifp);
 		NET_EPOCH_ENTER(et);
+		IF_ADDR_WLOCK(ifp);
 		CK_STAILQ_FOREACH(ifma, &ifp->if_multiaddrs, ifma_link) {
 			inm = in6m_ifmultiaddr_get_inm(ifma);
 			if (inm == NULL)
@@ -1799,6 +1805,7 @@ mld_v1_transmit_report(struct in6_multi *in6m, const int type)
 	struct mbuf		*mh, *md;
 	struct mld_hdr		*mld;
 
+	NET_EPOCH_ASSERT();
 	IN6_MULTI_LIST_LOCK_ASSERT();
 	MLD_LOCK_ASSERT();
 	
@@ -1967,6 +1974,7 @@ static int
 mld_initial_join(struct in6_multi *inm, struct mld_ifsoftc *mli,
     const int delay)
 {
+	struct epoch_tracker     et;
 	struct ifnet		*ifp;
 	struct mbufq		*mq;
 	int			 error, retval, syncstates;
@@ -2034,8 +2042,10 @@ mld_initial_join(struct in6_multi *inm, struct mld_ifsoftc *mli,
 				V_current_state_timers_running6 = 1;
 			} else {
 				inm->in6m_state = MLD_IDLE_MEMBER;
+				NET_EPOCH_ENTER(et);
 				error = mld_v1_transmit_report(inm,
 				     MLD_LISTENER_REPORT);
+				NET_EPOCH_EXIT(et);
 				if (error == 0) {
 					inm->in6m_timer = odelay;
 					V_current_state_timers_running6 = 1;
@@ -2180,6 +2190,7 @@ mld_handle_state_change(struct in6_multi *inm, struct mld_ifsoftc *mli)
 static void
 mld_final_leave(struct in6_multi *inm, struct mld_ifsoftc *mli)
 {
+	struct epoch_tracker     et;
 	int syncstates;
 #ifdef KTR
 	char ip6tbuf[INET6_ADDRSTRLEN];
@@ -2213,7 +2224,9 @@ mld_final_leave(struct in6_multi *inm, struct mld_ifsoftc *mli)
 			panic("%s: MLDv2 state reached, not MLDv2 mode",
 			     __func__);
 #endif
+			NET_EPOCH_ENTER(et);
 			mld_v1_transmit_report(inm, MLD_LISTENER_DONE);
+			NET_EPOCH_EXIT(et);
 			inm->in6m_state = MLD_NOT_MEMBER;
 			V_current_state_timers_running6 = 1;
 		} else if (mli->mli_version == MLD_VERSION_2) {
@@ -2995,12 +3008,12 @@ mld_v2_merge_state_changes(struct in6_multi *inm, struct mbufq *scq)
 static void
 mld_v2_dispatch_general_query(struct mld_ifsoftc *mli)
 {
-	struct epoch_tracker	 et;
 	struct ifmultiaddr	*ifma;
 	struct ifnet		*ifp;
 	struct in6_multi	*inm;
 	int			 retval;
 
+	NET_EPOCH_ASSERT();
 	IN6_MULTI_LIST_LOCK_ASSERT();
 	MLD_LOCK_ASSERT();
 
@@ -3018,7 +3031,6 @@ mld_v2_dispatch_general_query(struct mld_ifsoftc *mli)
 
 	ifp = mli->mli_ifp;
 
-	NET_EPOCH_ENTER(et);
 	CK_STAILQ_FOREACH(ifma, &ifp->if_multiaddrs, ifma_link) {
 		inm = in6m_ifmultiaddr_get_inm(ifma);
 		if (inm == NULL)
@@ -3047,7 +3059,6 @@ mld_v2_dispatch_general_query(struct mld_ifsoftc *mli)
 			break;
 		}
 	}
-	NET_EPOCH_EXIT(et);
 
 send:
 	mld_dispatch_queue(&mli->mli_gq, MLD_MAX_RESPONSE_BURST);
@@ -3085,6 +3096,7 @@ mld_dispatch_packet(struct mbuf *m)
 	uint32_t		 ifindex;
 
 	CTR2(KTR_MLD, "%s: transmit %p", __func__, m);
+	NET_EPOCH_ASSERT();
 
 	/*
 	 * Set VNET image pointer from enqueued mbuf chain
@@ -3147,6 +3159,7 @@ mld_dispatch_packet(struct mbuf *m)
 	mld = (struct mld_hdr *)(mtod(md, uint8_t *) + off);
 	type = mld->mld_type;
 
+	oifp = NULL;
 	error = ip6_output(m0, &mld_po, NULL, IPV6_UNSPECSRC, &im6o,
 	    &oifp, NULL);
 	if (error) {
@@ -3195,6 +3208,7 @@ mld_v2_encap_report(struct ifnet *ifp, struct mbuf *m)
 	/*
 	 * RFC3590: OK to send as :: or tentative during DAD.
 	 */
+	NET_EPOCH_ASSERT();
 	ia = in6ifa_ifpforlinklocal(ifp, IN6_IFF_NOTREADY|IN6_IFF_ANYCAST);
 	if (ia == NULL)
 		CTR1(KTR_MLD, "%s: warning: ia is NULL", __func__);

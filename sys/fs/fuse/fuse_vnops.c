@@ -174,6 +174,7 @@ struct vop_vector fuse_fifoops = {
 	.vop_write =		VOP_PANIC,
 	.vop_vptofh =		fuse_vnop_vptofh,
 };
+VFS_VOP_VECTOR_REGISTER(fuse_fifoops);
 
 struct vop_vector fuse_vnops = {
 	.vop_allocate =	VOP_EINVAL,
@@ -223,13 +224,9 @@ struct vop_vector fuse_vnops = {
 	.vop_print = fuse_vnop_print,
 	.vop_vptofh = fuse_vnop_vptofh,
 };
+VFS_VOP_VECTOR_REGISTER(fuse_vnops);
 
 uma_zone_t fuse_pbuf_zone;
-
-#define fuse_vm_page_lock(m)		vm_page_lock((m));
-#define fuse_vm_page_unlock(m)		vm_page_unlock((m));
-#define fuse_vm_page_lock_queues()	((void)0)
-#define fuse_vm_page_unlock_queues()	((void)0)
 
 /* Check permission for extattr operations, much like extattr_check_cred */
 static int
@@ -509,7 +506,7 @@ fuse_vnop_bmap(struct vop_bmap_args *ap)
 	if (runp != NULL) {
 		error = fuse_vnode_size(vp, &filesize, td->td_ucred, td);
 		if (error == 0)
-			*runp = MIN(MAX(0, filesize / biosize - lbn - 1),
+			*runp = MIN(MAX(0, filesize / (off_t)biosize - lbn - 1),
 				    maxrun);
 		else
 			*runp = 0;
@@ -964,6 +961,8 @@ fuse_lookup_alloc(struct mount *mp, void *arg, int lkflags, struct vnode **vpp)
 
 SDT_PROBE_DEFINE3(fusefs, , vnops, cache_lookup,
 	"int", "struct timespec*", "struct timespec*");
+SDT_PROBE_DEFINE2(fusefs, , vnops, lookup_cache_incoherent,
+	"struct vnode*", "struct fuse_entry_out*");
 /*
     struct vnop_lookup_args {
 	struct vnodeop_desc *a_desc;
@@ -1009,7 +1008,9 @@ fuse_vnop_lookup(struct vop_lookup_args *ap)
 	if (islastcn && vfs_isrdonly(mp) && (nameiop != LOOKUP))
 		return EROFS;
 
-	if ((err = fuse_internal_access(dvp, VEXEC, td, cred)))
+	if ((cnp->cn_flags & NOEXECCHECK) != 0)
+		cnp->cn_flags &= ~NOEXECCHECK;
+	else if ((err = fuse_internal_access(dvp, VEXEC, td, cred)))
 		return err;
 
 	if (flags & ISDOTDOT) {
@@ -1138,6 +1139,7 @@ fuse_vnop_lookup(struct vop_lookup_args *ap)
 			*vpp = dvp;
 		} else {
 			struct fuse_vnode_data *fvdat;
+			struct vattr *vap;
 
 			err = fuse_vnode_get(vnode_mount(dvp), feo, nid, dvp,
 			    &vp, cnp, vtyp);
@@ -1158,22 +1160,27 @@ fuse_vnop_lookup(struct vop_lookup_args *ap)
 			 */
 			fvdat = VTOFUD(vp);
 			if (vnode_isreg(vp) &&
-			    filesize != fvdat->cached_attrs.va_size &&
-			    fvdat->flag & FN_SIZECHANGE) {
-				/*
-				 * The FN_SIZECHANGE flag reflects a dirty
-				 * append.  If userspace lets us know our cache
-				 * is invalid, that write was lost.  (Dirty
-				 * writes that do not cause append are also
-				 * lost, but we don't detect them here.)
-				 *
-				 * XXX: Maybe disable WB caching on this mount.
-				 */
-				printf("%s: WB cache incoherent on %s!\n",
-				    __func__,
-				    vnode_mount(vp)->mnt_stat.f_mntonname);
-
+			    ((filesize != fvdat->cached_attrs.va_size &&
+			      fvdat->flag & FN_SIZECHANGE) ||
+			     ((vap = VTOVA(vp)) &&
+			      filesize != vap->va_size)))
+			{
+				SDT_PROBE2(fusefs, , vnops, lookup_cache_incoherent, vp, feo);
 				fvdat->flag &= ~FN_SIZECHANGE;
+				/*
+				 * The server changed the file's size even
+				 * though we had it cached, or had dirty writes
+				 * in the WB cache!
+				 */
+				printf("%s: cache incoherent on %s!  "
+		    		    "Buggy FUSE server detected.  To prevent "
+				    "data corruption, disable the data cache "
+				    "by mounting with -o direct_io, or as "
+				    "directed otherwise by your FUSE server's "
+		    		    "documentation\n", __func__,
+				    vnode_mount(vp)->mnt_stat.f_mntonname);
+				int iosize = fuse_iosize(vp);
+				v_inval_buf_range(vp, 0, INT64_MAX, iosize);
 			}
 
 			MPASS(feo != NULL);
@@ -1530,14 +1537,12 @@ fuse_vnop_reclaim(struct vop_reclaim_args *ap)
 		fuse_filehandle_close(vp, fufh, td, NULL);
 	}
 
-	if ((!fuse_isdeadfs(vp)) && (fvdat->nlookup)) {
+	if (!fuse_isdeadfs(vp) && fvdat->nlookup > 0) {
 		fuse_internal_forget_send(vnode_mount(vp), td, NULL, VTOI(vp),
 		    fvdat->nlookup);
 	}
-	fuse_vnode_setparent(vp, NULL);
 	cache_purge(vp);
 	vfs_hash_remove(vp);
-	vnode_destroy_vobject(vp);
 	fuse_vnode_destroy(vp);
 
 	return 0;
@@ -2225,6 +2230,20 @@ fuse_xattrlist_convert(char *prefix, const char *list, int list_len,
 }
 
 /*
+ * List extended attributes
+ *
+ * The FUSE_LISTXATTR operation is based on Linux's listxattr(2) syscall, which
+ * has a number of differences compared to its FreeBSD equivalent,
+ * extattr_list_file:
+ *
+ * - FUSE_LISTXATTR returns all extended attributes across all namespaces,
+ *   whereas listxattr(2) only returns attributes for a single namespace
+ * - FUSE_LISTXATTR prepends each attribute name with "namespace."
+ * - If the provided buffer is not large enough to hold the result,
+ *   FUSE_LISTXATTR should return ERANGE, whereas listxattr is expected to
+ *   return as many results as will fit.
+ */
+/*
     struct vop_listextattr_args {
 	struct vop_generic_args a_gen;
 	struct vnode *a_vp;
@@ -2246,9 +2265,7 @@ fuse_vnop_listextattr(struct vop_listextattr_args *ap)
 	struct mount *mp = vnode_mount(vp);
 	struct thread *td = ap->a_td;
 	struct ucred *cred = ap->a_cred;
-	size_t len;
 	char *prefix;
-	char *attr_str;
 	char *bsd_list = NULL;
 	char *linux_list;
 	int bsd_list_len;
@@ -2274,9 +2291,7 @@ fuse_vnop_listextattr(struct vop_listextattr_args *ap)
 	else
 		prefix = EXTATTR_NAMESPACE_USER_STRING;
 
-	len = strlen(prefix) + sizeof(extattr_namespace_separator) + 1;
-
-	fdisp_init(&fdi, sizeof(*list_xattr_in) + len);
+	fdisp_init(&fdi, sizeof(*list_xattr_in));
 	fdisp_make_vp(&fdi, FUSE_LISTXATTR, vp, td, cred);
 
 	/*
@@ -2284,8 +2299,6 @@ fuse_vnop_listextattr(struct vop_listextattr_args *ap)
 	 */
 	list_xattr_in = fdi.indata;
 	list_xattr_in->size = 0;
-	attr_str = (char *)fdi.indata + sizeof(*list_xattr_in);
-	snprintf(attr_str, len, "%s%c", prefix, extattr_namespace_separator);
 
 	err = fdisp_wait_answ(&fdi);
 	if (err != 0) {
@@ -2309,16 +2322,31 @@ fuse_vnop_listextattr(struct vop_listextattr_args *ap)
 	 */
 	fdisp_refresh_vp(&fdi, FUSE_LISTXATTR, vp, td, cred);
 	list_xattr_in = fdi.indata;
-	list_xattr_in->size = linux_list_len + sizeof(*list_xattr_out);
-	attr_str = (char *)fdi.indata + sizeof(*list_xattr_in);
-	snprintf(attr_str, len, "%s%c", prefix, extattr_namespace_separator);
+	list_xattr_in->size = linux_list_len;
 
 	err = fdisp_wait_answ(&fdi);
-	if (err != 0)
+	if (err == ERANGE) {
+		/* 
+		 * Race detected.  The attribute list must've grown since the
+		 * first FUSE_LISTXATTR call.  Start over.  Go all the way back
+		 * to userland so we can process signals, if necessary, before
+		 * restarting.
+		 */
+		err = ERESTART;
+		goto out;
+	} else if (err != 0)
 		goto out;
 
 	linux_list = fdi.answ;
-	linux_list_len = fdi.iosize;
+	/* FUSE doesn't allow the server to return more data than requested */
+	if (fdi.iosize > linux_list_len) {
+		printf("WARNING: FUSE protocol violation.  Server returned "
+			"more extended attribute data than requested; "
+			"should've returned ERANGE instead");
+	} else {
+		/* But returning less data is fine */
+		linux_list_len = fdi.iosize;
+	}
 
 	/*
 	 * Retrieve the BSD compatible list values.

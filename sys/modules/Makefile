@@ -8,6 +8,8 @@ SUBDIR_PARALLEL=
 # Modules that include binary-only blobs of microcode should be selectable by
 # MK_SOURCELESS_UCODE option (see below).
 
+.include "${SYSDIR}/conf/config.mk"
+
 .if defined(MODULES_OVERRIDE) && !defined(ALL_MODULES)
 SUBDIR=${MODULES_OVERRIDE}
 .else
@@ -57,7 +59,6 @@ SUBDIR=	\
 	ath_rate \
 	ath_pci \
 	${_autofs} \
-	${_auxio} \
 	${_bce} \
 	${_bcm283x_clkman} \
 	${_bcm283x_pwm} \
@@ -66,7 +67,6 @@ SUBDIR=	\
 	bhnd \
 	${_bxe} \
 	${_bios} \
-	${_bktr} \
 	${_blake2} \
 	bnxt \
 	bridgestp \
@@ -98,7 +98,6 @@ SUBDIR=	\
 	${_cpufreq} \
 	${_crypto} \
 	${_cryptodev} \
-	${_ctau} \
 	ctl \
 	${_cxgb} \
 	${_cxgbe} \
@@ -110,7 +109,6 @@ SUBDIR=	\
 	${_efirt} \
 	${_em} \
 	${_ena} \
-	${_epic} \
 	esp \
 	${_et} \
 	evdev \
@@ -184,6 +182,7 @@ SUBDIR=	\
 	${_iser} \
 	isp \
 	${_ispfw} \
+	${_itwd} \
 	${_iwi} \
 	${_iwifw} \
 	${_iwm} \
@@ -200,15 +199,13 @@ SUBDIR=	\
 	khelp \
 	krpc \
 	ksyms \
+	${_ktls_ocf} \
 	le \
 	lge \
 	libalias \
 	libiconv \
 	libmchain \
 	lindebugfs \
-	${_linux} \
-	${_linux_common} \
-	${_linux64} \
 	linuxkpi \
 	${_lio} \
 	lpt \
@@ -353,7 +350,6 @@ SUBDIR=	\
 	tmpfs \
 	${_toecore} \
 	${_tpm} \
-	trm \
 	${_twa} \
 	twe \
 	tws \
@@ -371,9 +367,9 @@ SUBDIR=	\
 	${_viawd} \
 	videomode \
 	vkbd \
+	${_vmd} \
 	${_vmm} \
 	${_vmware} \
-	${_vpo} \
 	vr \
 	vte \
 	${_wbwd} \
@@ -399,9 +395,10 @@ _autofs=	autofs
 
 .if ${MK_CDDL} != "no" || defined(ALL_MODULES)
 .if (${MACHINE_CPUARCH} != "arm" || ${MACHINE_ARCH:Marmv[67]*} != "") && \
-	${MACHINE_CPUARCH} != "mips" && \
-	${MACHINE_CPUARCH} != "sparc64"
+	${MACHINE_CPUARCH} != "mips"
+.if ${KERN_OPTS:MKDTRACE_HOOKS}
 SUBDIR+=	dtrace
+.endif
 .endif
 SUBDIR+=	opensolaris
 .endif
@@ -412,6 +409,7 @@ _crypto=	crypto
 _cryptodev=	cryptodev
 _random_fortuna=random_fortuna
 _random_other=	random_other
+_ktls_ocf=	ktls_ocf
 .endif
 .endif
 
@@ -464,10 +462,22 @@ SUBDIR+=	iscsi_initiator
 SUBDIR+=	fdt
 .endif
 
+# Linuxulator
 .if ${MACHINE_CPUARCH} == "aarch64" || ${MACHINE_CPUARCH} == "amd64" || \
     ${MACHINE_CPUARCH} == "i386"
 SUBDIR+=	linprocfs
 SUBDIR+=	linsysfs
+.endif
+.if ${MACHINE_CPUARCH} == "amd64" || ${MACHINE_CPUARCH} == "i386"
+SUBDIR+=	linux
+.endif
+.if ${MACHINE_CPUARCH} == "aarch64" || ${MACHINE_CPUARCH} == "amd64"
+SUBDIR+=	linux64
+SUBDIR+=	linux_common
+.endif
+
+.if ${MACHINE_CPUARCH} == "aarch64" || ${MACHINE_CPUARCH} == "amd64" || \
+    ${MACHINE_CPUARCH} == "i386"
 _ena=		ena
 .if ${MK_OFED} != "no" || defined(ALL_MODULES)
 _ibcore=	ibcore
@@ -546,7 +556,6 @@ _hwpmc_mips74k=	hwpmc_mips74k
 	${MACHINE_CPUARCH} != "mips" && ${MACHINE_CPUARCH} != "powerpc" && \
 	${MACHINE_CPUARCH} != "riscv"
 _syscons=	syscons
-_vpo=		vpo
 .endif
 
 .if ${MACHINE_CPUARCH} != "mips"
@@ -572,7 +581,6 @@ _agp=		agp
 _an=		an
 _aout=		aout
 _bios=		bios
-_bktr=		bktr
 .if ${MK_SOURCELESS_UCODE} != "no"
 _bxe=		bxe
 .endif
@@ -586,14 +594,15 @@ _et=		et
 _exca=		exca
 _if_ndis=	if_ndis
 _io=		io
+_itwd=		itwd
 _ix=		ix
 _ixv=		ixv
-_linux=		linux
 .if ${MK_SOURCELESS_UCODE} != "no"
 _lio=		lio
 .endif
 _nctgpio=	nctgpio
 _ndis=		ndis
+_ntb=		ntb
 _ocs_fc=	ocs_fc
 _pccard=	pccard
 .if ${MK_OFED} != "no" || defined(ALL_MODULES)
@@ -630,11 +639,11 @@ _ciss=		ciss
 _chromebook_platform=	chromebook_platform
 _cmx=		cmx
 _coretemp=	coretemp
-.if ${MK_SOURCELESS_HOST} != "no"
+.if ${MK_SOURCELESS_HOST} != "no" && empty(KCSAN_ENABLED)
 _hpt27xx=	hpt27xx
 .endif
 _hptiop=	hptiop
-.if ${MK_SOURCELESS_HOST} != "no"
+.if ${MK_SOURCELESS_HOST} != "no" && empty(KCSAN_ENABLED)
 _hptmv=		hptmv
 _hptnr=		hptnr
 _hptrr=		hptrr
@@ -689,13 +698,11 @@ _efirt=		efirt
 _iavf=		iavf
 _ioat=		ioat
 _ixl=		ixl
-_linux64=	linux64
-_linux_common=	linux_common
-_ntb=		ntb
 _nvdimm=	nvdimm
 _pms=		pms
 _qlxge=		qlxge
 _qlxgb=		qlxgb
+_vmd=		vmd
 .if ${MK_SOURCELESS_UCODE} != "no"
 _qlxgbe=	qlxgbe
 _qlnx=		qlnx
@@ -706,7 +713,9 @@ _sgx_linux=	sgx_linux
 _smartpqi=	smartpqi
 
 .if ${MK_BHYVE} != "no" || defined(ALL_MODULES)
+.if ${KERN_OPTS:MSMP}
 _vmm=		vmm
+.endif
 .endif
 .endif
 
@@ -716,7 +725,7 @@ _vmm=		vmm
 _3dfx=		3dfx
 _3dfx_linux=	3dfx_linux
 _apm=		apm
-.if ${MK_SOURCELESS_UCODE} != "no"
+.if ${MK_SOURCELESS_HOST} != "no"
 _ce=		ce
 .endif
 .if ${MK_SOURCELESS_UCODE} != "no"
@@ -727,9 +736,6 @@ _glxsb=		glxsb
 _pcfclock=	pcfclock
 _pst=		pst
 _sbni=		sbni
-.if ${MK_SOURCELESS_UCODE} != "no"
-_ctau=		ctau
-.endif
 .endif
 
 .if ${MACHINE_CPUARCH} == "arm"
@@ -738,6 +744,7 @@ _cpsw=		cpsw
 .endif
 
 .if ${MACHINE_CPUARCH} == "powerpc"
+_aacraid=	aacraid
 _agp=		agp
 _an=		an
 _cardbus=	cardbus
@@ -750,20 +757,17 @@ _nvd=		nvd
 _nvme=		nvme
 _pccard=	pccard
 _wi=		wi
+_virtio=	virtio
 .endif
 
 .if ${MACHINE_ARCH} == "powerpc64"
 _ipmi=		ipmi
+_ixl=		ixl
+_nvram=		opal_nvram
 .endif
 .if ${MACHINE_ARCH} == "powerpc64" || ${MACHINE_ARCH} == "powerpc"
 # Don't build powermac_nvram for powerpcspe, it's never supported.
-_nvram=		powermac_nvram
-.endif
-
-.if ${MACHINE_CPUARCH} == "sparc64"
-_auxio=		auxio
-_em=		em
-_epic=		epic
+_nvram+=	powermac_nvram
 .endif
 
 .if (${MACHINE_CPUARCH} == "aarch64" || ${MACHINE_CPUARCH} == "amd64" || \
@@ -796,8 +800,6 @@ afterinstall: .PHONY
 		${KLDXREF_CMD} ${DESTDIR}${KMODDIR}; \
 	fi
 .endif
-
-.include "${SYSDIR}/conf/config.mk"
 
 SUBDIR:= ${SUBDIR:u:O}
 

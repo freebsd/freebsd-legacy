@@ -93,11 +93,6 @@ main(int argc, char *argv[])
 	char *p;
 	cap_rights_t rights;
 
-	cap_rights_init(&rights, CAP_FSTAT, CAP_FSTATFS, CAP_FCNTL, CAP_MMAP_RW);
-	if (caph_rights_limit(STDIN_FILENO, &rights) < 0 ||
-	    caph_limit_stderr() < 0 || caph_limit_stdout() < 0)
-		err(1, "can't limit stdio rights");
-
 	/*
 	 * Tail's options are weird.  First, -n10 is the same as -n-10, not
 	 * -n+10.  Second, the number options are 1 based and not offsets,
@@ -167,9 +162,17 @@ main(int argc, char *argv[])
 
 	no_files = argc ? argc : 1;
 
+	cap_rights_init(&rights, CAP_FSTAT, CAP_FSTATFS, CAP_FCNTL,
+	    CAP_MMAP_R);
+	if (fflag)
+		cap_rights_set(&rights, CAP_EVENT);
+	if (caph_rights_limit(STDIN_FILENO, &rights) < 0 ||
+	    caph_limit_stderr() < 0 || caph_limit_stdout() < 0)
+		err(1, "can't limit stdio rights");
+
 	fa = fileargs_init(argc, argv, O_RDONLY, 0, &rights, FA_OPEN);
 	if (fa == NULL)
-		errx(1, "unable to init casper");
+		err(1, "unable to init casper");
 
 	caph_cache_catpages();
 	if (caph_enter_casper() < 0)

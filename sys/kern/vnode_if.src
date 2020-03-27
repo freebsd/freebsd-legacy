@@ -181,9 +181,9 @@ vop_setattr {
 };
 
 
-%% markatime	vp	L L L
+%% mmapped	vp	L L L
 
-vop_markatime {
+vop_mmapped {
 	IN struct vnode *vp;
 };
 
@@ -358,6 +358,12 @@ vop_inactive {
 	IN struct thread *td;
 };
 
+%! need_inactive	pre	vop_need_inactive_pre
+%! need_inactive	post	vop_need_inactive_post
+
+vop_need_inactive {
+        IN struct vnode *vp;
+};
 
 %% reclaim	vp	E E E
 %! reclaim	post	vop_reclaim_post
@@ -374,17 +380,15 @@ vop_reclaim {
 vop_lock1 {
 	IN struct vnode *vp;
 	IN int flags;
-	IN char *file;
+	IN const char *file;
 	IN int line;
 };
 
 
 %! unlock	pre	vop_unlock_pre
-%! unlock	post	vop_unlock_post
 
 vop_unlock {
 	IN struct vnode *vp;
-	IN int flags;
 };
 
 
@@ -635,7 +639,7 @@ vop_vptocnp {
 	OUT struct vnode **vpp;
 	IN struct ucred *cred;
 	INOUT char *buf;
-	INOUT int *buflen;
+	INOUT size_t *buflen;
 };
 
 
@@ -695,7 +699,7 @@ vop_set_text {
 };
 
 
-%% vop_unset_text	vp	= = =
+%% vop_unset_text	vp	L L L
 
 vop_unset_text {
 	IN struct vnode *vp;

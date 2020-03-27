@@ -223,8 +223,8 @@ cxgbei_init(struct adapter *sc, struct cxgbei_data *ci)
 	oid = device_get_sysctl_tree(sc->dev);	/* dev.t5nex.X */
 	children = SYSCTL_CHILDREN(oid);
 
-	oid = SYSCTL_ADD_NODE(&ci->ctx, children, OID_AUTO, "iscsi", CTLFLAG_RD,
-	    NULL, "iSCSI ULP statistics");
+	oid = SYSCTL_ADD_NODE(&ci->ctx, children, OID_AUTO, "iscsi",
+	    CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, "iSCSI ULP statistics");
 	children = SYSCTL_CHILDREN(oid);
 
 	SYSCTL_ADD_COUNTER_U64(&ci->ctx, children, OID_AUTO, "ddp_setup_ok",
@@ -412,12 +412,12 @@ do_rx_iscsi_ddp(struct sge_iq *iq, const struct rss_header *rss, struct mbuf *m)
 		SOCKBUF_UNLOCK(sb);
 		INP_WUNLOCK(inp);
 
-		INP_INFO_RLOCK_ET(&V_tcbinfo, et);
+		NET_EPOCH_ENTER(et);
 		INP_WLOCK(inp);
 		tp = tcp_drop(tp, ECONNRESET);
 		if (tp)
 			INP_WUNLOCK(inp);
-		INP_INFO_RUNLOCK_ET(&V_tcbinfo, et);
+		NET_EPOCH_EXIT(et);
 
 		icl_cxgbei_conn_pdu_free(NULL, ip);
 #ifdef INVARIANTS

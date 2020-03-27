@@ -69,9 +69,9 @@ __FBSDID("$FreeBSD$");
 #include <x86/include/busdma_impl.h>
 #include <x86/iommu/intel_reg.h>
 #include <x86/iommu/busdma_dmar.h>
-#include <x86/iommu/intel_dmar.h>
 #include <dev/pci/pcireg.h>
 #include <dev/pci/pcivar.h>
+#include <x86/iommu/intel_dmar.h>
 
 #ifdef DEV_APIC
 #include "pcib_if.h"
@@ -595,6 +595,26 @@ static driver_t	dmar_driver = {
 DRIVER_MODULE(dmar, acpi, dmar_driver, dmar_devclass, 0, 0);
 MODULE_DEPEND(dmar, acpi, 1, 1, 1);
 
+void
+dmar_set_buswide_ctx(struct dmar_unit *unit, u_int busno)
+{
+
+	MPASS(busno <= PCI_BUSMAX);
+	DMAR_LOCK(unit);
+	unit->buswide_ctxs[busno / NBBY / sizeof(uint32_t)] |=
+	    1 << (busno % (NBBY * sizeof(uint32_t)));
+	DMAR_UNLOCK(unit);
+}
+
+bool
+dmar_is_buswide_ctx(struct dmar_unit *unit, u_int busno)
+{
+
+	MPASS(busno <= PCI_BUSMAX);
+	return ((unit->buswide_ctxs[busno / NBBY / sizeof(uint32_t)] &
+	    (1U << (busno % (NBBY * sizeof(uint32_t))))) != 0);
+}
+
 static void
 dmar_print_path(int busno, int depth, const ACPI_DMAR_PCI_PATH *path)
 {
@@ -1092,9 +1112,9 @@ dmar_print_domain_entry(const struct dmar_map_entry *entry)
 	struct dmar_map_entry *l, *r;
 
 	db_printf(
-	    "    start %jx end %jx free_after %jx free_down %jx flags %x ",
-	    entry->start, entry->end, entry->free_after, entry->free_down,
-	    entry->flags);
+	    "    start %jx end %jx first %jx last %jx free_down %jx flags %x ",
+	    entry->start, entry->end, entry->first, entry->last,
+	    entry->free_down, entry->flags);
 	db_printf("left ");
 	l = RB_LEFT(entry, rb_entry);
 	if (l == NULL)

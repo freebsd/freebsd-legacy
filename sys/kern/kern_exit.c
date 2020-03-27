@@ -217,6 +217,7 @@ exit1(struct thread *td, int rval, int signo)
 	 * XXX in case we're rebooting we just let init die in order to
 	 * work around an unsolved stack overflow seen very late during
 	 * shutdown on sparc64 when the gmirror worker process exists.
+	 * XXX what to do now that sparc64 is gone... remove if?
 	 */
 	if (p == initproc && rebooting == 0) {
 		printf("init died (signal %d, exit %d)\n", signo, rval);
@@ -447,13 +448,10 @@ exit1(struct thread *td, int rval, int signo)
 	WITNESS_WARN(WARN_PANIC, NULL, "process (pid %d) exiting", p->p_pid);
 
 	/*
-	 * Move proc from allproc queue to zombproc.
+	 * Remove from allproc. It still sits in the hash.
 	 */
 	sx_xlock(&allproc_lock);
-	sx_xlock(&zombproc_lock);
 	LIST_REMOVE(p, p_list);
-	LIST_INSERT_HEAD(&zombproc, p, p_list);
-	sx_xunlock(&zombproc_lock);
 	sx_xunlock(&allproc_lock);
 
 	sx_xlock(&proctree_lock);
@@ -689,7 +687,6 @@ exit1(struct thread *td, int rval, int signo)
 	thread_exit();
 }
 
-
 #ifndef _SYS_SYSPROTO_H_
 struct abort2_args {
 	char *why;
@@ -765,7 +762,6 @@ out:
 	exit1(td, 0, sig);
 	return (0);
 }
-
 
 #ifdef COMPAT_43
 /*
@@ -903,16 +899,12 @@ proc_reap(struct thread *td, struct proc *p, int *status, int options)
 	 * Remove other references to this process to ensure we have an
 	 * exclusive reference.
 	 */
-	sx_xlock(&zombproc_lock);
-	LIST_REMOVE(p, p_list);	/* off zombproc */
-	sx_xunlock(&zombproc_lock);
 	sx_xlock(PIDHASHLOCK(p->p_pid));
 	LIST_REMOVE(p, p_hash);
 	sx_xunlock(PIDHASHLOCK(p->p_pid));
 	LIST_REMOVE(p, p_sibling);
 	reaper_abandon_children(p, true);
 	reaper_clear(p);
-	proc_id_clear(PROC_ID_PID, p->p_pid);
 	PROC_LOCK(p);
 	proc_clear_orphan(p);
 	PROC_UNLOCK(p);
@@ -920,6 +912,8 @@ proc_reap(struct thread *td, struct proc *p, int *status, int options)
 	if (p->p_procdesc != NULL)
 		procdesc_reap(p);
 	sx_xunlock(&proctree_lock);
+
+	proc_id_clear(PROC_ID_PID, p->p_pid);
 
 	PROC_LOCK(p);
 	knlist_detach(p->p_klist);
@@ -998,11 +992,14 @@ proc_to_reap(struct thread *td, struct proc *p, idtype_t idtype, id_t id,
 
 	switch (idtype) {
 	case P_ALL:
-		if (p->p_procdesc != NULL) {
-			PROC_UNLOCK(p);
-			return (0);
+		if (p->p_procdesc == NULL ||
+		   (p->p_pptr == td->td_proc &&
+		   (p->p_flag & P_TRACED) != 0)) {
+			break;
 		}
-		break;
+
+		PROC_UNLOCK(p);
+		return (0);
 	case P_PID:
 		if (p->p_pid != (pid_t)id) {
 			PROC_UNLOCK(p);

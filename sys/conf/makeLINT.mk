@@ -11,8 +11,17 @@ clean:
 .if ${TARGET} == "amd64" || ${TARGET} == "i386"
 	rm -f LINT-NOINET LINT-NOINET6 LINT-NOIP
 .endif
+.if ${TARGET} == "arm"
+	# LINT-V5 removed 2019-11-26.  The clean rule is left here temporarily
+	# to avoid having stale copies left behind. LINT-V7 left the tree on
+	# 2020-02-02.
+	rm -f LINT-V5 LINT-V7
+.endif
+.if ${TARGET} == "powerpc"
+	rm -f LINT64
+.endif
 
-NOTES=	${.CURDIR}/../../conf/NOTES ${.CURDIR}/NOTES
+NOTES+=	${.CURDIR}/../../conf/NOTES ${.CURDIR}/NOTES
 MAKELINT_SED= ${.CURDIR}/../../conf/makeLINT.sed
 LINT: ${NOTES} ${MAKELINT_SED}
 	cat ${NOTES} | sed -E -n -f ${MAKELINT_SED} > ${.TARGET}
@@ -47,11 +56,6 @@ LINT: ${NOTES} ${MAKELINT_SED}
 	echo "nodevice txp"		>> ${.TARGET}-NOIP
 	echo "nodevice netmap"		>> ${.TARGET}-NOIP
 .endif
-.if ${TARGET} == "arm"
-	cat ${.TARGET} ${.CURDIR}/NOTES.armv5 > ${.TARGET}-V5
-	cat ${.TARGET} ${.CURDIR}/NOTES.armv7 > ${.TARGET}-V7
-	rm ${.TARGET}
-.endif
 .if ${TARGET} == "mips"
 	echo "machine	${TARGET} ${TARGET_ARCH}" >> ${.TARGET}
 .endif
@@ -64,4 +68,5 @@ LINT: ${NOTES} ${MAKELINT_SED}
 	echo "nodevice mlx5" >> ${.TARGET}
 	echo "nodevice mlx5en" >> ${.TARGET}
 	echo "nodevice mlx5ib" >> ${.TARGET}
+	echo "nooptions	RATELIMIT" >> ${.TARGET}
 .endif

@@ -71,8 +71,9 @@ struct tcphdr {
 #define	TH_URG	0x20
 #define	TH_ECE	0x40
 #define	TH_CWR	0x80
+#define	TH_AE	0x100			/* maps into th_x2 */
 #define	TH_FLAGS	(TH_FIN|TH_SYN|TH_RST|TH_PUSH|TH_ACK|TH_URG|TH_ECE|TH_CWR)
-#define	PRINT_TH_FLAGS	"\20\1FIN\2SYN\3RST\4PUSH\5ACK\6URG\7ECE\10CWR"
+#define	PRINT_TH_FLAGS	"\20\1FIN\2SYN\3RST\4PUSH\5ACK\6URG\7ECE\10CWR\11AE"
 
 	u_short	th_win;			/* window */
 	u_short	th_sum;			/* checksum */
@@ -168,12 +169,15 @@ struct tcphdr {
 #define TCP_NOOPT	8	/* don't use TCP options */
 #define TCP_MD5SIG	16	/* use MD5 digests (RFC2385) */
 #define	TCP_INFO	32	/* retrieve tcp_info structure */
+#define	TCP_STATS	33	/* retrieve stats blob structure */
 #define	TCP_LOG		34	/* configure event logging for connection */
 #define	TCP_LOGBUF	35	/* retrieve event log for connection */
 #define	TCP_LOGID	36	/* configure log ID to correlate connections */
 #define	TCP_LOGDUMP	37	/* dump connection log events to device */
 #define	TCP_LOGDUMPID	38	/* dump events from connections with same ID to
 				   device */
+#define	TCP_TXTLS_ENABLE 39	/* TLS framing and encryption for transmit */
+#define	TCP_TXTLS_MODE	40	/* Transmit TLS mode */
 #define	TCP_CONGESTION	64	/* get/set congestion control algorithm */
 #define	TCP_CCALGOOPT	65	/* get/set cc algorithm specific options */
 #define TCP_DELACK  	72	/* socket option for delayed ack */
@@ -237,6 +241,7 @@ struct tcphdr {
 #define TCP_BBR_ACK_COMP_ALG   1096 	/* Not used */
 #define TCP_BBR_TMR_PACE_OH    1096	/* Recycled in 4.2 */
 #define TCP_BBR_EXTRA_GAIN     1097
+#define TCP_RACK_DO_DETECTION  1097	/* Recycle of extra gain for rack, attack detection */
 #define TCP_BBR_RACK_RTT_USE   1098	/* what RTT should we use 0, 1, or 2? */
 #define TCP_BBR_RETRAN_WTSO    1099
 #define TCP_DATA_AFTER_CLOSE   1100
@@ -328,7 +333,7 @@ struct tcp_info {
 	u_int32_t	tcpi_snd_rexmitpack;	/* Retransmitted packets */
 	u_int32_t	tcpi_rcv_ooopack;	/* Out-of-order packets */
 	u_int32_t	tcpi_snd_zerowin;	/* Zero-sized windows sent */
-	
+
 	/* Padding to grow without breaking ABI. */
 	u_int32_t	__tcpi_pad[26];		/* Padding. */
 };
@@ -349,5 +354,30 @@ struct tcp_function_set {
 	char function_set_name[TCP_FUNCTION_NAME_LEN_MAX];
 	uint32_t pcbcnt;
 };
+
+/* TLS modes for TCP_TXTLS_MODE */
+#define	TCP_TLS_MODE_NONE	0
+#define	TCP_TLS_MODE_SW		1
+#define	TCP_TLS_MODE_IFNET	2
+#define	TCP_TLS_MODE_TOE	3
+
+/*
+ * TCP Control message types
+ */
+#define	TLS_SET_RECORD_TYPE	1
+
+/*
+ * TCP specific variables of interest for tp->t_stats stats(9) accounting.
+ */
+#define	VOI_TCP_TXPB		0 /* Transmit payload bytes */
+#define	VOI_TCP_RETXPB		1 /* Retransmit payload bytes */
+#define	VOI_TCP_FRWIN		2 /* Foreign receive window */
+#define	VOI_TCP_LCWIN		3 /* Local congesiton window */
+#define	VOI_TCP_RTT		4 /* Round trip time */
+#define	VOI_TCP_CSIG		5 /* Congestion signal */
+#define	VOI_TCP_GPUT		6 /* Goodput */
+#define	VOI_TCP_CALCFRWINDIFF	7 /* Congestion avoidance LCWIN - FRWIN */
+#define	VOI_TCP_GPUT_ND		8 /* Goodput normalised delta */
+#define	VOI_TCP_ACKLEN		9 /* Average ACKed bytes per ACK */
 
 #endif /* !_NETINET_TCP_H_ */

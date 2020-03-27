@@ -283,6 +283,29 @@ mps_map_btdh(int fd, uint16_t *devhandle, uint16_t *bus, uint16_t *target)
 }
 
 int
+mps_set_slot_status(int fd, U16 handle, U16 slot, U32 status)
+{
+	MPI2_SEP_REQUEST req;
+	MPI2_SEP_REPLY reply;
+
+	bzero(&req, sizeof(req));
+	req.Function = MPI2_FUNCTION_SCSI_ENCLOSURE_PROCESSOR;
+	req.Action = MPI2_SEP_REQ_ACTION_WRITE_STATUS;
+	req.Flags = MPI2_SEP_REQ_FLAGS_ENCLOSURE_SLOT_ADDRESS;
+	req.EnclosureHandle = handle;
+	req.Slot = slot;
+	req.SlotStatus = status;
+
+	if (mps_pass_command(fd, &req, sizeof(req), &reply, sizeof(reply),
+	    NULL, 0, NULL, 0, 30) != 0)
+		return (errno);
+
+	if (!IOC_STATUS_SUCCESS(reply.IOCStatus))
+		return (EIO);
+	return (0);
+}
+
+int
 mps_read_config_page_header(int fd, U8 PageType, U8 PageNumber, U32 PageAddress,
     MPI2_CONFIG_PAGE_HEADER *header, U16 *IOCStatus)
 {
@@ -701,23 +724,36 @@ mps_get_iocfacts(int fd)
 {
 	MPI2_IOC_FACTS_REPLY *facts;
 	MPI2_IOC_FACTS_REQUEST req;
+	char msgver[8], sysctlname[128];
+	size_t len, factslen;
 	int error;
 
-	facts = malloc(sizeof(MPI2_IOC_FACTS_REPLY));
+	snprintf(sysctlname, sizeof(sysctlname), "dev.%s.%d.msg_version",
+	    is_mps ? "mps" : "mpr", mps_unit);
+
+	factslen = sizeof(MPI2_IOC_FACTS_REPLY);
+	len = sizeof(msgver);
+	error = sysctlbyname(sysctlname, msgver, &len, NULL, 0);
+	if (error == 0) {
+		if (strncmp(msgver, "2.6", sizeof(msgver)) == 0)
+			factslen += 4;
+	}
+
+	facts = malloc(factslen);
 	if (facts == NULL) {
 		errno = ENOMEM;
 		return (NULL);
 	}
 
-	bzero(&req, sizeof(MPI2_IOC_FACTS_REQUEST));
+	bzero(&req, factslen);
 	req.Function = MPI2_FUNCTION_IOC_FACTS;
 
 #if 1
 	error = mps_pass_command(fd, &req, sizeof(MPI2_IOC_FACTS_REQUEST),
-	    facts, sizeof(MPI2_IOC_FACTS_REPLY), NULL, 0, NULL, 0, 10);
+	    facts, factslen, NULL, 0, NULL, 0, 10);
 #else
 	error = mps_user_command(fd, &req, sizeof(MPI2_IOC_FACTS_REQUEST),
-	    facts, sizeof(MPI2_IOC_FACTS_REPLY), NULL, 0, 0);
+	    facts, factslen, NULL, 0, 0);
 #endif
 	if (error) {
 		free(facts);

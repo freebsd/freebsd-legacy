@@ -133,7 +133,7 @@ uint32_t sctp_get_next_mtu(uint32_t);
 void
      sctp_timeout_handler(void *);
 
-uint32_t
+int
 sctp_calculate_rto(struct sctp_tcb *, struct sctp_association *,
     struct sctp_nets *, struct timeval *, int);
 
@@ -163,6 +163,9 @@ sctp_pull_off_control_to_new_inp(struct sctp_inpcb *old_inp,
 
 
 void sctp_stop_timers_for_shutdown(struct sctp_tcb *);
+
+/* Stop all timers for association and remote addresses. */
+void sctp_stop_association_timers(struct sctp_tcb *, bool);
 
 void
 sctp_report_all_outbound(struct sctp_tcb *, uint16_t, int, int

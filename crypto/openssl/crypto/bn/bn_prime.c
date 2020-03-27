@@ -10,7 +10,7 @@
 #include <stdio.h>
 #include <time.h>
 #include "internal/cryptlib.h"
-#include "bn_lcl.h"
+#include "bn_local.h"
 
 /*
  * The quick sieve algorithm approach to weeding out primes is Philip
@@ -63,8 +63,12 @@ int BN_generate_prime_ex(BIGNUM *ret, int bits, int safe,
         /* There are no prime numbers this small. */
         BNerr(BN_F_BN_GENERATE_PRIME_EX, BN_R_BITS_TOO_SMALL);
         return 0;
-    } else if (bits == 2 && safe) {
-        /* The smallest safe prime (7) is three bits. */
+    } else if (add == NULL && safe && bits < 6 && bits != 3) {
+        /*
+         * The smallest safe prime (7) is three bits.
+         * But the following two safe primes with less than 6 bits (11, 23)
+         * are unreachable for BN_rand with BN_RAND_TOP_TWO.
+         */
         BNerr(BN_F_BN_GENERATE_PRIME_EX, BN_R_BITS_TOO_SMALL);
         return 0;
     }

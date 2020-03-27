@@ -211,14 +211,6 @@ set_page_dirty(struct vm_page *page)
 }
 
 static inline void
-set_page_dirty_lock(struct vm_page *page)
-{
-	vm_page_lock(page);
-	vm_page_dirty(page);
-	vm_page_unlock(page);
-}
-
-static inline void
 mark_page_accessed(struct vm_page *page)
 {
 	vm_page_reference(page);
@@ -227,9 +219,7 @@ mark_page_accessed(struct vm_page *page)
 static inline void
 get_page(struct vm_page *page)
 {
-	vm_page_lock(page);
 	vm_page_wire(page);
-	vm_page_unlock(page);
 }
 
 extern long
@@ -250,10 +240,7 @@ get_user_pages_remote(struct task_struct *, struct mm_struct *,
 static inline void
 put_page(struct vm_page *page)
 {
-	vm_page_lock(page);
-	if (vm_page_unwire(page, PQ_ACTIVE) && page->object == NULL)
-		vm_page_free(page);
-	vm_page_unlock(page);
+	vm_page_unwire(page, PQ_ACTIVE);
 }
 
 #define	copy_highpage(to, from) pmap_copy_page(from, to)

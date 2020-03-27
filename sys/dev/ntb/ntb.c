@@ -39,7 +39,8 @@ __FBSDID("$FreeBSD$");
 #include "ntb.h"
 
 devclass_t ntb_hw_devclass;
-SYSCTL_NODE(_hw, OID_AUTO, ntb, CTLFLAG_RW, 0, "NTB sysctls");
+SYSCTL_NODE(_hw, OID_AUTO, ntb, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+    "NTB sysctls");
 
 struct ntb_child {
 	device_t	dev;
@@ -203,6 +204,13 @@ ntb_print_child(device_t dev, device_t child)
 	retval += bus_print_child_footer(dev, child);
 
 	return (retval);
+}
+
+bus_dma_tag_t
+ntb_get_dma_tag(device_t bus, device_t child)
+{
+
+	return (bus_get_dma_tag(bus));
 }
 
 void

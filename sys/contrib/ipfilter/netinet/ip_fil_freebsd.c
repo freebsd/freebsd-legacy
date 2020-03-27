@@ -1312,8 +1312,10 @@ ipf_inject(fin, m)
 	fr_info_t *fin;
 	mb_t *m;
 {
+	struct epoch_tracker et;
 	int error = 0;
 
+	NET_EPOCH_ENTER(et);
 	if (fin->fin_out == 0) {
 		netisr_dispatch(NETISR_IP, m);
 	} else {
@@ -1321,6 +1323,7 @@ ipf_inject(fin, m)
 		fin->fin_ip->ip_off = ntohs(fin->fin_ip->ip_off);
 		error = ip_output(m, NULL, NULL, IP_FORWARDING, NULL, NULL);
 	}
+	NET_EPOCH_EXIT(et);
 
 	return error;
 }
@@ -1450,3 +1453,46 @@ ipf_pcksum(fin, hlen, sum)
 	sum2 = ~sum & 0xffff;
 	return sum2;
 }
+
+#ifdef	USE_INET6
+u_int
+ipf_pcksum6(m, ip6, off, len)
+	struct mbuf *m;
+	ip6_t *ip6;
+	u_int32_t off;
+	u_int32_t len;
+{
+#ifdef	_KERNEL
+	int sum;
+
+	if (m->m_len < sizeof(struct ip6_hdr)) {
+		return 0xffff;
+	}
+
+	sum = in6_cksum(m, ip6->ip6_nxt, off, len);
+	return(sum);
+#else
+	u_short *sp;
+	u_int sum;
+
+	sp = (u_short *)&ip6->ip6_src;
+	sum = *sp++;   /* ip6_src */
+	sum += *sp++;
+	sum += *sp++;
+	sum += *sp++;
+	sum += *sp++;
+	sum += *sp++;
+	sum += *sp++;
+	sum += *sp++;
+	sum += *sp++;   /* ip6_dst */
+	sum += *sp++;
+	sum += *sp++;
+	sum += *sp++;
+	sum += *sp++;
+	sum += *sp++;
+	sum += *sp++;
+	sum += *sp++;
+	return(ipf_pcksum(fin, off, sum));
+#endif
+}
+#endif

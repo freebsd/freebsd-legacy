@@ -7,6 +7,7 @@
 #
 MAN=	termcap.5
 
+PACKAGE=	runtime
 FILES=		termcap termcap.db
 FILESDIR=	${BINDIR}/misc
 CLEANFILES+=	termcap.db
@@ -18,6 +19,7 @@ termcap.db: termcap
 	cap_mkdb ${CAP_MKDB_ENDIAN} -f ${.TARGET:R} ${.ALLSRC}
 
 etc-termcap:
-	${INSTALL_SYMLINK} ${BINDIR}/misc/termcap ${DESTDIR}/etc/termcap
+	${INSTALL_SYMLINK} -T "package=runtime" \
+	    ${BINDIR}/misc/termcap ${DESTDIR}/etc/termcap
 
 .include <bsd.prog.mk>

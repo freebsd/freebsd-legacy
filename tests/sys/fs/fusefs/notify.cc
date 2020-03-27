@@ -26,6 +26,8 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
+ *
+ * $FreeBSD$
  */
 
 extern "C" {
@@ -373,7 +375,7 @@ TEST_F(Notify, inval_inode_with_clean_cache)
 	pthread_join(th0, &thr0_value);
 	EXPECT_EQ(0, (intptr_t)thr0_value);
 
-	/* cache attributes were been purged; this will trigger a new GETATTR */
+	/* cache attributes were purged; this will trigger a new GETATTR */
 	ASSERT_EQ(0, stat(FULLPATH, &sb)) << strerror(errno);
 	EXPECT_EQ(uid, sb.st_uid);
 	EXPECT_EQ(size1, sb.st_size);
@@ -463,6 +465,7 @@ TEST_F(NotifyWriteback, inval_inode_with_dirty_cache)
 
 	/* Fill the data cache */
 	fd = open(FULLPATH, O_RDWR);
+	ASSERT_LE(0, fd);
 	ASSERT_EQ(bufsize, write(fd, CONTENTS, bufsize)) << strerror(errno);
 
 	expect_write(ino, 0, bufsize, CONTENTS);
@@ -524,6 +527,7 @@ TEST_F(NotifyWriteback, inval_inode_attrs_only)
 
 	/* Fill the data cache */
 	fd = open(FULLPATH, O_RDWR);
+	ASSERT_LE(0, fd) << strerror(errno);
 	ASSERT_EQ(bufsize, write(fd, CONTENTS, bufsize)) << strerror(errno);
 
 	/* Evict the attributes, but not data cache */

@@ -37,9 +37,21 @@
         aout
         ..
         clang
-            8.0.1
+            10.0.0
                 include
+                    cuda_wrappers
+                    ..
+                    fuzzer
+                    ..
+                    openmp_wrappers
+                    ..
+                    ppc_wrappers
+                    ..
+                    profile
+                    ..
                     sanitizer
+                    ..
+                    xray
                     ..
                 ..
                 lib
@@ -194,12 +206,20 @@
             uk_UA.KOI8-U
             ..
         ..
+        certs
+            blacklisted tags=package=caroot
+            ..
+            trusted tags=package=caroot
+            ..
+        ..
         dict
         ..
         doc
             IPv6
             ..
             atf
+            ..
+            kyua
             ..
             legal
             ..
@@ -295,6 +315,8 @@
                     ..
                 ..
             ..
+            kyua
+            ..
             libusb20
             ..
             libvgl
@@ -302,8 +324,6 @@
             mdoc
             ..
             netgraph
-            ..
-            pc-sysinstall
             ..
             perfmon
             ..
@@ -432,6 +452,12 @@
                 ..
                 trusted tags=package=runtime
                 ..
+            ..
+        ..
+        kyua
+            misc
+            ..
+            store
             ..
         ..
         locale
@@ -1166,20 +1192,10 @@
                 ..
                 man3
                 ..
-            ..
-        ..
-        pc-sysinstall
-            backend
-            ..
-            backend-partmanager
-            ..
-            backend-query
-            ..
-            conf
-                license
+                man5
                 ..
-            ..
-            doc
+                man7
+                ..
             ..
         ..
         security

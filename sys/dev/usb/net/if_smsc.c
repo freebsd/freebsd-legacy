@@ -87,6 +87,10 @@ __FBSDID("$FreeBSD$");
 
 #include <net/if.h>
 #include <net/if_var.h>
+#include <net/if_media.h>
+
+#include <dev/mii/mii.h>
+#include <dev/mii/miivar.h>
 
 #include <netinet/in.h>
 #include <netinet/ip.h>
@@ -113,10 +117,13 @@ __FBSDID("$FreeBSD$");
 
 #include <dev/usb/net/if_smscreg.h>
 
+#include "miibus_if.h"
+
 #ifdef USB_DEBUG
 static int smsc_debug = 0;
 
-SYSCTL_NODE(_hw_usb, OID_AUTO, smsc, CTLFLAG_RW, 0, "USB smsc");
+SYSCTL_NODE(_hw_usb, OID_AUTO, smsc, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+    "USB smsc");
 SYSCTL_INT(_hw_usb_smsc, OID_AUTO, debug, CTLFLAG_RWTUN, &smsc_debug, 0,
     "Debug level");
 #endif
@@ -165,9 +172,6 @@ static const struct usb_device_id smsc_devs[] = {
 	device_printf((sc)->sc_ue.ue_dev, "error: " fmt, ##args)
 	
 
-#define ETHER_IS_ZERO(addr) \
-	(!(addr[0] | addr[1] | addr[2] | addr[3] | addr[4] | addr[5]))
-	
 #define ETHER_IS_VALID(addr) \
 	(!ETHER_IS_MULTICAST(addr) && !ETHER_IS_ZERO(addr))
 	
@@ -182,9 +186,7 @@ static miibus_readreg_t smsc_miibus_readreg;
 static miibus_writereg_t smsc_miibus_writereg;
 static miibus_statchg_t smsc_miibus_statchg;
 
-#if __FreeBSD_version > 1000000
 static int smsc_attach_post_sub(struct usb_ether *ue);
-#endif
 static uether_fn_t smsc_attach_post;
 static uether_fn_t smsc_init;
 static uether_fn_t smsc_stop;
@@ -229,9 +231,7 @@ static const struct usb_config smsc_config[SMSC_N_TRANSFER] = {
 
 static const struct usb_ether_methods smsc_ue_methods = {
 	.ue_attach_post = smsc_attach_post,
-#if __FreeBSD_version > 1000000
 	.ue_attach_post_sub = smsc_attach_post_sub,
-#endif
 	.ue_start = smsc_start,
 	.ue_ioctl = smsc_ioctl,
 	.ue_init = smsc_init,
@@ -685,6 +685,18 @@ smsc_hash(uint8_t addr[ETHER_ADDR_LEN])
 	return (ether_crc32_be(addr, ETHER_ADDR_LEN) >> 26) & 0x3f;
 }
 
+static u_int
+smsc_hash_maddr(void *arg, struct sockaddr_dl *sdl, u_int cnt)
+{
+	uint32_t hash, *hashtbl = arg;
+
+	hash = smsc_hash(LLADDR(sdl));
+	hashtbl[hash >> 5] |= 1 << (hash & 0x1F);
+
+	return (1);
+}
+
+
 /**
  *	smsc_setmulti - Setup multicast
  *	@ue: usb ethernet device context
@@ -700,9 +712,7 @@ smsc_setmulti(struct usb_ether *ue)
 {
 	struct smsc_softc *sc = uether_getsc(ue);
 	struct ifnet *ifp = uether_getifp(ue);
-	struct ifmultiaddr *ifma;
 	uint32_t hashtbl[2] = { 0, 0 };
-	uint32_t hash;
 
 	SMSC_LOCK_ASSERT(sc, MA_OWNED);
 
@@ -712,29 +722,19 @@ smsc_setmulti(struct usb_ether *ue)
 		sc->sc_mac_csr &= ~SMSC_MAC_CSR_HPFILT;
 		
 	} else {
-		/* Take the lock of the mac address list before hashing each of them */
-		if_maddr_rlock(ifp);
-
-		if (!CK_STAILQ_EMPTY(&ifp->if_multiaddrs)) {
-			/* We are filtering on a set of address so calculate hashes of each
-			 * of the address and set the corresponding bits in the register.
+		if (if_foreach_llmaddr(ifp, smsc_hash_maddr, &hashtbl) > 0) {
+			/* We are filtering on a set of address so calculate
+			 * hashes of each of the address and set the
+			 * corresponding bits in the register.
 			 */
 			sc->sc_mac_csr |= SMSC_MAC_CSR_HPFILT;
 			sc->sc_mac_csr &= ~(SMSC_MAC_CSR_PRMS | SMSC_MAC_CSR_MCPAS);
-		
-			CK_STAILQ_FOREACH(ifma, &ifp->if_multiaddrs, ifma_link) {
-				if (ifma->ifma_addr->sa_family != AF_LINK)
-					continue;
-
-				hash = smsc_hash(LLADDR((struct sockaddr_dl *)ifma->ifma_addr));
-				hashtbl[hash >> 5] |= 1 << (hash & 0x1F);
-			}
 		} else {
-			/* Only receive packets with destination set to our mac address */
+			/* Only receive packets with destination set to
+			 * our mac address
+			 */
 			sc->sc_mac_csr &= ~(SMSC_MAC_CSR_MCPAS | SMSC_MAC_CSR_HPFILT);
 		}
-
-		if_maddr_runlock(ifp);
 		
 		/* Debug */
 		if (sc->sc_mac_csr & SMSC_MAC_CSR_HPFILT)
@@ -915,24 +915,6 @@ smsc_init(struct usb_ether *ue)
 
 	/* Cancel pending I/O */
 	smsc_stop(ue);
-
-#if __FreeBSD_version <= 1000000
-	/* On earlier versions this was the first place we could tell the system
-	 * that we supported h/w csuming, however this is only called after the
-	 * the interface has been brought up - not ideal.  
-	 */
-	if (!(ifp->if_capabilities & IFCAP_RXCSUM)) {
-		ifp->if_capabilities |= IFCAP_RXCSUM;
-		ifp->if_capenable |= IFCAP_RXCSUM;
-		ifp->if_hwassist = 0;
-	}
-	
-	/* TX checksuming is disabled for now
-	ifp->if_capabilities |= IFCAP_TXCSUM;
-	ifp->if_capenable |= IFCAP_TXCSUM;
-	ifp->if_hwassist = CSUM_TCP | CSUM_UDP;
-	*/
-#endif
 
 	/* Reset the ethernet interface. */
 	smsc_reset(sc);
@@ -1547,11 +1529,7 @@ smsc_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 		
 		SMSC_UNLOCK(sc);
 		if (reinit)
-#if __FreeBSD_version > 1000000
 			uether_init(ue);
-#else
-			ifp->if_init(ue);
-#endif
 
 	} else {
 		rc = uether_ioctl(ifp, cmd, data);
@@ -1633,7 +1611,6 @@ smsc_attach_post(struct usb_ether *ue)
  *	RETURNS:
  *	Returns 0 on success or a negative error code.
  */
-#if __FreeBSD_version > 1000000
 static int
 smsc_attach_post_sub(struct usb_ether *ue)
 {
@@ -1673,7 +1650,6 @@ smsc_attach_post_sub(struct usb_ether *ue)
 
 	return (error);
 }
-#endif /* __FreeBSD_version > 1000000 */
 
 
 /**

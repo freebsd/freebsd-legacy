@@ -110,7 +110,7 @@ typedef struct ses_addl_status {
 typedef struct ses_element {
 	uint8_t eip;			/* eip bit is set */
 	uint16_t descr_len;		/* length of the descriptor */
-	char *descr;			/* descriptor for this object */
+	const char *descr;		/* descriptor for this object */
 	struct ses_addl_status addl;	/* additional status info */
 } ses_element_t;
 
@@ -883,6 +883,7 @@ ses_path_iter_devid_callback(enc_softc_t *enc, enc_element_t *elem,
 	struct device_match_result  *device_match;
 	struct device_match_pattern *device_pattern;
 	ses_path_iter_args_t	    *args;
+	struct cam_path		    *path;
 
 	args = (ses_path_iter_args_t *)arg;
 	match_pattern.type = DEV_MATCH_DEVICE;
@@ -908,23 +909,26 @@ ses_path_iter_devid_callback(enc_softc_t *enc, enc_element_t *elem,
 	cdm.match_buf_len   = sizeof(match_result);
 	cdm.matches         = &match_result;
 
-	xpt_action((union ccb *)&cdm);
-	xpt_free_path(cdm.ccb_h.path);
+	do {
+		xpt_action((union ccb *)&cdm);
 
-	if ((cdm.ccb_h.status & CAM_STATUS_MASK) != CAM_REQ_CMP
-	 || (cdm.status != CAM_DEV_MATCH_LAST
-	  && cdm.status != CAM_DEV_MATCH_MORE)
-	 || cdm.num_matches == 0)
-		return;
+		if ((cdm.ccb_h.status & CAM_STATUS_MASK) != CAM_REQ_CMP ||
+		    (cdm.status != CAM_DEV_MATCH_LAST &&
+		     cdm.status != CAM_DEV_MATCH_MORE) ||
+		    cdm.num_matches == 0)
+			break;
 
-	device_match = &match_result.result.device_result;
-	if (xpt_create_path(&cdm.ccb_h.path, /*periph*/NULL,
-			     device_match->path_id,
-			     device_match->target_id,
-			     device_match->target_lun) != CAM_REQ_CMP)
-		return;
+		device_match = &match_result.result.device_result;
+		if (xpt_create_path(&path, /*periph*/NULL,
+				    device_match->path_id,
+				    device_match->target_id,
+				    device_match->target_lun) == CAM_REQ_CMP) {
 
-	args->callback(enc, elem, cdm.ccb_h.path, args->callback_arg);
+			args->callback(enc, elem, path, args->callback_arg);
+
+			xpt_free_path(path);
+		}
+	} while (cdm.status == CAM_DEV_MATCH_MORE);
 
 	xpt_free_path(cdm.ccb_h.path);
 }
@@ -952,30 +956,38 @@ ses_paths_iter(enc_softc_t *enc, enc_element_t *elm,
 	if (addl->hdr == NULL)
 		return;
 
-	if (addl->proto_hdr.sas != NULL &&
-	    addl->proto_data.sasdev_phys != NULL) {
-		ses_path_iter_args_t args;
+	switch(ses_elm_addlstatus_proto(addl->hdr)) {
+	case SPSP_PROTO_SAS:
+		if (addl->proto_hdr.sas != NULL &&
+		    addl->proto_data.sasdev_phys != NULL) {
+			ses_path_iter_args_t args;
 
-		args.callback     = callback;
-		args.callback_arg = callback_arg;
-		ses_devids_iter(enc, elm, ses_path_iter_devid_callback, &args);
-	} else if (addl->proto_hdr.ata != NULL) {
-		struct cam_path *path;
-		struct ccb_getdev cgd;
+			args.callback     = callback;
+			args.callback_arg = callback_arg;
+			ses_devids_iter(enc, elm, ses_path_iter_devid_callback,
+			    &args);
+		}
+		break;
+	case SPSP_PROTO_ATA:
+		if (addl->proto_hdr.ata != NULL) {
+			struct cam_path *path;
+			struct ccb_getdev cgd;
 
-		if (xpt_create_path(&path, /*periph*/NULL,
-		    scsi_4btoul(addl->proto_hdr.ata->bus),
-		    scsi_4btoul(addl->proto_hdr.ata->target), 0)
-		     != CAM_REQ_CMP)
-			return;
+			if (xpt_create_path(&path, /*periph*/NULL,
+			    scsi_4btoul(addl->proto_hdr.ata->bus),
+			    scsi_4btoul(addl->proto_hdr.ata->target), 0)
+			     != CAM_REQ_CMP)
+				return;
 
-		xpt_setup_ccb(&cgd.ccb_h, path, CAM_PRIORITY_NORMAL);
-		cgd.ccb_h.func_code = XPT_GDEV_TYPE;
-		xpt_action((union ccb *)&cgd);
-		if (cgd.ccb_h.status == CAM_REQ_CMP)
-			callback(enc, elm, path, callback_arg);
+			xpt_setup_ccb(&cgd.ccb_h, path, CAM_PRIORITY_NORMAL);
+			cgd.ccb_h.func_code = XPT_GDEV_TYPE;
+			xpt_action((union ccb *)&cgd);
+			if (cgd.ccb_h.status == CAM_REQ_CMP)
+				callback(enc, elm, path, callback_arg);
 
-		xpt_free_path(path);
+			xpt_free_path(path);
+		}
+		break;
 	}
 }
 
@@ -1027,7 +1039,7 @@ ses_setphyspath_callback(enc_softc_t *enc, enc_element_t *elm,
 
 	args = (ses_setphyspath_callback_args_t *)arg;
 	old_physpath = malloc(MAXPATHLEN, M_SCSIENC, M_WAITOK|M_ZERO);
-	cam_periph_lock(enc->periph);
+	xpt_path_lock(path);
 	xpt_setup_ccb(&cdai.ccb_h, path, CAM_PRIORITY_NORMAL);
 	cdai.ccb_h.func_code = XPT_DEV_ADVINFO;
 	cdai.buftype = CDAI_TYPE_PHYS_PATH;
@@ -1052,7 +1064,7 @@ ses_setphyspath_callback(enc_softc_t *enc, enc_element_t *elm,
 		if (cdai.ccb_h.status == CAM_REQ_CMP)
 			args->num_set++;
 	}
-	cam_periph_unlock(enc->periph);
+	xpt_path_unlock(path);
 	free(old_physpath, M_SCSIENC);
 }
 
@@ -1973,6 +1985,35 @@ ses_publish_cache(enc_softc_t *enc, struct enc_fsm_state *state,
 	return (0);
 }
 
+/*
+ * \brief Sanitize an element descriptor
+ *
+ * The SES4r3 standard, sections 3.1.2 and 6.1.10, specifies that element
+ * descriptors may only contain ASCII characters in the range 0x20 to 0x7e.
+ * But some vendors violate that rule.  Ensure that we only expose compliant
+ * descriptors to userland.
+ *
+ * \param desc		SES element descriptor as reported by the hardware
+ * \param len		Length of desc in bytes, not necessarily including
+ * 			trailing NUL.  It will be modified if desc is invalid.
+ */
+static const char*
+ses_sanitize_elm_desc(const char *desc, uint16_t *len)
+{
+	const char *invalid = "<invalid>";
+	int i;
+
+	for (i = 0; i < *len; i++) {
+		if (desc[i] < 0x20 || desc[i] > 0x7e) {
+			*len = strlen(invalid);
+			return (invalid);
+		} else if (desc[i] == 0) {
+			break;
+		}
+	}
+	return (desc);
+}
+
 /**
  * \brief Parse the descriptors for each object.
  *
@@ -2057,7 +2098,8 @@ ses_process_elm_descs(enc_softc_t *enc, struct enc_fsm_state *state,
 		if (length > 0) {
 			elmpriv = element->elm_private;
 			elmpriv->descr_len = length;
-			elmpriv->descr = &buf[offset];
+			elmpriv->descr = ses_sanitize_elm_desc(&buf[offset],
+			    &elmpriv->descr_len);
 		}
 
 		/* skip over the descriptor itself */

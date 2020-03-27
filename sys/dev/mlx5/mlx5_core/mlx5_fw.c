@@ -227,6 +227,12 @@ int mlx5_query_hca_caps(struct mlx5_core_dev *dev)
 			return err;
 	}
 
+	if (MLX5_CAP_GEN(dev, tls)) {
+		err = mlx5_core_get_caps(dev, MLX5_CAP_TLS);
+		if (err)
+			return err;
+	}
+
 	err = mlx5_core_query_special_contexts(dev);
 	if (err)
 		return err;
@@ -324,7 +330,7 @@ int mlx5_cmd_fast_teardown_hca(struct mlx5_core_dev *dev)
 	} while (!time_after(jiffies, end));
 
 	if (mlx5_get_nic_state(dev) != MLX5_NIC_IFC_DISABLED) {
-		dev_err(&dev->pdev->dev, "NIC IFC still %d after %ums.\n",
+		mlx5_core_err(dev, "NIC IFC still %d after %ums.\n",
 			mlx5_get_nic_state(dev), delay_ms);
 		return -EIO;
 	}

@@ -54,9 +54,7 @@ __FBSDID("$FreeBSD$");
  * A number of features supported by the lan78xx are not yet implemented in
  * this driver:
  *
- * - RX/TX checksum offloading: Nothing has been implemented yet for
- *   TX checksumming. RX checksumming works with ICMP messages, but is broken
- *   for TCP/UDP packets.
+ * - TX checksum offloading: Nothing has been implemented yet.
  * - Direct address translation filtering: Implemented but untested.
  * - VLAN tag removal.
  * - Support for USB interrupt endpoints.
@@ -87,6 +85,10 @@ __FBSDID("$FreeBSD$");
 
 #include <net/if.h>
 #include <net/if_var.h>
+#include <net/if_media.h>
+
+#include <dev/mii/mii.h>
+#include <dev/mii/miivar.h>
 
 #include <netinet/in.h>
 #include <netinet/ip.h>
@@ -113,18 +115,19 @@ __FBSDID("$FreeBSD$");
 
 #include <dev/usb/net/if_mugereg.h>
 
+#include "miibus_if.h"
+
 #ifdef USB_DEBUG
 static int muge_debug = 0;
 
-SYSCTL_NODE(_hw_usb, OID_AUTO, muge, CTLFLAG_RW, 0,
+SYSCTL_NODE(_hw_usb, OID_AUTO, muge, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
     "Microchip LAN78xx USB-GigE");
 SYSCTL_INT(_hw_usb_muge, OID_AUTO, debug, CTLFLAG_RWTUN, &muge_debug, 0,
     "Debug level");
 #endif
 
-#define MUGE_DEFAULT_RX_CSUM_ENABLE (false)
 #define MUGE_DEFAULT_TX_CSUM_ENABLE (false)
-#define MUGE_DEFAULT_TSO_CSUM_ENABLE (false)
+#define MUGE_DEFAULT_TSO_ENABLE (false)
 
 /* Supported Vendor and Product IDs. */
 static const struct usb_device_id lan78xx_devs[] = {
@@ -150,9 +153,6 @@ do { \
 
 #define muge_err_printf(sc, fmt, args...) \
 	device_printf((sc)->sc_ue.ue_dev, "error: " fmt, ##args)
-
-#define ETHER_IS_ZERO(addr) \
-	(!(addr[0] | addr[1] | addr[2] | addr[3] | addr[4] | addr[5]))
 
 #define ETHER_IS_VALID(addr) \
 	(!ETHER_IS_MULTICAST(addr) && !ETHER_IS_ZERO(addr))
@@ -389,9 +389,10 @@ lan78xx_eeprom_read_raw(struct muge_softc *sc, uint16_t off, uint8_t *buf,
 {
 	usb_ticks_t start_ticks;
 	const usb_ticks_t max_ticks = USB_MS_TO_TICKS(1000);
-	int err, locked;
+	int err;
 	uint32_t val, saved;
 	uint16_t i;
+	bool locked;
 
 	locked = mtx_owned(&sc->sc_mtx); /* XXX */
 	if (!locked)
@@ -483,9 +484,10 @@ static int
 lan78xx_otp_read_raw(struct muge_softc *sc, uint16_t off, uint8_t *buf,
     uint16_t buflen)
 {
-	int locked, err;
+	int err;
 	uint32_t val;
 	uint16_t i;
+	bool locked;
 	locked = mtx_owned(&sc->sc_mtx);
 	if (!locked)
 		MUGE_LOCK(sc);
@@ -656,11 +658,11 @@ lan78xx_set_rx_max_frame_length(struct muge_softc *sc, int size)
  *	0 is returned.
  */
 static int
-lan78xx_miibus_readreg(device_t dev, int phy, int reg) {
-
+lan78xx_miibus_readreg(device_t dev, int phy, int reg)
+{
 	struct muge_softc *sc = device_get_softc(dev);
-	int locked;
 	uint32_t addr, val;
+	bool locked;
 
 	val = 0;
 	locked = mtx_owned(&sc->sc_mtx);
@@ -712,8 +714,8 @@ static int
 lan78xx_miibus_writereg(device_t dev, int phy, int reg, int val)
 {
 	struct muge_softc *sc = device_get_softc(dev);
-	int locked;
 	uint32_t addr;
+	bool locked;
 
 	if (sc->sc_phyno != phy)
 		return (0);
@@ -760,10 +762,10 @@ lan78xx_miibus_statchg(device_t dev)
 	struct muge_softc *sc = device_get_softc(dev);
 	struct mii_data *mii = uether_getmii(&sc->sc_ue);
 	struct ifnet *ifp;
-	int locked;
 	int err;
 	uint32_t flow = 0;
 	uint32_t fct_flow = 0;
+	bool locked;
 
 	locked = mtx_owned(&sc->sc_mtx);
 	if (!locked)
@@ -1178,7 +1180,6 @@ muge_bulk_read_callback(struct usb_xfer *xfer, usb_error_t error)
 
 	switch (USB_GET_STATE(xfer)) {
 	case USB_ST_TRANSFERRED:
-
 		/*
 		 * There is always a zero length frame after bringing the
 		 * interface up.
@@ -1195,7 +1196,6 @@ muge_bulk_read_callback(struct usb_xfer *xfer, usb_error_t error)
 		off = 0;
 
 		while (off < actlen) {
-
 			/* The frame header is aligned on a 4 byte boundary. */
 			off = ((off + 0x3) & ~0x3);
 
@@ -1206,14 +1206,12 @@ muge_bulk_read_callback(struct usb_xfer *xfer, usb_error_t error)
 			off += (sizeof(rx_cmd_a));
 			rx_cmd_a = le32toh(rx_cmd_a);
 
-
 			/* Extract RX CMD B. */
 			if (off + sizeof(rx_cmd_b) > actlen)
 				goto tr_setup;
 			usbd_copy_out(pc, off, &rx_cmd_b, sizeof(rx_cmd_b));
 			off += (sizeof(rx_cmd_b));
 			rx_cmd_b = le32toh(rx_cmd_b);
-
 
 			/* Extract RX CMD C. */
 			if (off + sizeof(rx_cmd_c) > actlen)
@@ -1259,7 +1257,7 @@ muge_bulk_read_callback(struct usb_xfer *xfer, usb_error_t error)
 				 * Check if RX checksums are computed, and
 				 * offload them
 				 */
-				if ((ifp->if_capabilities & IFCAP_RXCSUM) &&
+				if ((ifp->if_capenable & IFCAP_RXCSUM) &&
 				    !(rx_cmd_a & RX_CMD_A_ICSM_)) {
 					struct ether_header *eh;
 					eh = mtod(m, struct ether_header *);
@@ -1282,7 +1280,8 @@ muge_bulk_read_callback(struct usb_xfer *xfer, usb_error_t error)
 					 */
 					if (pktlen > ETHER_MIN_LEN) {
 						m->m_pkthdr.csum_flags |=
-						    CSUM_DATA_VALID;
+						    CSUM_DATA_VALID |
+						    CSUM_PSEUDO_HDR;
 
 						/*
 						 * Copy the checksum from the
@@ -1301,7 +1300,7 @@ muge_bulk_read_callback(struct usb_xfer *xfer, usb_error_t error)
 						 * be in host network order.
 						 */
 						m->m_pkthdr.csum_data =
-						   ntohs(m->m_pkthdr.csum_data);
+						    ntohs(0xffff);
 
 						muge_dbg_printf(sc,
 						    "RX checksum offloaded (0x%04x)\n",
@@ -1324,7 +1323,6 @@ muge_bulk_read_callback(struct usb_xfer *xfer, usb_error_t error)
 			 */
 			off += pktlen;
 		}
-
 		/* FALLTHROUGH */
 	case USB_ST_SETUP:
 tr_setup:
@@ -1332,7 +1330,6 @@ tr_setup:
 		usbd_transfer_submit(xfer);
 		uether_rxflush(ue);
 		return;
-
 	default:
 		if (error != USB_ERR_CANCELLED) {
 			muge_warn_printf(sc, "bulk read error, %s\n",
@@ -1373,7 +1370,7 @@ muge_bulk_write_callback(struct usb_xfer *xfer, usb_error_t error)
 		muge_dbg_printf(sc, "USB TRANSFER status: USB_ST_SETUP\n");
 tr_setup:
 		if ((sc->sc_flags & MUGE_FLAG_LINK) == 0 ||
-			(ifp->if_drv_flags & IFF_DRV_OACTIVE) != 0) {
+		    (ifp->if_drv_flags & IFF_DRV_OACTIVE) != 0) {
 			muge_dbg_printf(sc,
 			    "sc->sc_flags & MUGE_FLAG_LINK: %d\n",
 			    (sc->sc_flags & MUGE_FLAG_LINK));
@@ -1388,8 +1385,9 @@ tr_setup:
 			 */
 			return;
 		}
-		for (nframes = 0; nframes < 16 &&
-		    !IFQ_DRV_IS_EMPTY(&ifp->if_snd); nframes++) {
+		for (nframes = 0;
+		     nframes < 16 && !IFQ_DRV_IS_EMPTY(&ifp->if_snd);
+		     nframes++) {
 			IFQ_DRV_DEQUEUE(&ifp->if_snd, m);
 			if (m == NULL)
 				break;
@@ -1612,8 +1610,7 @@ muge_attach_post_sub(struct usb_ether *ue)
 	 */
 	ifp->if_capabilities |= IFCAP_VLAN_MTU;
 	ifp->if_hwassist = 0;
-	if (MUGE_DEFAULT_RX_CSUM_ENABLE)
-		ifp->if_capabilities |= IFCAP_RXCSUM;
+	ifp->if_capabilities |= IFCAP_RXCSUM;
 
 	if (MUGE_DEFAULT_TX_CSUM_ENABLE)
 		ifp->if_capabilities |= IFCAP_TXCSUM;
@@ -1623,7 +1620,7 @@ muge_attach_post_sub(struct usb_ether *ue)
 	 * here, that's something related to socket buffers used in Linux.
 	 * FreeBSD doesn't have that as an interface feature.
 	 */
-	if (MUGE_DEFAULT_TSO_CSUM_ENABLE)
+	if (MUGE_DEFAULT_TSO_ENABLE)
 		ifp->if_capabilities |= IFCAP_TSO4 | IFCAP_TSO6;
 
 #if 0
@@ -1636,9 +1633,9 @@ muge_attach_post_sub(struct usb_ether *ue)
 	ifp->if_capenable = ifp->if_capabilities;
 
 	mtx_lock(&Giant);
-	error = mii_attach(ue->ue_dev, &ue->ue_miibus, ifp,
-		uether_ifmedia_upd, ue->ue_methods->ue_mii_sts,
-		BMSR_DEFCAPMASK, sc->sc_phyno, MII_OFFSET_ANY, 0);
+	error = mii_attach(ue->ue_dev, &ue->ue_miibus, ifp, uether_ifmedia_upd,
+	    ue->ue_methods->ue_mii_sts, BMSR_DEFCAPMASK, sc->sc_phyno,
+	    MII_OFFSET_ANY, 0);
 	mtx_unlock(&Giant);
 
 	return (0);
@@ -1696,7 +1693,7 @@ muge_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 
 		/* Modify the RX CSUM enable bits. */
 		if ((mask & IFCAP_RXCSUM) != 0 &&
-			(ifp->if_capabilities & IFCAP_RXCSUM) != 0) {
+		    (ifp->if_capabilities & IFCAP_RXCSUM) != 0) {
 			ifp->if_capenable ^= IFCAP_RXCSUM;
 
 			if (ifp->if_drv_flags & IFF_DRV_RUNNING) {
@@ -1708,7 +1705,6 @@ muge_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 		MUGE_UNLOCK(sc);
 		if (reinit)
 			uether_init(ue);
-
 	} else {
 		rc = uether_ioctl(ifp, cmd, data);
 	}
@@ -1856,6 +1852,24 @@ muge_hash(uint8_t addr[ETHER_ADDR_LEN])
 	return (ether_crc32_be(addr, ETHER_ADDR_LEN) >> 23) & 0x1ff;
 }
 
+static u_int
+muge_hash_maddr(void *arg, struct sockaddr_dl *sdl, u_int cnt)
+{
+	struct muge_softc *sc = arg;
+	uint32_t bitnum;
+
+	/* First fill up the perfect address table. */
+	if (cnt < 32 /* XXX */)
+		muge_set_addr_filter(sc, cnt + 1, LLADDR(sdl));
+	else {
+		bitnum = muge_hash(LLADDR(sdl));
+		sc->sc_mchash_table[bitnum / 32] |= (1 << (bitnum % 32));
+		sc->sc_rfe_ctl |= ETH_RFE_CTL_MCAST_HASH_;
+	}
+
+	return (1);
+}
+
 /**
  *	muge_setmulti - Setup multicast
  *	@ue: usb ethernet device context
@@ -1871,13 +1885,12 @@ muge_setmulti(struct usb_ether *ue)
 {
 	struct muge_softc *sc = uether_getsc(ue);
 	struct ifnet *ifp = uether_getifp(ue);
-	uint8_t i, *addr;
-	struct ifmultiaddr *ifma;
+	uint8_t i;
 
 	MUGE_LOCK_ASSERT(sc, MA_OWNED);
 
 	sc->sc_rfe_ctl &= ~(ETH_RFE_CTL_UCAST_EN_ | ETH_RFE_CTL_MCAST_EN_ |
-		ETH_RFE_CTL_DA_PERFECT_ | ETH_RFE_CTL_MCAST_HASH_);
+	    ETH_RFE_CTL_DA_PERFECT_ | ETH_RFE_CTL_MCAST_HASH_);
 
 	/* Initialize hash filter table. */
 	for (i = 0; i < ETH_DP_SEL_VHF_HASH_LEN; i++)
@@ -1885,8 +1898,7 @@ muge_setmulti(struct usb_ether *ue)
 
 	/* Initialize perfect filter table. */
 	for (i = 1; i < MUGE_NUM_PFILTER_ADDRS_; i++) {
-		sc->sc_pfilter_table[i][0] =
-		sc->sc_pfilter_table[i][1] = 0;
+		sc->sc_pfilter_table[i][0] = sc->sc_pfilter_table[i][1] = 0;
 	}
 
 	sc->sc_rfe_ctl |= ETH_RFE_CTL_BCAST_EN_;
@@ -1894,32 +1906,11 @@ muge_setmulti(struct usb_ether *ue)
 	if (ifp->if_flags & IFF_PROMISC) {
 		muge_dbg_printf(sc, "promiscuous mode enabled\n");
 		sc->sc_rfe_ctl |= ETH_RFE_CTL_MCAST_EN_ | ETH_RFE_CTL_UCAST_EN_;
-	} else if (ifp->if_flags & IFF_ALLMULTI){
+	} else if (ifp->if_flags & IFF_ALLMULTI) {
 		muge_dbg_printf(sc, "receive all multicast enabled\n");
 		sc->sc_rfe_ctl |= ETH_RFE_CTL_MCAST_EN_;
 	} else {
-		/* Lock the mac address list before hashing each of them. */
-		if_maddr_rlock(ifp);
-		if (!CK_STAILQ_EMPTY(&ifp->if_multiaddrs)) {
-			i = 1;
-			CK_STAILQ_FOREACH(ifma, &ifp->if_multiaddrs,
-			    ifma_link) {
-				/* First fill up the perfect address table. */
-				addr = LLADDR((struct sockaddr_dl *)
-				    ifma->ifma_addr);
-				if (i < 33 /* XXX */) {
-					muge_set_addr_filter(sc, i, addr);
-				} else {
-					uint32_t bitnum = muge_hash(addr);
-					sc->sc_mchash_table[bitnum / 32] |=
-					    (1 << (bitnum % 32));
-					sc->sc_rfe_ctl |=
-					    ETH_RFE_CTL_MCAST_HASH_;
-				}
-				i++;
-			}
-		}
-		if_maddr_runlock(ifp);
+		if_foreach_llmaddr(ifp, muge_hash_maddr, sc);
 		muge_multicast_write(sc);
 	}
 	lan78xx_write_reg(sc, ETH_RFE_CTL, sc->sc_rfe_ctl);
@@ -1961,7 +1952,8 @@ muge_setpromisc(struct usb_ether *ue)
  *	RETURNS:
  *	Returns 0 on success or a negative error code.
  */
-static int muge_sethwcsum(struct muge_softc *sc)
+static int
+muge_sethwcsum(struct muge_softc *sc)
 {
 	struct ifnet *ifp = uether_getifp(&sc->sc_ue);
 	int err;
@@ -1971,7 +1963,7 @@ static int muge_sethwcsum(struct muge_softc *sc)
 
 	MUGE_LOCK_ASSERT(sc, MA_OWNED);
 
-	if (ifp->if_capabilities & IFCAP_RXCSUM) {
+	if (ifp->if_capenable & IFCAP_RXCSUM) {
 		sc->sc_rfe_ctl |= ETH_RFE_CTL_IGMP_COE_ | ETH_RFE_CTL_ICMP_COE_;
 		sc->sc_rfe_ctl |= ETH_RFE_CTL_TCPUDP_COE_ | ETH_RFE_CTL_IP_COE_;
 	} else {

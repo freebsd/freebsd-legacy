@@ -70,6 +70,7 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm_kern.h>
 #include <vm/vm_object.h>
 #include <vm/vm_page.h>
+#include <vm/vm_phys.h>
 #include <vm/pmap.h>
 #include <vm/vm_map.h>
 #include <vm/vm_pager.h>
@@ -140,9 +141,7 @@ char pcpu_space[MAXCPU][PAGE_SIZE * 2] \
 
 struct pcpu *pcpup = (struct pcpu *)pcpu_space;
 
-vm_paddr_t phys_avail[PHYS_AVAIL_ENTRIES + 2];
-vm_paddr_t physmem_desc[PHYS_AVAIL_ENTRIES + 2];
-vm_paddr_t dump_avail[PHYS_AVAIL_ENTRIES + 2];
+vm_paddr_t physmem_desc[PHYS_AVAIL_COUNT];
 
 #ifdef UNIMPLEMENTED
 struct platform platform;
@@ -517,9 +516,9 @@ spinlock_enter(void)
 		intr = intr_disable();
 		td->td_md.md_spinlock_count = 1;
 		td->td_md.md_saved_intr = intr;
+		critical_enter();
 	} else
 		td->td_md.md_spinlock_count++;
-	critical_enter();
 }
 
 void
@@ -529,11 +528,12 @@ spinlock_exit(void)
 	register_t intr;
 
 	td = curthread;
-	critical_exit();
 	intr = td->td_md.md_saved_intr;
 	td->td_md.md_spinlock_count--;
-	if (td->td_md.md_spinlock_count == 0)
+	if (td->td_md.md_spinlock_count == 0) {
+		critical_exit();
 		intr_restore(intr);
+	}
 }
 
 /*

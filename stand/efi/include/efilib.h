@@ -84,6 +84,7 @@ int efi_handle_update_dev(EFI_HANDLE, struct devsw *, int, uint64_t);
 
 EFI_DEVICE_PATH *efi_lookup_image_devpath(EFI_HANDLE);
 EFI_DEVICE_PATH *efi_lookup_devpath(EFI_HANDLE);
+void efi_close_devpath(EFI_HANDLE);
 EFI_HANDLE efi_devpath_handle(EFI_DEVICE_PATH *);
 EFI_DEVICE_PATH *efi_devpath_last_node(EFI_DEVICE_PATH *);
 EFI_DEVICE_PATH *efi_devpath_trim(EFI_DEVICE_PATH *);
@@ -106,6 +107,8 @@ EFI_STATUS errno_to_efi_status(int errno);
 void efi_time_init(void);
 void efi_time_fini(void);
 
+int parse_uefi_con_out(void);
+bool efi_cons_update_mode(void);
 EFI_STATUS efi_main(EFI_HANDLE Ximage, EFI_SYSTEM_TABLE* Xsystab);
 
 EFI_STATUS main(int argc, CHAR16 *argv[]);

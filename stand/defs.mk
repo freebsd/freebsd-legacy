@@ -29,16 +29,22 @@ FDTSRC=		${BOOTSRC}/fdt
 FICLSRC=	${BOOTSRC}/ficl
 LDRSRC=		${BOOTSRC}/common
 LIBLUASRC=	${BOOTSRC}/liblua
+LIBOFWSRC=	${BOOTSRC}/libofw
 LUASRC=		${SRCTOP}/contrib/lua/src
 SASRC=		${BOOTSRC}/libsa
 SYSDIR=		${SRCTOP}/sys
 UBOOTSRC=	${BOOTSRC}/uboot
 ZFSSRC=		${SASRC}/zfs
+LIBCSRC=	${SRCTOP}/lib/libc
 
 BOOTOBJ=	${OBJTOP}/stand
 
 # BINDIR is where we install
 BINDIR?=	/boot
+
+# LUAPATH is where we search for and install lua scripts.
+LUAPATH?=	/boot/lua
+FLUASRC?=	${SRCTOP}/libexec/flua
 
 LIBSA=		${BOOTOBJ}/libsa/libsa.a
 .if ${MACHINE} == "i386"
@@ -65,6 +71,7 @@ CFLAGS+=	-Ddouble=jagged-little-pill -Dfloat=floaty-mcfloatface
 # Experience has shown that problems arise between ~520k to ~530k.
 CFLAGS.clang+=	-Oz
 CFLAGS.gcc+=	-Os
+CFLAGS+=	-ffunction-sections -fdata-sections
 .endif
 
 # GELI Support, with backward compat hooks (mostly)
@@ -94,6 +101,10 @@ CFLAGS+= -DLOADER_DISK_SUPPORT
 # or powerpc64.
 .if ${MACHINE_ARCH} == "powerpc64"
 CFLAGS+=	-m32 -mcpu=powerpc
+# Use ld.bfd to workaround ld.lld issues on PowerPC 32 bit
+.if "${COMPILER_TYPE}" == "clang" && "${LINKER_TYPE}" == "lld"
+CFLAGS+=	-fuse-ld=${LD_BFD}
+.endif
 .endif
 
 # For amd64, there's a bit of mixed bag. Some of the tree (i386, lib*32) is
@@ -180,15 +191,23 @@ CFLAGS+=-I.
 
 all: ${PROG}
 
+CLEANFILES+= teken_state.h
+teken.c: teken_state.h
+
+teken_state.h: ${SYSDIR}/teken/sequences
+	awk -f ${SYSDIR}/teken/gensequences \
+		${SYSDIR}/teken/sequences > teken_state.h
+
 .if !defined(NO_OBJ)
-_ILINKS=machine
+_ILINKS=include/machine
 .if ${MACHINE} != ${MACHINE_CPUARCH} && ${MACHINE} != "arm64"
-_ILINKS+=${MACHINE_CPUARCH}
+_ILINKS+=include/${MACHINE_CPUARCH}
 .endif
 .if ${MACHINE_CPUARCH} == "i386" || ${MACHINE_CPUARCH} == "amd64"
-_ILINKS+=x86
+_ILINKS+=include/x86
 .endif
-CLEANFILES+=${_ILINKS}
+CFLAGS+= -Iinclude
+CLEANDIRS+= include
 
 beforedepend: ${_ILINKS}
 beforebuild: ${_ILINKS}
@@ -203,8 +222,8 @@ ${OBJS}:       ${_link}
 
 .NOPATH: ${_ILINKS}
 
-${_ILINKS}:
-	@case ${.TARGET} in \
+${_ILINKS}: .NOMETA
+	@case ${.TARGET:T} in \
 	machine) \
 		if [ ${DO32:U0} -eq 0 ]; then \
 			path=${SYSDIR}/${MACHINE}/include ; \
@@ -214,8 +233,11 @@ ${_ILINKS}:
 	*) \
 		path=${SYSDIR}/${.TARGET:T}/include ;; \
 	esac ; \
+	case ${.TARGET} in \
+	*/*) mkdir -p ${.TARGET:H};; \
+	esac ; \
 	path=`(cd $$path && /bin/pwd)` ; \
-	${ECHO} ${.TARGET:T} "->" $$path ; \
-	ln -fhs $$path ${.TARGET:T}
+	${ECHO} ${.TARGET} "->" $$path ; \
+	ln -fhs $$path ${.TARGET}
 .endif # !NO_OBJ
 .endif # __BOOT_DEFS_MK__

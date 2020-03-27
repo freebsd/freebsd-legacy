@@ -1,5 +1,5 @@
 /*
- * Copyright 1999-2018 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 1999-2019 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the OpenSSL license (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -12,7 +12,7 @@
 #include "internal/numbers.h"
 #include <openssl/x509v3.h>
 #include <openssl/x509_vfy.h>
-#include "internal/x509_int.h"
+#include "crypto/x509.h"
 #include "internal/tsan_assist.h"
 
 static void x509v3_cache_extensions(X509 *x);
@@ -869,6 +869,20 @@ const ASN1_OCTET_STRING *X509_get0_authority_key_id(X509 *x)
     /* Call for side-effect of computing hash and caching extensions */
     X509_check_purpose(x, -1, -1);
     return (x->akid != NULL ? x->akid->keyid : NULL);
+}
+
+const GENERAL_NAMES *X509_get0_authority_issuer(X509 *x)
+{
+    /* Call for side-effect of computing hash and caching extensions */
+    X509_check_purpose(x, -1, -1);
+    return (x->akid != NULL ? x->akid->issuer : NULL);
+}
+
+const ASN1_INTEGER *X509_get0_authority_serial(X509 *x)
+{
+    /* Call for side-effect of computing hash and caching extensions */
+    X509_check_purpose(x, -1, -1);
+    return (x->akid != NULL ? x->akid->serial : NULL);
 }
 
 long X509_get_pathlen(X509 *x)

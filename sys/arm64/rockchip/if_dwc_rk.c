@@ -2,7 +2,6 @@
  * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
  *
  * Copyright (c) 2018 Emmanuel Vadot <manu@freebsd.org>
- * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -65,6 +64,13 @@ __FBSDID("$FreeBSD$");
 #define	RK3328_GRF_MACPHY_CON3		0x0B0C
 #define	RK3328_GRF_MACPHY_STATUS	0x0B10
 
+static struct ofw_compat_data compat_data[] = {
+	{"rockchip,rk3288-gmac", 1},
+	{"rockchip,rk3328-gmac", 1},
+	{"rockchip,rk3399-gmac", 1},
+	{NULL,			 0}
+};
+
 #ifdef notyet
 static void
 rk3328_set_delays(struct syscon *grf, phandle_t node)
@@ -117,8 +123,7 @@ if_dwc_rk_probe(device_t dev)
 
 	if (!ofw_bus_status_okay(dev))
 		return (ENXIO);
-	if (!(ofw_bus_is_compatible(dev, "rockchip,rk3328-gmac") ||
-	      ofw_bus_is_compatible(dev, "rockchip,rk3399-gmac")))
+	if (ofw_bus_search_compatible(dev, compat_data)->ocd_data == 0)
 		return (ENXIO);
 	device_set_desc(dev, "Rockchip Gigabit Ethernet Controller");
 

@@ -72,8 +72,6 @@ __FBSDID("$FreeBSD$");
 
 boolean_t ofw_cpu_reg(phandle_t node, u_int, cell_t *);
 
-extern struct pcpu __pcpu[];
-
 uint32_t __riscv_boot_ap[MAXCPU];
 
 static enum {
@@ -89,7 +87,6 @@ static device_attach_t riscv64_cpu_attach;
 
 static int ipi_handler(void *);
 
-struct mtx ap_boot_mtx;
 struct pcb stoppcbs[MAXCPU];
 
 extern uint32_t boot_hart;
@@ -100,13 +97,19 @@ static uint32_t cpu_reg[MAXCPU][2];
 #endif
 static device_t cpu_list[MAXCPU];
 
-void mpentry(unsigned long cpuid);
 void init_secondary(uint64_t);
 
-uint8_t secondary_stacks[MAXCPU][PAGE_SIZE * KSTACK_PAGES] __aligned(16);
+static struct mtx ap_boot_mtx;
+
+/* Stacks for AP initialization, discarded once idle threads are started. */
+void *bootstack;
+static void *bootstacks[MAXCPU];
+
+/* Count of started APs, used to synchronize access to bootstack. */
+static volatile int aps_started;
 
 /* Set to 1 once we're ready to let the APs out of the pen. */
-volatile int aps_ready = 0;
+static volatile int aps_ready;
 
 /* Temporary variables for init_secondary()  */
 void *dpcpu[MAXCPU - 1];
@@ -187,7 +190,7 @@ static void
 release_aps(void *dummy __unused)
 {
 	cpuset_t mask;
-	int cpu, i;
+	int i;
 
 	if (mp_ncpus == 1)
 		return;
@@ -206,13 +209,8 @@ release_aps(void *dummy __unused)
 	sbi_send_ipi(mask.__bits);
 
 	for (i = 0; i < 2000; i++) {
-		if (smp_started) {
-			for (cpu = 0; cpu <= mp_maxid; cpu++) {
-				if (CPU_ABSENT(cpu))
-					continue;
-			}
+		if (smp_started)
 			return;
-		}
 		DELAY(1000);
 	}
 
@@ -240,14 +238,14 @@ init_secondary(uint64_t hart)
 	csr_set(sie, SIE_SSIE);
 	csr_set(sip, SIE_SSIE);
 
-	/* Spin until the BSP releases the APs */
-	while (!aps_ready)
+	/* Signal the BSP and spin until it has released all APs. */
+	atomic_add_int(&aps_started, 1);
+	while (!atomic_load_int(&aps_ready))
 		__asm __volatile("wfi");
 
 	/* Initialize curthread */
 	KASSERT(PCPU_GET(idlethread) != NULL, ("no idle thread"));
 	pcpup->pc_curthread = pcpup->pc_idlethread;
-	pcpup->pc_curpcb = pcpup->pc_idlethread->td_pcb;
 
 	/*
 	 * Identify current CPU. This is necessary to setup
@@ -259,8 +257,10 @@ init_secondary(uint64_t hart)
 	/* Enable software interrupts */
 	riscv_unmask_ipi();
 
+#ifndef EARLY_AP_STARTUP
 	/* Start per-CPU event timers. */
 	cpu_initclocks_ap();
+#endif
 
 	/* Enable external (PLIC) interrupts */
 	csr_set(sie, SIE_SEIE);
@@ -279,12 +279,35 @@ init_secondary(uint64_t hart)
 
 	mtx_unlock_spin(&ap_boot_mtx);
 
+	/*
+	 * Assert that smp_after_idle_runnable condition is reasonable.
+	 */
+	MPASS(PCPU_GET(curpcb) == NULL);
+
 	/* Enter the scheduler */
 	sched_throw(NULL);
 
 	panic("scheduler returned us to init_secondary");
 	/* NOTREACHED */
 }
+
+static void
+smp_after_idle_runnable(void *arg __unused)
+{
+	struct pcpu *pc;
+	int cpu;
+
+	for (cpu = 1; cpu < mp_ncpus; cpu++) {
+		if (bootstacks[cpu] != NULL) {
+			pc = pcpu_find(cpu);
+			while (atomic_load_ptr(&pc->pc_curpcb) == NULL)
+				cpu_spinwait();
+			kmem_free((vm_offset_t)bootstacks[cpu], PAGE_SIZE);
+		}
+	}
+}
+SYSINIT(smp_after_idle_runnable, SI_SUB_SMP, SI_ORDER_ANY,
+    smp_after_idle_runnable, NULL);
 
 static int
 ipi_handler(void *arg)
@@ -378,6 +401,7 @@ cpu_init_fdt(u_int id, phandle_t node, u_int addr_size, pcell_t *reg)
 	struct pcpu *pcpup;
 	uint64_t hart;
 	u_int cpuid;
+	int naps;
 
 	/* Check if this hart supports MMU. */
 	if (OF_getproplen(node, "mmu-type") < 0)
@@ -424,8 +448,17 @@ cpu_init_fdt(u_int id, phandle_t node, u_int addr_size, pcell_t *reg)
 	dpcpu[cpuid - 1] = (void *)kmem_malloc(DPCPU_SIZE, M_WAITOK | M_ZERO);
 	dpcpu_init(dpcpu[cpuid - 1], cpuid);
 
+	bootstacks[cpuid] = (void *)kmem_malloc(PAGE_SIZE, M_WAITOK | M_ZERO);
+
+	naps = atomic_load_int(&aps_started);
+	bootstack = (char *)bootstacks[cpuid] + PAGE_SIZE;
+
 	printf("Starting CPU %u (hart %lx)\n", cpuid, hart);
-	__riscv_boot_ap[hart] = 1;
+	atomic_store_32(&__riscv_boot_ap[hart], 1);
+
+	/* Wait for the AP to switch to its boot stack. */
+	while (atomic_load_int(&aps_started) < naps + 1)
+		cpu_spinwait();
 
 	CPU_SET(cpuid, &all_cpus);
 	CPU_SET(hart, &all_harts);

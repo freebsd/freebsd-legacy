@@ -26,6 +26,8 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
+ *
+ * $FreeBSD$
  */
 
 extern "C" {
@@ -153,14 +155,15 @@ void sigint_handler(int __unused sig) {
 	// Don't do anything except interrupt the daemon's read(2) call
 }
 
-void MockFS::debug_request(const mockfs_buf_in &in)
+void MockFS::debug_request(const mockfs_buf_in &in, ssize_t buflen)
 {
 	printf("%-11s ino=%2" PRIu64, opcode2opname(in.header.opcode),
 		in.header.nodeid);
 	if (verbosity > 1) {
-		printf(" uid=%5u gid=%5u pid=%5u unique=%" PRIu64 " len=%u",
+		printf(" uid=%5u gid=%5u pid=%5u unique=%" PRIu64 " len=%u"
+			" buflen=%zd",
 			in.header.uid, in.header.gid, in.header.pid,
-			in.header.unique, in.header.len);
+			in.header.unique, in.header.len, buflen);
 	}
 	switch (in.header.opcode) {
 		const char *name, *value;
@@ -201,6 +204,9 @@ void MockFS::debug_request(const mockfs_buf_in &in)
 			break;
 		case FUSE_LINK:
 			printf(" oldnodeid=%" PRIu64, in.body.link.oldnodeid);
+			break;
+		case FUSE_LISTXATTR:
+			printf(" size=%" PRIu32, in.body.listxattr.size);
 			break;
 		case FUSE_LOOKUP:
 			printf(" %s", in.body.lookup);
@@ -465,11 +471,191 @@ MockFS::~MockFS() {
 		close(m_kq);
 }
 
+void MockFS::audit_request(const mockfs_buf_in &in, ssize_t buflen) {
+	uint32_t inlen = in.header.len;
+	size_t fih = sizeof(in.header);
+	switch (in.header.opcode) {
+	case FUSE_LOOKUP:
+	case FUSE_RMDIR:
+	case FUSE_SYMLINK:
+	case FUSE_UNLINK:
+		EXPECT_GT(inlen, fih) << "Missing request filename";
+		// No redundant information for checking buflen
+		break;
+	case FUSE_FORGET:
+		EXPECT_EQ(inlen, fih + sizeof(in.body.forget));
+		EXPECT_EQ((size_t)buflen, inlen);
+		break;
+	case FUSE_GETATTR:
+		EXPECT_EQ(inlen, fih + sizeof(in.body.getattr));
+		EXPECT_EQ((size_t)buflen, inlen);
+		break;
+	case FUSE_SETATTR:
+		EXPECT_EQ(inlen, fih + sizeof(in.body.setattr));
+		EXPECT_EQ((size_t)buflen, inlen);
+		break;
+	case FUSE_READLINK:
+		EXPECT_EQ(inlen, fih) << "Unexpected request body";
+		EXPECT_EQ((size_t)buflen, inlen);
+		break;
+	case FUSE_MKNOD:
+		{
+			size_t s;
+			if (m_kernel_minor_version >= 12)
+				s = sizeof(in.body.mknod);
+			else
+				s = FUSE_COMPAT_MKNOD_IN_SIZE;
+			EXPECT_GE(inlen, fih + s) << "Missing request body";
+			EXPECT_GT(inlen, fih + s) << "Missing request filename";
+			// No redundant information for checking buflen
+			break;
+		}
+	case FUSE_MKDIR:
+		EXPECT_GE(inlen, fih + sizeof(in.body.mkdir)) <<
+			"Missing request body";
+		EXPECT_GT(inlen, fih + sizeof(in.body.mkdir)) <<
+			"Missing request filename";
+		// No redundant information for checking buflen
+		break;
+	case FUSE_RENAME:
+		EXPECT_GE(inlen, fih + sizeof(in.body.rename)) <<
+			"Missing request body";
+		EXPECT_GT(inlen, fih + sizeof(in.body.rename)) <<
+			"Missing request filename";
+		// No redundant information for checking buflen
+		break;
+	case FUSE_LINK:
+		EXPECT_GE(inlen, fih + sizeof(in.body.link)) <<
+			"Missing request body";
+		EXPECT_GT(inlen, fih + sizeof(in.body.link)) <<
+			"Missing request filename";
+		// No redundant information for checking buflen
+		break;
+	case FUSE_OPEN:
+		EXPECT_EQ(inlen, fih + sizeof(in.body.open));
+		EXPECT_EQ((size_t)buflen, inlen);
+		break;
+	case FUSE_READ:
+		EXPECT_EQ(inlen, fih + sizeof(in.body.read));
+		EXPECT_EQ((size_t)buflen, inlen);
+		break;
+	case FUSE_WRITE:
+		{
+			size_t s;
+
+			if (m_kernel_minor_version >= 9)
+				s = sizeof(in.body.write);
+			else
+				s = FUSE_COMPAT_WRITE_IN_SIZE;
+			// I suppose a 0-byte write should be allowed
+			EXPECT_GE(inlen, fih + s) << "Missing request body";
+			EXPECT_EQ((size_t)buflen, fih + s + in.body.write.size);
+			break;
+		}
+	case FUSE_DESTROY:
+	case FUSE_STATFS:
+		EXPECT_EQ(inlen, fih);
+		EXPECT_EQ((size_t)buflen, inlen);
+		break;
+	case FUSE_RELEASE:
+		EXPECT_EQ(inlen, fih + sizeof(in.body.release));
+		EXPECT_EQ((size_t)buflen, inlen);
+		break;
+	case FUSE_FSYNC:
+	case FUSE_FSYNCDIR:
+		EXPECT_EQ(inlen, fih + sizeof(in.body.fsync));
+		EXPECT_EQ((size_t)buflen, inlen);
+		break;
+	case FUSE_SETXATTR:
+		EXPECT_GE(inlen, fih + sizeof(in.body.setxattr)) <<
+			"Missing request body";
+		EXPECT_GT(inlen, fih + sizeof(in.body.setxattr)) <<
+			"Missing request attribute name";
+		// No redundant information for checking buflen
+		break;
+	case FUSE_GETXATTR:
+		EXPECT_GE(inlen, fih + sizeof(in.body.getxattr)) <<
+			"Missing request body";
+		EXPECT_GT(inlen, fih + sizeof(in.body.getxattr)) <<
+			"Missing request attribute name";
+		// No redundant information for checking buflen
+		break;
+	case FUSE_LISTXATTR:
+		EXPECT_EQ(inlen, fih + sizeof(in.body.listxattr));
+		EXPECT_EQ((size_t)buflen, inlen);
+		break;
+	case FUSE_REMOVEXATTR:
+		EXPECT_GT(inlen, fih) << "Missing request attribute name";
+		// No redundant information for checking buflen
+		break;
+	case FUSE_FLUSH:
+		EXPECT_EQ(inlen, fih + sizeof(in.body.flush));
+		EXPECT_EQ((size_t)buflen, inlen);
+		break;
+	case FUSE_INIT:
+		EXPECT_EQ(inlen, fih + sizeof(in.body.init));
+		EXPECT_EQ((size_t)buflen, inlen);
+		break;
+	case FUSE_OPENDIR:
+		EXPECT_EQ(inlen, fih + sizeof(in.body.opendir));
+		EXPECT_EQ((size_t)buflen, inlen);
+		break;
+	case FUSE_READDIR:
+		EXPECT_EQ(inlen, fih + sizeof(in.body.readdir));
+		EXPECT_EQ((size_t)buflen, inlen);
+		break;
+	case FUSE_RELEASEDIR:
+		EXPECT_EQ(inlen, fih + sizeof(in.body.releasedir));
+		EXPECT_EQ((size_t)buflen, inlen);
+		break;
+	case FUSE_GETLK:
+		EXPECT_EQ(inlen, fih + sizeof(in.body.getlk));
+		EXPECT_EQ((size_t)buflen, inlen);
+		break;
+	case FUSE_SETLK:
+	case FUSE_SETLKW:
+		EXPECT_EQ(inlen, fih + sizeof(in.body.setlk));
+		EXPECT_EQ((size_t)buflen, inlen);
+		break;
+	case FUSE_ACCESS:
+		EXPECT_EQ(inlen, fih + sizeof(in.body.access));
+		EXPECT_EQ((size_t)buflen, inlen);
+		break;
+	case FUSE_CREATE:
+		EXPECT_GE(inlen, fih + sizeof(in.body.create)) <<
+			"Missing request body";
+		EXPECT_GT(inlen, fih + sizeof(in.body.create)) <<
+			"Missing request filename";
+		// No redundant information for checking buflen
+		break;
+	case FUSE_INTERRUPT:
+		EXPECT_EQ(inlen, fih + sizeof(in.body.interrupt));
+		EXPECT_EQ((size_t)buflen, inlen);
+		break;
+	case FUSE_BMAP:
+		EXPECT_EQ(inlen, fih + sizeof(in.body.bmap));
+		EXPECT_EQ((size_t)buflen, inlen);
+		break;
+	case FUSE_NOTIFY_REPLY:
+	case FUSE_BATCH_FORGET:
+	case FUSE_FALLOCATE:
+	case FUSE_IOCTL:
+	case FUSE_POLL:
+	case FUSE_READDIRPLUS:
+		FAIL() << "Unsupported opcode?";
+	default:
+		FAIL() << "Unknown opcode " << in.header.opcode;
+	}
+}
+
 void MockFS::init(uint32_t flags) {
+	ssize_t buflen;
+
 	std::unique_ptr<mockfs_buf_in> in(new mockfs_buf_in);
 	std::unique_ptr<mockfs_buf_out> out(new mockfs_buf_out);
 
-	read_request(*in);
+	read_request(*in, buflen);
+	audit_request(*in, buflen);
 	ASSERT_EQ(FUSE_INIT, in->header.opcode);
 
 	out->header.unique = in->header.unique;
@@ -507,12 +693,15 @@ void MockFS::loop() {
 	std::unique_ptr<mockfs_buf_in> in(new mockfs_buf_in);
 	ASSERT_TRUE(in != NULL);
 	while (!m_quit) {
+		ssize_t buflen;
+
 		bzero(in.get(), sizeof(*in));
-		read_request(*in);
+		read_request(*in, buflen);
 		if (m_quit)
 			break;
 		if (verbosity > 0)
-			debug_request(*in);
+			debug_request(*in, buflen);
+		audit_request(*in, buflen);
 		if (pid_ok((pid_t)in->header.pid)) {
 			process(*in, out);
 		} else {
@@ -613,8 +802,7 @@ void MockFS::process_default(const mockfs_buf_in& in,
 	out.push_back(std::move(out0));
 }
 
-void MockFS::read_request(mockfs_buf_in &in) {
-	ssize_t res;
+void MockFS::read_request(mockfs_buf_in &in, ssize_t &res) {
 	int nready = 0;
 	fd_set readfds;
 	pollfd fds[1];
@@ -680,10 +868,16 @@ void MockFS::read_request(mockfs_buf_in &in) {
 	res = read(m_fuse_fd, &in, sizeof(in));
 
 	if (res < 0 && !m_quit) {
-		FAIL() << "read: " << strerror(errno);
 		m_quit = true;
+		FAIL() << "read: " << strerror(errno);
 	}
 	ASSERT_TRUE(res >= static_cast<ssize_t>(sizeof(in.header)) || m_quit);
+	/*
+	 * Inconsistently, fuse_in_header.len is the size of the entire
+	 * request,including header, even though fuse_out_header.len excludes
+	 * the size of the header.
+	 */
+	ASSERT_TRUE(res == static_cast<ssize_t>(in.header.len) || m_quit);
 }
 
 void MockFS::write_response(const mockfs_buf_out &out) {

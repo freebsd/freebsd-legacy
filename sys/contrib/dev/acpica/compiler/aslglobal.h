@@ -8,7 +8,7 @@
  *
  * 1. Copyright Notice
  *
- * Some or all of this work - Copyright (c) 1999 - 2019, Intel Corp.
+ * Some or all of this work - Copyright (c) 1999 - 2020, Intel Corp.
  * All rights reserved.
  *
  * 2. License
@@ -223,10 +223,24 @@ const char                          *AslGbl_OpFlagNames[ACPI_NUM_OP_FLAGS] =
     "OP_NOT_FOUND_DURING_LOAD"
 };
 
+const char                          *AslGbl_SpecialNamedObjects [MAX_SPECIAL_NAMES] =
+{
+    NAMESEG__PTS,
+    NAMESEG__WAK,
+    NAMESEG__S0,
+    NAMESEG__S1,
+    NAMESEG__S2,
+    NAMESEG__S3,
+    NAMESEG__S4,
+    NAMESEG__S5,
+    NAMESEG__TTS
+};
+
 #else
 extern ASL_FILE_DESC                AslGbl_FileDescs [ASL_NUM_FILES];
 extern UINT32                       AslGbl_ExceptionCount[ASL_NUM_REPORT_LEVELS];
 extern const char                   *AslGbl_OpFlagNames[ACPI_NUM_OP_FLAGS];
+extern const char                   *AslGbl_SpecialNamedObjects[MAX_SPECIAL_NAMES];
 #endif
 
 
@@ -239,6 +253,7 @@ extern int                          DtParserdebug;
 extern int                          PrParserdebug;
 extern const ASL_MAPPING_ENTRY      AslKeywordMapping[];
 extern char                         *AslCompilertext;
+extern char                         *DtCompilerParsertext;
 
 /*
  * Older versions of Bison won't emit this external in the generated header.

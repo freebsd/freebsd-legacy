@@ -57,8 +57,6 @@ __FBSDID("$FreeBSD$");
 #include <netinet/icmp6.h>
 #include <netinet/udp.h>
 
-extern struct protosw inetsw[];
-
 int
 sctp6_input_with_port(struct mbuf **i_pak, int *offp, uint16_t port)
 {
@@ -105,13 +103,15 @@ sctp6_input_with_port(struct mbuf **i_pak, int *offp, uint16_t port)
 	SCTP_STAT_INCR_COUNTER64(sctps_inpackets);
 	/* Get IP, SCTP, and first chunk header together in the first mbuf. */
 	offset = iphlen + sizeof(struct sctphdr) + sizeof(struct sctp_chunkhdr);
-	ip6 = mtod(m, struct ip6_hdr *);
-	IP6_EXTHDR_GET(sh, struct sctphdr *, m, iphlen,
-	    (int)(sizeof(struct sctphdr) + sizeof(struct sctp_chunkhdr)));
-	if (sh == NULL) {
-		SCTP_STAT_INCR(sctps_hdrops);
-		return (IPPROTO_DONE);
+	if (m->m_len < offset) {
+		m = m_pullup(m, offset);
+		if (m == NULL) {
+			SCTP_STAT_INCR(sctps_hdrops);
+			return (IPPROTO_DONE);
+		}
 	}
+	ip6 = mtod(m, struct ip6_hdr *);
+	sh = (struct sctphdr *)(mtod(m, caddr_t)+iphlen);
 	ch = (struct sctp_chunkhdr *)((caddr_t)sh + sizeof(struct sctphdr));
 	offset -= sizeof(struct sctp_chunkhdr);
 	memset(&src, 0, sizeof(struct sockaddr_in6));
@@ -240,6 +240,11 @@ sctp6_notify(struct sctp_inpcb *inp,
 		}
 		if (net->mtu > next_mtu) {
 			net->mtu = next_mtu;
+			if (net->port) {
+				sctp_hc_set_mtu(&net->ro._l_addr, inp->fibnum, next_mtu + sizeof(struct udphdr));
+			} else {
+				sctp_hc_set_mtu(&net->ro._l_addr, inp->fibnum, next_mtu);
+			}
 		}
 		/* Update the association MTU */
 		if (stcb->asoc.smallest_mtu > next_mtu) {
@@ -467,15 +472,17 @@ out:
 	return (error);
 }
 
-SYSCTL_PROC(_net_inet6_sctp6, OID_AUTO, getcred, CTLTYPE_OPAQUE | CTLFLAG_RW,
-    0, 0,
-    sctp6_getcred, "S,ucred", "Get the ucred of a SCTP6 connection");
+SYSCTL_PROC(_net_inet6_sctp6, OID_AUTO, getcred,
+    CTLTYPE_OPAQUE | CTLFLAG_RW | CTLFLAG_NEEDGIANT,
+    0, 0, sctp6_getcred, "S,ucred",
+    "Get the ucred of a SCTP6 connection");
 
 
 /* This is the same as the sctp_abort() could be made common */
 static void
 sctp6_abort(struct socket *so)
 {
+	struct epoch_tracker et;
 	struct sctp_inpcb *inp;
 	uint32_t flags;
 
@@ -484,6 +491,7 @@ sctp6_abort(struct socket *so)
 		SCTP_LTRACE_ERR_RET(inp, NULL, NULL, SCTP_FROM_SCTP6_USRREQ, EINVAL);
 		return;
 	}
+	NET_EPOCH_ENTER(et);
 sctp_must_try_again:
 	flags = inp->sctp_flags;
 #ifdef SCTP_LOG_CLOSING
@@ -512,6 +520,7 @@ sctp_must_try_again:
 			goto sctp_must_try_again;
 		}
 	}
+	NET_EPOCH_EXIT(et);
 	return;
 }
 
@@ -560,6 +569,7 @@ sctp6_bind(struct socket *so, struct sockaddr *addr, struct thread *p)
 {
 	struct sctp_inpcb *inp;
 	int error;
+	u_char vflagsav;
 
 	inp = (struct sctp_inpcb *)so->so_pcb;
 	if (inp == NULL) {
@@ -590,6 +600,7 @@ sctp6_bind(struct socket *so, struct sockaddr *addr, struct thread *p)
 			return (EINVAL);
 		}
 	}
+	vflagsav = inp->ip_inp.inp.inp_vflag;
 	inp->ip_inp.inp.inp_vflag &= ~INP_IPV4;
 	inp->ip_inp.inp.inp_vflag |= INP_IPV6;
 	if ((addr != NULL) && (SCTP_IPV6_V6ONLY(inp) == 0)) {
@@ -619,7 +630,7 @@ sctp6_bind(struct socket *so, struct sockaddr *addr, struct thread *p)
 					inp->ip_inp.inp.inp_vflag |= INP_IPV4;
 					inp->ip_inp.inp.inp_vflag &= ~INP_IPV6;
 					error = sctp_inpcb_bind(so, (struct sockaddr *)&sin, NULL, p);
-					return (error);
+					goto out;
 				}
 #endif
 				break;
@@ -636,7 +647,8 @@ sctp6_bind(struct socket *so, struct sockaddr *addr, struct thread *p)
 		if (addr->sa_family == AF_INET) {
 			/* can't bind v4 addr to v6 only socket! */
 			SCTP_LTRACE_ERR_RET(inp, NULL, NULL, SCTP_FROM_SCTP6_USRREQ, EINVAL);
-			return (EINVAL);
+			error = EINVAL;
+			goto out;
 		}
 #endif
 		sin6_p = (struct sockaddr_in6 *)addr;
@@ -645,10 +657,14 @@ sctp6_bind(struct socket *so, struct sockaddr *addr, struct thread *p)
 			/* can't bind v4-mapped addrs either! */
 			/* NOTE: we don't support SIIT */
 			SCTP_LTRACE_ERR_RET(inp, NULL, NULL, SCTP_FROM_SCTP6_USRREQ, EINVAL);
-			return (EINVAL);
+			error = EINVAL;
+			goto out;
 		}
 	}
 	error = sctp_inpcb_bind(so, addr, NULL, p);
+out:
+	if (error != 0)
+		inp->ip_inp.inp.inp_vflag = vflagsav;
 	return (error);
 }
 
@@ -764,9 +780,12 @@ connected_type:
 		 * optionaly switch back to this code (by changing back the
 		 * defininitions but this is not advisable.
 		 */
+		struct epoch_tracker et;
 		int ret;
 
+		NET_EPOCH_ENTER(et);
 		ret = sctp_output(inp, inp->pkt, addr, inp->control, p, flags);
+		NET_EPOCH_EXIT(et);
 		inp->pkt = NULL;
 		inp->control = NULL;
 		return (ret);
@@ -778,6 +797,7 @@ connected_type:
 static int
 sctp6_connect(struct socket *so, struct sockaddr *addr, struct thread *p)
 {
+	struct epoch_tracker et;
 	uint32_t vrf_id;
 	int error = 0;
 	struct sctp_inpcb *inp;
@@ -912,8 +932,10 @@ sctp6_connect(struct socket *so, struct sockaddr *addr, struct thread *p)
 	}
 	SCTP_SET_STATE(stcb, SCTP_STATE_COOKIE_WAIT);
 	(void)SCTP_GETTIME_TIMEVAL(&stcb->asoc.time_entered);
+	NET_EPOCH_ENTER(et);
 	sctp_send_initiate(inp, stcb, SCTP_SO_LOCKED);
 	SCTP_TCB_UNLOCK(stcb);
+	NET_EPOCH_EXIT(et);
 	return (error);
 }
 

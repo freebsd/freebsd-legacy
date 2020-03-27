@@ -28,7 +28,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd July 27, 2019
+.Dd February 4, 2020
 .Dt SECURITY 7
 .Os
 .Sh NAME
@@ -99,9 +99,7 @@ pipe.
 A user account compromise is even more common than a DoS attack.
 Many
 sysadmins still run standard
-.Xr telnetd 8 ,
-.Xr rlogind 8 ,
-.Xr rshd 8 ,
+.Xr telnetd 8
 and
 .Xr ftpd 8
 servers on their machines.
@@ -186,8 +184,6 @@ in the
 file
 so that direct root logins via
 .Xr telnet 1
-or
-.Xr rlogin 1
 are disallowed.
 If using
 other login services such as
@@ -276,8 +272,8 @@ also add an additional layer of protection to the key pair by password
 protecting the keypair when you create it with
 .Xr ssh-keygen 1 .
 Being able
-to *-out the passwords for staff accounts also guarantees that staff members
-can only log in through secure access methods that you have set up.
+to star-out the passwords for staff accounts also guarantees that staff
+members can only log in through secure access methods that you have set up.
 You can
 thus force all staff members to use secure, encrypted connections for
 all their sessions which closes an important hole used by many intruders: that
@@ -342,10 +338,7 @@ virtually every server ever run as root, including basic system servers.
 If you are running a machine through which people only log in via
 .Xr sshd 8
 and never log in via
-.Xr telnetd 8 ,
-.Xr rshd 8 ,
-or
-.Xr rlogind 8 ,
+.Xr telnetd 8
 then turn off those services!
 .Pp
 .Fx
@@ -378,7 +371,7 @@ occur through them.
 The other big potential root hole in a system are the SUID-root and SGID
 binaries installed on the system.
 Most of these binaries, such as
-.Xr rlogin 1 ,
+.Xr su 1 ,
 reside in
 .Pa /bin , /sbin , /usr/bin ,
 or
@@ -905,8 +898,6 @@ if you intend to use them.
 Kerberos5 is an excellent authentication
 protocol but the kerberized
 .Xr telnet 1
-and
-.Xr rlogin 1
 suck rocks.
 There are bugs that make them unsuitable for dealing with binary streams.
 Also, by default
@@ -953,6 +944,17 @@ information access more restricted.
 Some people consider this as improving system security, so the knobs are
 briefly listed there, together with controls which enable some mitigations
 of the hardware state leaks.
+.Pp
+Hardware mitigation sysctl knobs described below have been moved under
+.Pa machdep.mitigations ,
+with backwards-compatibility shims to accept the existing names.
+A future change will rationalize the sense of the individual sysctls
+(so that enabled / true always indicates that the mitigation is active).
+For that reason the previous names remain the canonical way to set the
+mitigations, and are documented here.
+Backwards compatibility shims for the interim sysctls under
+.Pa machdep.mitigations
+will not be added.
 .Bl -tag -width security.bsd.unprivileged_proc_debug
 .It Dv security.bsd.see_other_uids
 Controls visibility of processes owned by different uid.
@@ -1024,8 +1026,15 @@ hardware information leak.
 .It Dv hw.vmm.vmx.l1d_flush
 amd64.
 Controls the mitigation of L1 Terminal Fault in bhyve hypervisor.
+.It Dv vm.pmap.allow_2m_x_ept
+amd64.
+Allows the use of superpages for executable mappings under the EPT
+page table format used by hypervisors on Intel CPUs to map the guest
+physical address space to machine physical memory.
+May be disabled to work around a CPU Erratum called
+Machine Check Error Avoidance on Page Size Change.
 .It Dv kern.elf32.aslr.enable
-Controls system-global Address Space Layour Randomization (ASLR) for
+Controls system-global Address Space Layout Randomization (ASLR) for
 normal non-PIE (Position Independent Executable) 32bit binaries.
 See also
 .Xr proccontrol 1

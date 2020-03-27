@@ -134,13 +134,19 @@ struct fuse_fid {
 #define VTOFUD(vp) \
 	((struct fuse_vnode_data *)((vp)->v_data))
 #define VTOI(vp)    (VTOFUD(vp)->nid)
-static inline struct vattr*
-VTOVA(struct vnode *vp)
+static inline bool
+fuse_vnode_attr_cache_valid(struct vnode *vp)
 {
 	struct bintime now;
 
 	getbinuptime(&now);
-	if (bintime_cmp(&(VTOFUD(vp)->attr_cache_timeout), &now, >))
+	return (bintime_cmp(&(VTOFUD(vp)->attr_cache_timeout), &now, >));
+}
+
+static inline struct vattr*
+VTOVA(struct vnode *vp)
+{
+	if (fuse_vnode_attr_cache_valid(vp))
 		return &(VTOFUD(vp)->cached_attrs);
 	else
 		return NULL;
@@ -174,6 +180,8 @@ fuse_vnode_setparent(struct vnode *vp, struct vnode *dvp)
 		MPASS(dvp->v_type == VDIR);
 		VTOFUD(vp)->parent_nid = VTOI(dvp);
 		VTOFUD(vp)->flag |= FN_PARENT_NID;
+	} else {
+		VTOFUD(vp)->flag &= ~FN_PARENT_NID;
 	}
 }
 

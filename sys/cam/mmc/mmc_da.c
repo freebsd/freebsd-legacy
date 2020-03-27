@@ -1,11 +1,10 @@
 /*-
  * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
  *
- * Copyright (c) 2006 Bernd Walter <tisco@FreeBSD.org>
+ * Copyright (c) 2006 Bernd Walter <tisco@FreeBSD.org> All rights reserved.
+ * Copyright (c) 2009 Alexander Motin <mav@FreeBSD.org> All rights reserved.
+ * Copyright (c) 2015-2017 Ilya Bakulin <kibab@FreeBSD.org> All rights reserved.
  * Copyright (c) 2006 M. Warner Losh <imp@FreeBSD.org>
- * Copyright (c) 2009 Alexander Motin <mav@FreeBSD.org>
- * Copyright (c) 2015-2017 Ilya Bakulin <kibab@FreeBSD.org>
- * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -1532,6 +1531,8 @@ sdda_add_part(struct cam_periph *periph, u_int type, const char *name,
 	part->disk->d_hba_device = cpi.hba_device;
 	part->disk->d_hba_subvendor = cpi.hba_subvendor;
 	part->disk->d_hba_subdevice = cpi.hba_subdevice;
+	snprintf(part->disk->d_attachment, sizeof(part->disk->d_attachment),
+	    "%s%d", cpi.dev_name, cpi.unit_number);
 
 	part->disk->d_sectorsize = mmc_get_sector_size(periph);
 	part->disk->d_mediasize = media_size;
@@ -1833,6 +1834,10 @@ sddastart(struct cam_periph *periph, union ccb *start_ccb)
 		CAM_DEBUG(periph->path, CAM_DEBUG_TRACE, ("BIO_DELETE\n"));
 		sddaschedule(periph);
 		break;
+	default:
+		biofinish(bp, NULL, EOPNOTSUPP);
+		xpt_release_ccb(start_ccb);
+		return;
 	}
 	start_ccb->ccb_h.ccb_bp = bp;
 	softc->outstanding_cmds++;

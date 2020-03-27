@@ -26,6 +26,8 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
+ *
+ * $FreeBSD$
  */
 
 extern "C" {
@@ -157,6 +159,7 @@ TEST_F(Getattr, blksize_zero)
 		out.body.attr.attr.mode = S_IFREG | 0644;
 		out.body.attr.attr.ino = ino;	// Must match nodeid
 		out.body.attr.attr.blksize = 0;
+		out.body.attr.attr.size = 1;
 	})));
 
 	ASSERT_EQ(0, stat(FULLPATH, &sb)) << strerror(errno);
@@ -193,6 +196,7 @@ TEST_F(Getattr, ok)
 	EXPECT_CALL(*m_mock, process(
 		ResultOf([](auto in) {
 			return (in.header.opcode == FUSE_GETATTR &&
+				in.body.getattr.getattr_flags == 0 &&
 				in.header.nodeid == ino);
 		}, Eq(true)),
 		_)

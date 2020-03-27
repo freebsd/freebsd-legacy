@@ -99,9 +99,10 @@ __FBSDID("$FreeBSD$");
 				 CSUM_TCP_IPV6 | CSUM_UDP_IPV6)
 
 static struct ofw_compat_data compat_data[] = {
-	{ "cadence,gem",	1 },
-	{ "cdns,macb",		1 },
-	{ NULL,			0 },
+	{ "cadence,gem",		1 },
+	{ "cdns,macb",			1 },
+	{ "sifive,fu540-c000-gem",	1 },
+	{ NULL,				0 },
 };
 
 struct cgem_softc {
@@ -299,6 +300,21 @@ cgem_mac_hash(u_char eaddr[])
 	return hash;
 }
 
+static u_int
+cgem_hash_maddr(void *arg, struct sockaddr_dl *sdl, u_int cnt)
+{
+	uint32_t *hashes = arg;
+	int index;
+
+	index = cgem_mac_hash(LLADDR(sdl));
+	if (index > 31)
+		hashes[0] |= (1 << (index - 32));
+	else
+		hashes[1] |= (1 << index);
+
+	return (1);
+}
+
 /* After any change in rx flags or multi-cast addresses, set up
  * hash registers and net config register bits.
  */
@@ -306,14 +322,8 @@ static void
 cgem_rx_filter(struct cgem_softc *sc)
 {
 	if_t ifp = sc->ifp;
-	u_char *mta;
-
-	int index, i, mcnt;
-	uint32_t hash_hi, hash_lo;
+	uint32_t hashes[2] = { 0, 0 };
 	uint32_t net_cfg;
-
-	hash_hi = 0;
-	hash_lo = 0;
 
 	net_cfg = RD4(sc, CGEM_NET_CFG);
 
@@ -327,36 +337,17 @@ cgem_rx_filter(struct cgem_softc *sc)
 		if ((if_getflags(ifp) & IFF_BROADCAST) == 0)
 			net_cfg |= CGEM_NET_CFG_NO_BCAST;
 		if ((if_getflags(ifp) & IFF_ALLMULTI) != 0) {
-			hash_hi = 0xffffffff;
-			hash_lo = 0xffffffff;
-		} else {
-			mcnt = if_multiaddr_count(ifp, -1);
-			mta = malloc(ETHER_ADDR_LEN * mcnt, M_DEVBUF,
-				     M_NOWAIT);
-			if (mta == NULL) {
-				device_printf(sc->dev,
-				      "failed to allocate temp mcast list\n");
-				return;
-			}
-			if_multiaddr_array(ifp, mta, &mcnt, mcnt);
-			for (i = 0; i < mcnt; i++) {
-				index = cgem_mac_hash(
-					LLADDR((struct sockaddr_dl *)
-					       (mta + (i * ETHER_ADDR_LEN))));
-				if (index > 31)
-					hash_hi |= (1 << (index - 32));
-				else
-					hash_lo |= (1 << index);
-			}
-			free(mta, M_DEVBUF);
-		}
+			hashes[0] = 0xffffffff;
+			hashes[1] = 0xffffffff;
+		} else
+			if_foreach_llmaddr(ifp, cgem_hash_maddr, hashes);
 
-		if (hash_hi != 0 || hash_lo != 0)
+		if (hashes[0] != 0 || hashes[1] != 0)
 			net_cfg |= CGEM_NET_CFG_MULTI_HASH_EN;
 	}
 
-	WR4(sc, CGEM_HASH_TOP, hash_hi);
-	WR4(sc, CGEM_HASH_BOT, hash_lo);
+	WR4(sc, CGEM_HASH_TOP, hashes[0]);
+	WR4(sc, CGEM_HASH_BOT, hashes[1]);
 	WR4(sc, CGEM_NET_CFG, net_cfg);
 }
 
@@ -1503,8 +1494,8 @@ cgem_add_sysctls(device_t dev)
 			&sc->txdefragfails, 0,
 			"Transmit m_defrag() failures");
 
-	tree = SYSCTL_ADD_NODE(ctx, child, OID_AUTO, "stats", CTLFLAG_RD,
-			       NULL, "GEM statistics");
+	tree = SYSCTL_ADD_NODE(ctx, child, OID_AUTO, "stats",
+	    CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, "GEM statistics");
 	child = SYSCTL_CHILDREN(tree);
 
 	SYSCTL_ADD_UQUAD(ctx, child, OID_AUTO, "tx_bytes", CTLFLAG_RD,

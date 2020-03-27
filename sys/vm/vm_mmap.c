@@ -199,21 +199,46 @@ int
 kern_mmap(struct thread *td, uintptr_t addr0, size_t len, int prot, int flags,
     int fd, off_t pos)
 {
+	struct mmap_req mr = {
+		.mr_hint = addr0,
+		.mr_len = len,
+		.mr_prot = prot,
+		.mr_flags = flags,
+		.mr_fd = fd,
+		.mr_pos = pos
+	};
+
+	return (kern_mmap_req(td, &mr));
+}
+
+int
+kern_mmap_req(struct thread *td, const struct mmap_req *mrp)
+{
 	struct vmspace *vms;
 	struct file *fp;
 	struct proc *p;
+	off_t pos;
 	vm_offset_t addr;
-	vm_size_t pageoff, size;
+	vm_size_t len, pageoff, size;
 	vm_prot_t cap_maxprot;
-	int align, error, max_prot;
+	int align, error, fd, flags, max_prot, prot;
 	cap_rights_t rights;
+	mmap_check_fp_fn check_fp_fn;
+
+	addr  = mrp->mr_hint;
+	len = mrp->mr_len;
+	prot = mrp->mr_prot;
+	flags = mrp->mr_flags;
+	fd = mrp->mr_fd;
+	pos = mrp->mr_pos;
+	check_fp_fn = mrp->mr_check_fp_fn;
 
 	if ((prot & ~(_PROT_ALL | PROT_MAX(_PROT_ALL))) != 0)
 		return (EINVAL);
 	max_prot = PROT_MAX_EXTRACT(prot);
 	prot = PROT_EXTRACT(prot);
 	if (max_prot != 0 && (max_prot & prot) != prot)
-		return (EINVAL);
+		return (ENOTSUP);
 
 	p = td->td_proc;
 
@@ -227,7 +252,6 @@ kern_mmap(struct thread *td, uintptr_t addr0, size_t len, int prot, int flags,
 	vms = p->p_vmspace;
 	fp = NULL;
 	AUDIT_ARG_FD(fd);
-	addr = addr0;
 
 	/*
 	 * Ignore old flags that used to be defined but did not do anything.
@@ -377,15 +401,15 @@ kern_mmap(struct thread *td, uintptr_t addr0, size_t len, int prot, int flags,
 		 * rights, but also return the maximum rights to be combined
 		 * with maxprot later.
 		 */
-		cap_rights_init(&rights, CAP_MMAP);
+		cap_rights_init_one(&rights, CAP_MMAP);
 		if (prot & PROT_READ)
-			cap_rights_set(&rights, CAP_MMAP_R);
+			cap_rights_set_one(&rights, CAP_MMAP_R);
 		if ((flags & MAP_SHARED) != 0) {
 			if (prot & PROT_WRITE)
-				cap_rights_set(&rights, CAP_MMAP_W);
+				cap_rights_set_one(&rights, CAP_MMAP_W);
 		}
 		if (prot & PROT_EXEC)
-			cap_rights_set(&rights, CAP_MMAP_X);
+			cap_rights_set_one(&rights, CAP_MMAP_X);
 		error = fget_mmap(td, fd, &rights, &cap_maxprot, &fp);
 		if (error != 0)
 			goto done;
@@ -394,7 +418,12 @@ kern_mmap(struct thread *td, uintptr_t addr0, size_t len, int prot, int flags,
 			error = EINVAL;
 			goto done;
 		}
-
+		if (check_fp_fn != NULL) {
+			error = check_fp_fn(fp, prot, max_prot & cap_maxprot,
+			    flags);
+			if (error != 0)
+				goto done;
+		}
 		/* This relies on VM_PROT_* matching PROT_*. */
 		error = fo_mmap(fp, &vms->vm_map, &addr, size, prot,
 		    max_prot & cap_maxprot, flags, pos, td);
@@ -581,7 +610,7 @@ kern_munmap(struct thread *td, uintptr_t addr0, size_t size)
 		pkm.pm_address = (uintptr_t) NULL;
 		if (vm_map_lookup_entry(map, addr, &entry)) {
 			for (; entry->start < addr + size;
-			    entry = entry->next) {
+			    entry = vm_map_entry_succ(entry)) {
 				if (vm_map_check_protection(map, entry->start,
 					entry->end, VM_PROT_EXECUTE) == TRUE) {
 					pkm.pm_address = (uintptr_t) addr;
@@ -651,7 +680,7 @@ kern_mprotect(struct thread *td, uintptr_t addr0, size_t size, int prot)
 	vm_error = KERN_SUCCESS;
 	if (max_prot != 0) {
 		if ((max_prot & prot) != prot)
-			return (EINVAL);
+			return (ENOTSUP);
 		vm_error = vm_map_protect(&td->td_proc->p_vmspace->vm_map,
 		    addr, addr + size, max_prot, TRUE);
 	}
@@ -779,28 +808,23 @@ sys_mincore(struct thread *td, struct mincore_args *uap)
 int
 kern_mincore(struct thread *td, uintptr_t addr0, size_t len, char *vec)
 {
-	vm_offset_t addr, first_addr;
-	vm_offset_t end, cend;
 	pmap_t pmap;
 	vm_map_t map;
-	int error = 0;
-	int vecindex, lastvecindex;
-	vm_map_entry_t current;
-	vm_map_entry_t entry;
+	vm_map_entry_t current, entry;
 	vm_object_t object;
-	vm_paddr_t locked_pa;
+	vm_offset_t addr, cend, end, first_addr;
+	vm_paddr_t pa;
 	vm_page_t m;
 	vm_pindex_t pindex;
-	int mincoreinfo;
+	int error, lastvecindex, mincoreinfo, vecindex;
 	unsigned int timestamp;
-	boolean_t locked;
 
 	/*
 	 * Make sure that the addresses presented are valid for user
 	 * mode.
 	 */
 	first_addr = addr = trunc_page(addr0);
-	end = addr + (vm_size_t)round_page(len);
+	end = round_page(addr0 + len);
 	map = &td->td_proc->p_vmspace->vm_map;
 	if (end > vm_map_max(map) || end < addr)
 		return (ENOMEM);
@@ -822,12 +846,15 @@ RestartScan:
 	 * up the pages elsewhere.
 	 */
 	lastvecindex = -1;
-	for (current = entry; current->start < end; current = current->next) {
+	while (entry->start < end) {
 
 		/*
 		 * check for contiguity
 		 */
-		if (current->end < end && current->next->start > current->end) {
+		current = entry;
+		entry = vm_map_entry_succ(current);
+		if (current->end < end &&
+		    entry->start > current->end) {
 			vm_map_unlock_read(map);
 			return (ENOMEM);
 		}
@@ -836,7 +863,7 @@ RestartScan:
 		 * ignore submaps (for now) or null objects
 		 */
 		if ((current->eflags & MAP_ENTRY_IS_SUB_MAP) ||
-			current->object.vm_object == NULL)
+		    current->object.vm_object == NULL)
 			continue;
 
 		/*
@@ -849,51 +876,45 @@ RestartScan:
 		if (cend > end)
 			cend = end;
 
-		/*
-		 * scan this entry one page at a time
-		 */
-		while (addr < cend) {
+		for (; addr < cend; addr += PAGE_SIZE) {
 			/*
 			 * Check pmap first, it is likely faster, also
 			 * it can provide info as to whether we are the
 			 * one referencing or modifying the page.
 			 */
-			object = NULL;
-			locked_pa = 0;
-		retry:
 			m = NULL;
-			mincoreinfo = pmap_mincore(pmap, addr, &locked_pa);
+			object = NULL;
+retry:
+			pa = 0;
+			mincoreinfo = pmap_mincore(pmap, addr, &pa);
 			if (mincore_mapped) {
 				/*
 				 * We only care about this pmap's
 				 * mapping of the page, if any.
 				 */
-				if (locked_pa != 0) {
-					vm_page_unlock(PHYS_TO_VM_PAGE(
-					    locked_pa));
-				}
-			} else if (locked_pa != 0) {
+				;
+			} else if (pa != 0) {
 				/*
 				 * The page is mapped by this process but not
 				 * both accessed and modified.  It is also
 				 * managed.  Acquire the object lock so that
-				 * other mappings might be examined.
+				 * other mappings might be examined.  The page's
+				 * identity may change at any point before its
+				 * object lock is acquired, so re-validate if
+				 * necessary.
 				 */
-				m = PHYS_TO_VM_PAGE(locked_pa);
-				if (m->object != object) {
+				m = PHYS_TO_VM_PAGE(pa);
+				while (object == NULL || m->object != object) {
 					if (object != NULL)
 						VM_OBJECT_WUNLOCK(object);
-					object = m->object;
-					locked = VM_OBJECT_TRYWLOCK(object);
-					vm_page_unlock(m);
-					if (!locked) {
-						VM_OBJECT_WLOCK(object);
-						vm_page_lock(m);
+					object = atomic_load_ptr(&m->object);
+					if (object == NULL)
 						goto retry;
-					}
-				} else
-					vm_page_unlock(m);
-				KASSERT(m->valid == VM_PAGE_BITS_ALL,
+					VM_OBJECT_WLOCK(object);
+				}
+				if (pa != pmap_extract(pmap, addr))
+					goto retry;
+				KASSERT(vm_page_all_valid(m),
 				    ("mincore: page %p is mapped but invalid",
 				    m));
 			} else if (mincoreinfo == 0) {
@@ -915,18 +936,21 @@ RestartScan:
 					pindex = OFF_TO_IDX(current->offset +
 					    (addr - current->start));
 					m = vm_page_lookup(object, pindex);
-					if (m != NULL && m->valid == 0)
+					if (m != NULL && vm_page_none_valid(m))
 						m = NULL;
 					if (m != NULL)
 						mincoreinfo = MINCORE_INCORE;
 				}
 			}
 			if (m != NULL) {
-				/* Examine other mappings to the page. */
+				VM_OBJECT_ASSERT_WLOCKED(m->object);
+
+				/* Examine other mappings of the page. */
 				if (m->dirty == 0 && pmap_is_modified(m))
 					vm_page_dirty(m);
 				if (m->dirty != 0)
 					mincoreinfo |= MINCORE_MODIFIED_OTHER;
+
 				/*
 				 * The first test for PGA_REFERENCED is an
 				 * optimization.  The second test is
@@ -935,9 +959,9 @@ RestartScan:
 				 * and set PGA_REFERENCED before the call to
 				 * pmap_is_referenced(). 
 				 */
-				if ((m->aflags & PGA_REFERENCED) != 0 ||
+				if ((m->a.flags & PGA_REFERENCED) != 0 ||
 				    pmap_is_referenced(m) ||
-				    (m->aflags & PGA_REFERENCED) != 0)
+				    (m->a.flags & PGA_REFERENCED) != 0)
 					mincoreinfo |= MINCORE_REFERENCED_OTHER;
 			}
 			if (object != NULL)
@@ -985,7 +1009,6 @@ RestartScan:
 				goto RestartScan;
 
 			lastvecindex = vecindex;
-			addr += PAGE_SIZE;
 		}
 	}
 
@@ -1289,7 +1312,7 @@ vm_mmap_vnode(struct thread *td, vm_size_t objsize,
 		}
 		if (writex) {
 			*writecounted = TRUE;
-			vnode_pager_update_writecount(obj, 0, objsize);
+			vm_pager_update_writecount(obj, 0, objsize);
 		}
 	} else {
 		error = EINVAL;
@@ -1330,22 +1353,24 @@ vm_mmap_vnode(struct thread *td, vm_size_t objsize,
 	} else {
 		KASSERT(obj->type == OBJT_DEFAULT || obj->type == OBJT_SWAP,
 		    ("wrong object type"));
-		VM_OBJECT_WLOCK(obj);
-		vm_object_reference_locked(obj);
+		vm_object_reference(obj);
 #if VM_NRESERVLEVEL > 0
-		vm_object_color(obj, 0);
+		if ((obj->flags & OBJ_COLORED) == 0) {
+			VM_OBJECT_WLOCK(obj);
+			vm_object_color(obj, 0);
+			VM_OBJECT_WUNLOCK(obj);
+		}
 #endif
-		VM_OBJECT_WUNLOCK(obj);
 	}
 	*objp = obj;
 	*flagsp = flags;
 
-	vfs_mark_atime(vp, cred);
+	VOP_MMAPPED(vp);
 
 done:
 	if (error != 0 && *writecounted) {
 		*writecounted = FALSE;
-		vnode_pager_update_writecount(obj, objsize, 0);
+		vm_pager_update_writecount(obj, objsize, 0);
 	}
 	vput(vp);
 	return (error);
@@ -1480,7 +1505,7 @@ vm_mmap(vm_map_t map, vm_offset_t *addr, vm_size_t size, vm_prot_t prot,
 		 * writecount, then undo that now.
 		 */
 		if (writecounted)
-			vnode_pager_release_writecount(object, 0, size);
+			vm_pager_release_writecount(object, 0, size);
 		vm_object_deallocate(object);
 	}
 	return (error);
@@ -1569,7 +1594,7 @@ vm_mmap_object(vm_map_t map, vm_offset_t *addr, vm_size_t size, vm_prot_t prot,
 	if (flags & MAP_SHARED)
 		docow |= MAP_INHERIT_SHARE;
 	if (writecounted)
-		docow |= MAP_VN_WRITECOUNT;
+		docow |= MAP_WRITECOUNT;
 	if (flags & MAP_STACK) {
 		if (object != NULL)
 			return (EINVAL);

@@ -29,6 +29,8 @@
 #ifndef _LINUX_MI_H_
 #define _LINUX_MI_H_
 
+#include <sys/queue.h>
+
 #define	LINUX_IFHWADDRLEN	6
 #define	LINUX_IFNAMSIZ		16
 
@@ -139,5 +141,11 @@ void bsd_to_linux_sigset(sigset_t *, l_sigset_t *);
 
 int linux_to_bsd_signal(int sig);
 int bsd_to_linux_signal(int sig);
+
+extern LIST_HEAD(futex_list, futex) futex_list;
+extern struct mtx futex_mtx;
+
+void linux_dev_shm_create(void);
+void linux_dev_shm_destroy(void);
 
 #endif /* _LINUX_MI_H_ */

@@ -26,6 +26,8 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
+ *
+ * $FreeBSD$
  */
 
 extern "C" {
@@ -202,7 +204,7 @@ TEST_F(Create, eexist)
 	EXPECT_LOOKUP(FUSE_ROOT_ID, RELPATH)
 		.WillOnce(Invoke(ReturnErrno(ENOENT)));
 	expect_create(RELPATH, mode, ReturnErrno(EEXIST));
-	EXPECT_NE(0, open(FULLPATH, O_CREAT | O_EXCL, mode));
+	EXPECT_EQ(-1, open(FULLPATH, O_CREAT | O_EXCL, mode));
 	EXPECT_EQ(EEXIST, errno);
 }
 
@@ -340,7 +342,7 @@ TEST_F(Create, eperm)
 		.WillOnce(Invoke(ReturnErrno(ENOENT)));
 	expect_create(RELPATH, mode, ReturnErrno(EPERM));
 
-	EXPECT_NE(0, open(FULLPATH, O_CREAT | O_EXCL, mode));
+	EXPECT_EQ(-1, open(FULLPATH, O_CREAT | O_EXCL, mode));
 	EXPECT_EQ(EPERM, errno);
 }
 

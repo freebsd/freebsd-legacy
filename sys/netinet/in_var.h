@@ -171,6 +171,7 @@ do { \
 	/* struct in_ifaddr *ia; */					\
 	/* struct rm_priotracker *t; */					\
 do {									\
+	NET_EPOCH_ASSERT();						\
 	IN_IFADDR_RLOCK((t));						\
 	for ((ia) = CK_STAILQ_FIRST(&V_in_ifaddrhead);			\
 	    (ia) != NULL && (ia)->ia_ifp != (ifp);			\
@@ -473,8 +474,6 @@ void	in_domifdetach(struct ifnet *, void *);
 
 /* XXX */
 void	 in_rtalloc_ign(struct route *ro, u_long ignflags, u_int fibnum);
-void	 in_rtredirect(struct sockaddr *, struct sockaddr *,
-	    struct sockaddr *, int, struct sockaddr *, u_int);
 #endif /* _KERNEL */
 
 /* INET6 stuff */

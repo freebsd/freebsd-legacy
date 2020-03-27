@@ -49,6 +49,7 @@ __FBSDID("$FreeBSD$");
 
 #include "acpi.h"
 #include "bhyverun.h"
+#include "debug.h"
 #include "inout.h"
 #include "ioapic.h"
 #include "mem.h"
@@ -162,7 +163,7 @@ static void
 pci_parse_slot_usage(char *aopt)
 {
 
-	fprintf(stderr, "Invalid PCI slot info field \"%s\"\n", aopt);
+	EPRINTLN("Invalid PCI slot info field \"%s\"", aopt);
 }
 
 int
@@ -215,13 +216,13 @@ pci_parse_slot(char *opt)
 	si = &bi->slotinfo[snum];
 
 	if (si->si_funcs[fnum].fi_name != NULL) {
-		fprintf(stderr, "pci slot %d:%d already occupied!\n",
+		EPRINTLN("pci slot %d:%d already occupied!",
 			snum, fnum);
 		goto done;
 	}
 
 	if (pci_emul_finddev(emul) == NULL) {
-		fprintf(stderr, "pci slot %d:%d: unknown device \"%s\"\n",
+		EPRINTLN("pci slot %d:%d: unknown device \"%s\"",
 			snum, fnum, emul);
 		goto done;
 	}
@@ -1268,7 +1269,6 @@ pci_bus_write_dsdt(int bus)
 	dsdt_line("  Device (PC%02X)", bus);
 	dsdt_line("  {");
 	dsdt_line("    Name (_HID, EisaId (\"PNP0A03\"))");
-	dsdt_line("    Name (_ADR, Zero)");
 
 	dsdt_line("    Method (_BBN, 0, NotSerialized)");
 	dsdt_line("    {");

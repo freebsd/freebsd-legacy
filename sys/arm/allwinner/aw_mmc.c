@@ -213,33 +213,11 @@ aw_mmc_cam_action(struct cam_sim *sim, union ccb *ccb)
 
 	switch (ccb->ccb_h.func_code) {
 	case XPT_PATH_INQ:
-	{
-		struct ccb_pathinq *cpi;
-
-		cpi = &ccb->cpi;
-		cpi->version_num = 1;
-		cpi->hba_inquiry = 0;
-		cpi->target_sprt = 0;
-		cpi->hba_misc = PIM_NOBUSRESET | PIM_SEQSCAN;
-		cpi->hba_eng_cnt = 0;
-		cpi->max_target = 0;
-		cpi->max_lun = 0;
-		cpi->initiator_id = 1;
-		cpi->maxio = (sc->aw_mmc_conf->dma_xferlen *
-			      AW_MMC_DMA_SEGS) / MMC_SECTOR_SIZE;
-		strncpy(cpi->sim_vid, "FreeBSD", SIM_IDLEN);
-		strncpy(cpi->hba_vid, "Deglitch Networks", HBA_IDLEN);
-		strncpy(cpi->dev_name, cam_sim_name(sim), DEV_IDLEN);
-		cpi->unit_number = cam_sim_unit(sim);
-		cpi->bus_id = cam_sim_bus(sim);
-		cpi->protocol = PROTO_MMCSD;
-		cpi->protocol_version = SCSI_REV_0;
-		cpi->transport = XPORT_MMCSD;
-		cpi->transport_version = 1;
-
-		cpi->ccb_h.status = CAM_REQ_CMP;
+		mmc_path_inq(&ccb->cpi, "Deglitch Networks", sim,
+		    (sc->aw_mmc_conf->dma_xferlen * AW_MMC_DMA_SEGS) /
+		    MMC_SECTOR_SIZE);
 		break;
-	}
+
 	case XPT_GET_TRAN_SETTINGS:
 	{
 		struct ccb_trans_settings *cts = &ccb->cts;
@@ -511,7 +489,13 @@ aw_mmc_attach(device_t dev)
 			   MMC_CAP_UHS_SDR25 | MMC_CAP_UHS_SDR50 |
 			   MMC_CAP_UHS_DDR50 | MMC_CAP_MMC_DDR52;
 
-	sc->aw_host.caps |= MMC_CAP_SIGNALING_330 | MMC_CAP_SIGNALING_180;
+	if (sc->aw_reg_vqmmc != NULL) {
+		if (regulator_check_voltage(sc->aw_reg_vqmmc, 1800000) == 0)
+			sc->aw_host.caps |= MMC_CAP_SIGNALING_180;
+		if (regulator_check_voltage(sc->aw_reg_vqmmc, 3300000) == 0)
+			sc->aw_host.caps |= MMC_CAP_SIGNALING_330;
+	} else
+		sc->aw_host.caps |= MMC_CAP_SIGNALING_330;
 
 	if (bus_width >= 4)
 		sc->aw_host.caps |= MMC_CAP_4_BIT_DATA;
@@ -526,8 +510,8 @@ aw_mmc_attach(device_t dev)
 	}
 
 	mtx_init(&sc->sim_mtx, "awmmcsim", NULL, MTX_DEF);
-	sc->sim = cam_sim_alloc(aw_mmc_cam_action, aw_mmc_cam_poll,
-	    "aw_mmc_sim", sc, device_get_unit(dev),
+	sc->sim = cam_sim_alloc_dev(aw_mmc_cam_action, aw_mmc_cam_poll,
+	    "aw_mmc_sim", sc, dev,
 	    &sc->sim_mtx, 1, 1, sc->devq);
 
 	if (sc->sim == NULL) {
@@ -1433,6 +1417,10 @@ aw_mmc_update_ios(device_t bus, device_t child)
 		}
 
 		/* Set the MMC clock. */
+		error = clk_disable(sc->aw_clk_mmc);
+		if (error != 0 && bootverbose)
+			device_printf(sc->aw_dev,
+			  "failed to disable mmc clock: %d\n", error);
 		error = clk_set_freq(sc->aw_clk_mmc, clock,
 		    CLK_SET_ROUND_DOWN);
 		if (error != 0) {
@@ -1441,6 +1429,10 @@ aw_mmc_update_ios(device_t bus, device_t child)
 			    clock, error);
 			return (error);
 		}
+		error = clk_enable(sc->aw_clk_mmc);
+		if (error != 0 && bootverbose)
+			device_printf(sc->aw_dev,
+			  "failed to re-enable mmc clock: %d\n", error);
 
 		if (sc->aw_mmc_conf->can_calibrate)
 			AW_MMC_WRITE_4(sc, AW_MMC_SAMP_DL, AW_MMC_SAMP_DL_SW_EN);
@@ -1506,6 +1498,7 @@ static device_method_t aw_mmc_methods[] = {
 	/* Bus interface */
 	DEVMETHOD(bus_read_ivar,	aw_mmc_read_ivar),
 	DEVMETHOD(bus_write_ivar,	aw_mmc_write_ivar),
+	DEVMETHOD(bus_add_child,        bus_generic_add_child),
 
 	/* MMC bridge interface */
 	DEVMETHOD(mmcbr_update_ios,	aw_mmc_update_ios),

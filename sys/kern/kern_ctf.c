@@ -40,21 +40,7 @@
 #define CTF_HDR_STRLEN_U32	8
 
 #ifdef DDB_CTF
-static void *
-z_alloc(void *nil, u_int items, u_int size)
-{
-	void *ptr;
-
-	ptr = malloc(items * size, M_TEMP, M_NOWAIT);
-	return ptr;
-}
-
-static void
-z_free(void *nil, void *ptr)
-{
-	free(ptr, M_TEMP);
-}
-
+#include <contrib/zlib/zlib.h>
 #endif
 
 static int
@@ -269,8 +255,6 @@ link_elf_ctf_get(linker_file_t lf, linker_ctf_t *lc)
 
 		/* Initialise the zlib structure. */
 		bzero(&zs, sizeof(zs));
-		zs.zalloc = z_alloc;
-		zs.zfree = z_free;
 
 		if (inflateInit(&zs) != Z_OK) {
 			error = EIO;
@@ -309,7 +293,7 @@ link_elf_ctf_get(linker_file_t lf, linker_ctf_t *lc)
 	lc->typlenp = &ef->typlen;
 
 out:
-	VOP_UNLOCK(nd.ni_vp, 0);
+	VOP_UNLOCK(nd.ni_vp);
 	vn_close(nd.ni_vp, FREAD, td->td_ucred, td);
 
 	if (hdr != NULL)

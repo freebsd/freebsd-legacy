@@ -640,8 +640,8 @@ tcp_stats(u_long off, const char *name, int af1 __unused, int proto __unused)
 	    "{N:/discarded for bad header offset field%s}\n");
 	p1a(tcps_rcvshort, "\t\t{:discard-too-short/%ju} "
 	    "{N:discarded because packet too short}\n");
-	p1a(tcps_rcvmemdrop, "\t\t{:discard-memory-problems/%ju} "
-	    "{N:discarded due to memory problems}\n");
+	p1a(tcps_rcvreassfull, "\t\t{:discard-reassembly-queue-full/%ju} "
+	    "{N:discarded due to full reassembly queue}\n");
 	p(tcps_connattempt, "\t{:connection-requests/%ju} "
 	    "{N:/connection request%s}\n");
 	p(tcps_accepts, "\t{:connections-accepts/%ju} "
@@ -1222,18 +1222,36 @@ void
 igmp_stats(u_long off, const char *name, int af1 __unused, int proto __unused)
 {
 	struct igmpstat igmpstat;
+	int error, zflag0;
 
 	if (fetch_stats("net.inet.igmp.stats", 0, &igmpstat,
 	    sizeof(igmpstat), kread) != 0)
 		return;
+	/*
+	 * Reread net.inet.igmp.stats when zflag == 1.
+	 * This is because this MIB contains version number and
+	 * length of the structure which are not set when clearing
+	 * the counters.
+	 */
+	zflag0 = zflag;
+	if (zflag) {
+		zflag = 0;
+		error = fetch_stats("net.inet.igmp.stats", 0, &igmpstat,
+		    sizeof(igmpstat), kread);
+		zflag = zflag0;
+		if (error)
+			return;
+	}
 
 	if (igmpstat.igps_version != IGPS_VERSION_3) {
 		xo_warnx("%s: version mismatch (%d != %d)", __func__,
 		    igmpstat.igps_version, IGPS_VERSION_3);
+		return;
 	}
 	if (igmpstat.igps_len != IGPS_VERSION3_LEN) {
 		xo_warnx("%s: size mismatch (%d != %d)", __func__,
 		    igmpstat.igps_len, IGPS_VERSION3_LEN);
+		return;
 	}
 
 	xo_open_container(name);

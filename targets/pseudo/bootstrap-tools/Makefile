@@ -49,7 +49,7 @@ BSARGS= 	DESTDIR= \
 		MK_INCLUDES=yes
 
 # We will handle building the toolchain and cross-compiler.
-BSARGS+= MK_CROSS_COMPILER=no MK_CLANG=no MK_GCC=no
+BSARGS+= MK_CROSS_COMPILER=no MK_CLANG=no
 
 DISTRIB_ENV=	INSTALL="sh ${SRCTOP}/tools/install.sh" NO_FSCHG=1 MK_TESTS=no
 legacy: .MAKE ${META_DEPS}
@@ -79,7 +79,7 @@ BSTCENV= \
 	${BSENV:MPATH=*}
 
 BSTCARGS= \
-	${BSARGS:NDESTDIR=*:NOBJTOP=*:NOBJROOT=*:NMK_CROSS_COMPILER=*:NMK_CLANG=*:NMK_GCC=*} \
+	${BSARGS:NDESTDIR=*:NOBJTOP=*:NOBJROOT=*:NMK_CROSS_COMPILER=*:NMK_CLANG=*} \
 	BUILD_DIRDEPS=yes \
 	LLVM_TBLGEN=${TOOLSDIR}/usr/bin/llvm-tblgen \
 	CLANG_TBLGEN=${TOOLSDIR}/usr/bin/clang-tblgen \

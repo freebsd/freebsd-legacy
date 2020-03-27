@@ -75,9 +75,12 @@
 #include <machine/pte.h>
 #include <machine/slb.h>
 #include <machine/tlb.h>
+#include <machine/vmparam.h>
 
 struct pmap;
 typedef struct pmap *pmap_t;
+
+#define	PMAP_ENTER_QUICK_LOCKED	0x10000000
 
 #if !defined(NPMAPS)
 #define	NPMAPS		32768
@@ -140,7 +143,6 @@ struct	pmap {
 	struct	mtx	pm_mtx;
 	cpuset_t	pm_active;
 	union {
-#ifdef AIM
 		struct {
 			
 		    #ifdef __powerpc64__
@@ -154,8 +156,6 @@ struct	pmap {
 			struct pmap	*pmap_phys;
 			struct pvo_tree pmap_pvo;
 		};
-#endif
-#ifdef BOOKE
 		struct {
 			/* TID to identify this pmap entries in TLB */
 			tlbtid_t	pm_tid[MAXCPU];	
@@ -165,22 +165,18 @@ struct	pmap {
 			 * Page table directory,
 			 * array of pointers to page directories.
 			 */
-			pte_t **pm_pp2d[PP2D_NENTRIES];
-
-			/* List of allocated pdir bufs (pdir kva regions). */
-			TAILQ_HEAD(, ptbl_buf)	pm_pdir_list;
+			pte_t ***pm_pp2d;
 #else
 			/*
 			 * Page table directory,
 			 * array of pointers to page tables.
 			 */
-			pte_t		*pm_pdir[PDIR_NENTRIES];
-#endif
+			pte_t		**pm_pdir;
 
 			/* List of allocated ptbl bufs (ptbl kva regions). */
 			TAILQ_HEAD(, ptbl_buf)	pm_ptbl_list;
-		};
 #endif
+		};
 	};
 };
 
@@ -253,7 +249,7 @@ extern	struct pmap kernel_pmap_store;
 #define	PMAP_TRYLOCK(pmap)	mtx_trylock(&(pmap)->pm_mtx)
 #define	PMAP_UNLOCK(pmap)	mtx_unlock(&(pmap)->pm_mtx)
 
-#define	pmap_page_is_write_mapped(m)	(((m)->aflags & PGA_WRITEABLE) != 0)
+#define	pmap_page_is_write_mapped(m)	(((m)->a.flags & PGA_WRITEABLE) != 0)
 
 void		pmap_bootstrap(vm_offset_t, vm_offset_t);
 void		pmap_kenter(vm_offset_t va, vm_paddr_t pa);
@@ -272,17 +268,15 @@ void		pmap_deactivate(struct thread *);
 vm_paddr_t	pmap_kextract(vm_offset_t);
 int		pmap_dev_direct_mapped(vm_paddr_t, vm_size_t);
 boolean_t	pmap_mmu_install(char *name, int prio);
+const char	*pmap_mmu_name(void);
+
+void		pmap_page_array_startup(long count);
 
 #define	vtophys(va)	pmap_kextract((vm_offset_t)(va))
 
-#define PHYS_AVAIL_SZ	256	/* Allows up to 16GB Ram on pSeries with
-				 * logical memory block size of 64MB.
-				 * For more Ram increase the lmb or this value.
-				 */
-
-extern	vm_paddr_t phys_avail[PHYS_AVAIL_SZ];
 extern	vm_offset_t virtual_avail;
 extern	vm_offset_t virtual_end;
+extern	caddr_t crashdumpmap;
 
 extern	vm_offset_t msgbuf_phys;
 

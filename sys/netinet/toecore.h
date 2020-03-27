@@ -41,6 +41,7 @@ struct tcpopt;
 struct tcphdr;
 struct in_conninfo;
 struct tcp_info;
+struct ktls_session;
 
 struct toedev {
 	TAILQ_ENTRY(toedev) link;	/* glue for toedev_list */
@@ -108,6 +109,10 @@ struct toedev {
 	/* Update software state */
 	void (*tod_tcp_info)(struct toedev *, struct tcpcb *,
 	    struct tcp_info *);
+
+	/* Create a TLS session */
+	int (*tod_alloc_tls_session)(struct toedev *, struct tcpcb *,
+	    struct ktls_session *);
 };
 
 typedef	void (*tcp_offload_listen_start_fn)(void *, struct tcpcb *);
@@ -130,7 +135,7 @@ int toe_l2_resolve(struct toedev *, struct ifnet *, struct sockaddr *,
 void toe_connect_failed(struct toedev *, struct inpcb *, int);
 
 void toe_syncache_add(struct in_conninfo *, struct tcpopt *, struct tcphdr *,
-    struct inpcb *, void *, void *);
+    struct inpcb *, void *, void *, uint8_t);
 int  toe_syncache_expand(struct in_conninfo *, struct tcpopt *, struct tcphdr *,
     struct socket **);
 

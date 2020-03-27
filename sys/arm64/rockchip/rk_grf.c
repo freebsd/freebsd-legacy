@@ -2,7 +2,6 @@
  * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
  *
  * Copyright (c) 2018 Emmanuel Vadot <manu@FreeBSD.org>
- * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -44,16 +43,11 @@ __FBSDID("$FreeBSD$");
 #include <dev/extres/syscon/syscon.h>
 #include <dev/fdt/simple_mfd.h>
 
-#include "opt_soc.h"
-
 static struct ofw_compat_data compat_data[] = {
-#ifdef SOC_ROCKCHIP_RK3328
+	{"rockchip,rk3288-grf", 1},
 	{"rockchip,rk3328-grf", 1},
-#endif
-#ifdef SOC_ROCKCHIP_RK3399
 	{"rockchip,rk3399-grf", 1},
 	{"rockchip,rk3399-pmugrf", 1},
-#endif
 	{NULL,             0}
 };
 

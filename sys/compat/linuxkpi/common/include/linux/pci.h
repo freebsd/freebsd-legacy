@@ -37,8 +37,10 @@
 
 #include <sys/param.h>
 #include <sys/bus.h>
+#include <sys/nv.h>
 #include <sys/pciio.h>
 #include <sys/rman.h>
+#include <sys/bus.h>
 #include <dev/pci/pcivar.h>
 #include <dev/pci/pcireg.h>
 #include <dev/pci/pci_private.h>
@@ -201,6 +203,11 @@ struct pci_driver {
 	struct device_driver		driver;
 	const struct pci_error_handlers       *err_handler;
 	bool				isdrm;
+	int  (*bsd_iov_init)(device_t dev, uint16_t num_vfs,
+	    const nvlist_t *pf_config);
+	void  (*bsd_iov_uninit)(device_t dev);
+	int  (*bsd_iov_add_vf)(device_t dev, uint16_t vfnum,
+	    const nvlist_t *vf_config);
 };
 
 struct pci_bus {
@@ -228,6 +235,7 @@ struct pci_dev {
 	unsigned int		devfn;
 	uint32_t		class;
 	uint8_t			revision;
+	bool			msi_enabled;
 };
 
 static inline struct resource_list_entry *
@@ -262,7 +270,7 @@ linux_pci_find_irq_dev(unsigned int irq)
 	spin_lock(&pci_lock);
 	list_for_each_entry(pdev, &pci_devices, links) {
 		if (irq == pdev->dev.irq ||
-		    (irq >= pdev->dev.msix && irq < pdev->dev.msix_max)) {
+		    (irq >= pdev->dev.irq_start && irq < pdev->dev.irq_end)) {
 			found = &pdev->dev;
 			break;
 		}
@@ -424,8 +432,23 @@ pci_disable_msix(struct pci_dev *pdev)
 	 * linux_pci_find_irq_dev() does no longer see them by
 	 * resetting their references to zero:
 	 */
-	pdev->dev.msix = 0;
-	pdev->dev.msix_max = 0;
+	pdev->dev.irq_start = 0;
+	pdev->dev.irq_end = 0;
+}
+
+#define	pci_disable_msi(pdev) \
+  linux_pci_disable_msi(pdev)
+
+static inline void
+linux_pci_disable_msi(struct pci_dev *pdev)
+{
+
+	pci_release_msi(pdev->dev.bsddev);
+
+	pdev->dev.irq_start = 0;
+	pdev->dev.irq_end = 0;
+	pdev->irq = pdev->dev.irq;
+	pdev->msi_enabled = false;
 }
 
 unsigned long	pci_resource_start(struct pci_dev *pdev, int bar);
@@ -562,10 +585,10 @@ pci_enable_msix(struct pci_dev *pdev, struct msix_entry *entries, int nreq)
 		return avail;
 	}
 	rle = linux_pci_get_rle(pdev, SYS_RES_IRQ, 1);
-	pdev->dev.msix = rle->start;
-	pdev->dev.msix_max = rle->start + avail;
+	pdev->dev.irq_start = rle->start;
+	pdev->dev.irq_end = rle->start + avail;
 	for (i = 0; i < nreq; i++)
-		entries[i].vector = pdev->dev.msix + i;
+		entries[i].vector = pdev->dev.irq_start + i;
 	return (0);
 }
 
@@ -593,6 +616,32 @@ pci_enable_msix_range(struct pci_dev *dev, struct msix_entry *entries,
 		}
 	} while (rc);
 	return (nvec);
+}
+
+#define	pci_enable_msi(pdev) \
+  linux_pci_enable_msi(pdev)
+
+static inline int
+pci_enable_msi(struct pci_dev *pdev)
+{
+	struct resource_list_entry *rle;
+	int error;
+	int avail;
+
+	avail = pci_msi_count(pdev->dev.bsddev);
+	if (avail < 1)
+		return -EINVAL;
+
+	avail = 1;	/* this function only enable one MSI IRQ */
+	if ((error = -pci_alloc_msi(pdev->dev.bsddev, &avail)) != 0)
+		return error;
+
+	rle = linux_pci_get_rle(pdev, SYS_RES_IRQ, 1);
+	pdev->dev.irq_start = rle->start;
+	pdev->dev.irq_end = rle->start + avail;
+	pdev->irq = rle->start;
+	pdev->msi_enabled = true;
+	return (0);
 }
 
 static inline int

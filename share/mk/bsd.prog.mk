@@ -52,12 +52,20 @@ CXXFLAGS+= -fPIE
 LDFLAGS+= -pie
 .endif
 .if ${MK_RETPOLINE} != "no"
+.if ${COMPILER_FEATURES:Mretpoline} && ${LINKER_FEATURES:Mretpoline}
 CFLAGS+= -mretpoline
 CXXFLAGS+= -mretpoline
 # retpolineplt is broken with static linking (PR 233336)
 .if !defined(NO_SHARED) || ${NO_SHARED:tl} == "no"
 LDFLAGS+= -Wl,-zretpolineplt
 .endif
+.else
+.warning Retpoline requested but not supported by compiler or linker
+.endif
+.endif
+
+.if ${MACHINE_CPUARCH} == "riscv" && ${LINKER_FEATURES:Mriscv-relaxations} == ""
+CFLAGS += -mno-relax
 .endif
 
 .if defined(CRUNCH_CFLAGS)
@@ -79,7 +87,7 @@ STRIP?=	-s
 
 .if defined(NO_ROOT)
 .if !defined(TAGS) || ! ${TAGS:Mpackage=*}
-TAGS+=		package=${PACKAGE:Uruntime}
+TAGS+=		package=${PACKAGE:Uutilities}
 .endif
 TAG_ARGS=	-T ${TAGS:[*]:S/ /,/g}
 .endif
@@ -91,6 +99,11 @@ LDFLAGS+= -static
 _COV_FLAG= --coverage -fprofile-dir=${COVERAGEDIR}
 CFLAGS+= ${_COV_FLAG}
 CXXFLAGS+= ${_COV_FLAG}
+.endif
+
+# clang currently defaults to dynamic TLS for mips64 binaries
+.if ${MACHINE_ARCH:Mmips64*} && ${COMPILER_TYPE} == "clang"
+CFLAGS+= -ftls-model=initial-exec
 .endif
 
 .if ${MK_DEBUG_FILES} != "no"

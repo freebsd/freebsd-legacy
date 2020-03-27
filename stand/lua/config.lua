@@ -2,7 +2,7 @@
 -- SPDX-License-Identifier: BSD-2-Clause-FreeBSD
 --
 -- Copyright (c) 2015 Pedro Souza <pedrosouza@freebsd.org>
--- Copyright (C) 2018 Kyle Evans <kevans@FreeBSD.org>
+-- Copyright (c) 2018 Kyle Evans <kevans@FreeBSD.org>
 -- All rights reserved.
 --
 -- Redistribution and use in source and binary forms, with or without
@@ -623,7 +623,7 @@ end
 function config.loadelf()
 	local xen_kernel = loader.getenv('xen_kernel')
 	local kernel = config.kernel_selected or config.kernel_loaded
-	local loaded
+	local status
 
 	if xen_kernel ~= nil then
 		print(MSG_XENKERNLOADING)
@@ -633,16 +633,19 @@ function config.loadelf()
 		end
 	end
 	print(MSG_KERNLOADING)
-	loaded = config.loadKernel(kernel)
-
-	if not loaded then
+	if not config.loadKernel(kernel) then
 		return false
 	end
+	hook.runAll("kernel.loaded")
 
 	print(MSG_MODLOADING)
-	return loadModule(modules, not config.verbose)
+	status = loadModule(modules, not config.verbose)
+	hook.runAll("modules.loaded")
+	return status
 end
 
 hook.registerType("config.loaded")
 hook.registerType("config.reloaded")
+hook.registerType("kernel.loaded")
+hook.registerType("modules.loaded")
 return config

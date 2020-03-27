@@ -26,6 +26,8 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
+ *
+ * $FreeBSD$
  */
 
 extern "C" {
@@ -143,6 +145,7 @@ union fuse_payloads_in {
 	fuse_fsync_in	fsync;
 	fuse_fsync_in	fsyncdir;
 	fuse_forget_in	forget;
+	fuse_getattr_in	getattr;
 	fuse_interrupt_in interrupt;
 	fuse_lk_in	getlk;
 	fuse_getxattr_in getxattr;
@@ -280,7 +283,8 @@ class MockFS {
 	/* Timestamp granularity in nanoseconds */
 	unsigned m_time_gran;
 
-	void debug_request(const mockfs_buf_in&);
+	void audit_request(const mockfs_buf_in &in, ssize_t buflen);
+	void debug_request(const mockfs_buf_in&, ssize_t buflen);
 	void debug_response(const mockfs_buf_out&);
 
 	/* Initialize a session after mounting */
@@ -296,8 +300,14 @@ class MockFS {
 	/* Entry point for the daemon thread */
 	static void* service(void*);
 
-	/* Read, but do not process, a single request from the kernel */
-	void read_request(mockfs_buf_in& in);
+	/*
+	 * Read, but do not process, a single request from the kernel
+	 *
+	 * @param in	Return storage for the FUSE request
+	 * @param res	Return value of read(2).  If positive, the amount of
+	 *		data read from the fuse device.
+	 */
+	void read_request(mockfs_buf_in& in, ssize_t& res);
 
 	/* Write a single response back to the kernel */
 	void write_response(const mockfs_buf_out &out);

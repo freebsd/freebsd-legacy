@@ -41,26 +41,11 @@
 #define G_NOP_PHYSPATH_PASSTHROUGH "\255"
 
 #ifdef _KERNEL
-#define	G_NOP_DEBUG(lvl, ...)	do {					\
-	if (g_nop_debug >= (lvl)) {					\
-		printf("GEOM_NOP");					\
-		if (g_nop_debug > 0)					\
-			printf("[%u]", lvl);				\
-		printf(": ");						\
-		printf(__VA_ARGS__);					\
-		printf("\n");						\
-	}								\
-} while (0)
+#define	G_NOP_DEBUG(lvl, ...) \
+    _GEOM_DEBUG("GEOM_NOP", g_nop_debug, (lvl), NULL, __VA_ARGS__)
+#define G_NOP_LOGREQLVL(lvl, bp, ...) \
+    _GEOM_DEBUG("GEOM_NOP", g_nop_debug, (lvl), (bp), __VA_ARGS__)
 #define	G_NOP_LOGREQ(bp, ...)	G_NOP_LOGREQLVL(2, bp, __VA_ARGS__)
-#define G_NOP_LOGREQLVL(lvl, bp, ...) do {				\
-	if (g_nop_debug >= (lvl)) {					\
-		printf("GEOM_NOP[%d]: ", (lvl));			\
-		printf(__VA_ARGS__);					\
-		printf(" ");						\
-		g_print_bio(bp);					\
-		printf("\n");						\
-	}								\
-} while (0)
 
 struct g_nop_delay;
 
@@ -77,6 +62,7 @@ struct g_nop_softc {
 	u_int			 sc_delaymsec;
 	u_int			 sc_rdelayprob;
 	u_int			 sc_wdelayprob;
+	u_int			 sc_count_until_fail;
 	uintmax_t		 sc_reads;
 	uintmax_t		 sc_writes;
 	uintmax_t		 sc_deletes;
@@ -85,6 +71,7 @@ struct g_nop_softc {
 	uintmax_t		 sc_cmd0s;
 	uintmax_t		 sc_cmd1s;
 	uintmax_t		 sc_cmd2s;
+	uintmax_t		 sc_speedups;
 	uintmax_t		 sc_readbytes;
 	uintmax_t		 sc_wrotebytes;
 	char			*sc_physpath;

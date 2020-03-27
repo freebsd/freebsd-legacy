@@ -36,6 +36,8 @@
 		for (i in a) {
 			if (a[i] ~ /^package=/) {
 				pkgname=a[i]
+				if ($1 ~ /^\/boot\//)
+					pkgname="bootloader"
 				gsub(/package=/, "", pkgname)
 			} else if (a[i] == "config") {
 				type="config"

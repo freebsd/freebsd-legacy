@@ -6,6 +6,7 @@
 
 CONFS+=	group master.passwd shells
 CONFSMODE_master.passwd=	600
+CONFSPACKAGE=   runtime
 
 SRCS+=	__getosreldate.c \
 	__pthread_mutex_init_calloc_cb_stub.c \
@@ -496,10 +497,13 @@ MLINKS+=setjmp.3 _longjmp.3 \
 MLINKS+=setmode.3 getmode.3
 MLINKS+=setproctitle.3 setproctitle_fast.3
 MLINKS+=sigsetops.3 sigaddset.3 \
+	sigsetops.3 sigandset.3 \
 	sigsetops.3 sigdelset.3 \
 	sigsetops.3 sigemptyset.3 \
 	sigsetops.3 sigfillset.3 \
-	sigsetops.3 sigismember.3
+	sigsetops.3 sigisemptyset.3 \
+	sigsetops.3 sigismember.3 \
+	sigsetops.3 sigorset.3
 MLINKS+=statvfs.3 fstatvfs.3
 MLINKS+=stringlist.3 sl_add.3 \
 	stringlist.3 sl_find.3 \

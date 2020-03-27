@@ -191,6 +191,14 @@ toedev_tcp_info(struct toedev *tod __unused, struct tcpcb *tp __unused,
 	return;
 }
 
+static int
+toedev_alloc_tls_session(struct toedev *tod __unused, struct tcpcb *tp __unused,
+    struct ktls_session *tls __unused)
+{
+
+	return (EINVAL);
+}
+
 /*
  * Inform one or more TOE devices about a listening socket.
  */
@@ -281,6 +289,7 @@ init_toedev(struct toedev *tod)
 	tod->tod_offload_socket = toedev_offload_socket;
 	tod->tod_ctloutput = toedev_ctloutput;
 	tod->tod_tcp_info = toedev_tcp_info;
+	tod->tod_alloc_tls_session = toedev_alloc_tls_session;
 }
 
 /*
@@ -337,13 +346,13 @@ unregister_toedev(struct toedev *tod)
 
 void
 toe_syncache_add(struct in_conninfo *inc, struct tcpopt *to, struct tcphdr *th,
-    struct inpcb *inp, void *tod, void *todctx)
+    struct inpcb *inp, void *tod, void *todctx, uint8_t iptos)
 {
 	struct socket *lso = inp->inp_socket;
 
 	INP_WLOCK_ASSERT(inp);
 
-	syncache_add(inc, to, th, inp, &lso, NULL, tod, todctx);
+	syncache_add(inc, to, th, inp, &lso, NULL, tod, todctx, iptos);
 }
 
 int
@@ -351,7 +360,7 @@ toe_syncache_expand(struct in_conninfo *inc, struct tcpopt *to,
     struct tcphdr *th, struct socket **lsop)
 {
 
-	INP_INFO_RLOCK_ASSERT(&V_tcbinfo);
+	NET_EPOCH_ASSERT();
 
 	return (syncache_expand(inc, to, th, lsop, NULL));
 }
@@ -381,8 +390,6 @@ toe_4tuple_check(struct in_conninfo *inc, struct tcphdr *th, struct ifnet *ifp)
 		INP_WLOCK_ASSERT(inp);
 
 		if ((inp->inp_flags & INP_TIMEWAIT) && th != NULL) {
-
-			INP_INFO_RLOCK_ASSERT(&V_tcbinfo); /* for twcheck */
 			if (!tcp_twcheck(inp, NULL, th, NULL, 0))
 				return (EADDRINUSE);
 		} else {
@@ -496,6 +503,7 @@ void
 toe_connect_failed(struct toedev *tod, struct inpcb *inp, int err)
 {
 
+	NET_EPOCH_ASSERT();
 	INP_WLOCK_ASSERT(inp);
 
 	if (!(inp->inp_flags & INP_DROPPED)) {
@@ -520,7 +528,6 @@ toe_connect_failed(struct toedev *tod, struct inpcb *inp, int err)
 			(void) tp->t_fb->tfb_tcp_output(tp);
 		} else {
 
-			INP_INFO_RLOCK_ASSERT(&V_tcbinfo);
 			tp = tcp_drop(tp, err);
 			if (tp == NULL)
 				INP_WLOCK(inp);	/* re-acquire */
