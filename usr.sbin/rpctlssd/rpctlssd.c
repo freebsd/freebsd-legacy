@@ -41,7 +41,9 @@ __FBSDID("$FreeBSD$");
 #include <sys/syslog.h>
 #include <sys/time.h>
 #include <err.h>
+#include <libutil.h>
 #include <netdb.h>
+#include <pwd.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -68,10 +70,14 @@ __FBSDID("$FreeBSD$");
 #ifndef	_PATH_CERTANDKEY
 #define	_PATH_CERTANDKEY	"/etc/rpctlssd/"
 #endif
+#ifndef	_PATH_RPCTLSSDPID
+#define	_PATH_RPCTLSSDPID	"/var/run/rpctlssd.pid"
+#endif
 #ifndef	_PREFERRED_CIPHERS
 #define	_PREFERRED_CIPHERS	"SHA384:SHA256:!CAMELLIA"
 #endif
 
+static struct pidfh	*rpctls_pfh = NULL;
 static int		rpctls_debug_level;
 static bool		rpctls_verbose;
 static SSL_CTX		*rpctls_ctx = NULL;
@@ -81,10 +87,14 @@ static const char	*rpctls_verify_capath = NULL;
 static const char	*rpctls_crlfile = NULL;
 static const char	*rpctls_certdir = _PATH_CERTANDKEY;
 static bool		rpctls_comparehost = false;
+static unsigned int	rpctls_wildcard = X509_CHECK_FLAG_NO_WILDCARDS;
 static uint64_t		rpctls_ssl_refno = 0;
 static uint64_t		rpctls_ssl_sec = 0;
 static uint64_t		rpctls_ssl_usec = 0;
 static bool		rpctls_gothup = false;
+static bool		rpctls_cnuser = false;
+static char		*rpctls_dnsname;
+static const char	*rpctls_cnuseroid = "1.2.3.4.6.9";
 
 /*
  * A linked list of all current "SSL *"s and socket "fd"s
@@ -104,14 +114,19 @@ static struct ssl_list	rpctls_ssllist;
 static void		rpctlssd_terminate(int);
 static SSL_CTX		*rpctls_setup_ssl(const char *certdir);
 static SSL		*rpctls_server(SSL_CTX *ctx, int s,
-			    uint32_t *flags);
-static int		rpctls_checkhost(int s, X509 *cert);
-static int		rpctls_loadfiles(SSL_CTX *ctx);
+			    uint32_t *flags, uint32_t *uidp,
+			    int *ngrps, uint32_t *gidp);
+static int		rpctls_gethost(int s, struct sockaddr *sad,
+			    char *hostip, size_t hostlen);
+static int		rpctls_checkhost(struct sockaddr *sad, X509 *cert);
+static int		rpctls_loadcrlfile(SSL_CTX *ctx);
+static int		rpctls_cnname(X509 *cert, uint32_t *uidp,
+			    int *ngrps, uint32_t *gidp);
+static char		*rpctls_getdnsname(char *dnsname);
 static void		rpctls_huphandler(int sig __unused);
-static int cert_crl(X509_STORE_CTX *ctx, X509_CRL *crl, X509 *x);
 
-extern void rpctlssd_1(struct svc_req *rqstp, SVCXPRT *transp);
-extern int gssd_syscall(const char *path);
+extern void		rpctlssd_1(struct svc_req *rqstp, SVCXPRT *transp);
+extern int		gssd_syscall(const char *path);
 
 int
 main(int argc, char **argv)
@@ -126,16 +141,33 @@ main(int argc, char **argv)
 	SVCXPRT *xprt;
 	struct timeval tm;
 	struct timezone tz;
+	char hostname[MAXHOSTNAMELEN + 2];
+	pid_t otherpid;
+
+	/* Check that another rpctlssd isn't already running. */
+	rpctls_pfh = pidfile_open(_PATH_RPCTLSSDPID, 0600, &otherpid);
+	if (rpctls_pfh == NULL) {
+		if (errno == EEXIST)
+			errx(1, "rpctlssd already running, pid: %d.", otherpid);
+		warn("cannot open or create pidfile");
+	}
 
 	/* Get the time when this daemon is started. */
 	gettimeofday(&tm, &tz);
 	rpctls_ssl_sec = tm.tv_sec;
 	rpctls_ssl_usec = tm.tv_usec;
 
+	/* Set the dns name for the server. */
+	rpctls_dnsname = rpctls_getdnsname(hostname);
+	if (rpctls_dnsname == NULL) {
+		strcpy(hostname, "@default.domain");
+		rpctls_dnsname = hostname;
+	}
+fprintf(stderr, "dnsname=%s\n", rpctls_dnsname);
 
 	debug = 0;
 	rpctls_verbose = false;
-	while ((ch = getopt(argc, argv, "D:dhl:mp:rv")) != -1) {
+	while ((ch = getopt(argc, argv, "D:dhl:n:mp:r:uvWw")) != -1) {
 		switch (ch) {
 		case 'D':
 			rpctls_certdir = optarg;
@@ -152,21 +184,42 @@ main(int argc, char **argv)
 		case 'm':
 			rpctls_do_mutual = true;
 			break;
+		case 'n':
+			hostname[0] = '@';
+			strlcpy(&hostname[1], optarg, MAXHOSTNAMELEN + 1);
+			rpctls_dnsname = hostname;
+			break;
 		case 'p':
 			rpctls_verify_capath = optarg;
 			break;
 		case 'r':
 			rpctls_crlfile = optarg;
 			break;
+		case 'u':
+			rpctls_cnuser = true;
+			break;
 		case 'v':
 			rpctls_verbose = true;
+			break;
+		case 'W':
+			if (rpctls_wildcard != X509_CHECK_FLAG_NO_WILDCARDS)
+				errx(1, "options -w and -W are mutually "
+				    "exclusive");
+			rpctls_wildcard = X509_CHECK_FLAG_MULTI_LABEL_WILDCARDS;
+			break;
+		case 'w':
+			if (rpctls_wildcard != X509_CHECK_FLAG_NO_WILDCARDS)
+				errx(1, "options -w and -W are mutually "
+				    "exclusive");
+			rpctls_wildcard = 0;
 			break;
 		default:
 			fprintf(stderr, "usage: %s "
 			    "[-D certdir] [-d] [-h] "
 			    "[-l CAfile] [-m] "
+			    "[-n domain_name] "
 			    "[-p CApath] [-r CRLfile] "
-			    "[-v]\n", argv[0]);
+			    "[-u] [-v] [-W] [-w]\n", argv[0]);
 			exit(1);
 		}
 	}
@@ -176,8 +229,15 @@ main(int argc, char **argv)
 		    "-p <CApath> options");
 	if (rpctls_comparehost && (!rpctls_do_mutual ||
 	    (rpctls_verify_cafile == NULL && rpctls_verify_capath == NULL)))
-		errx(1, "-h requires the -m and either the "
-		    "-l <CAfile> or -p <CApath> options");
+		errx(1, "-h requires the -m plus the "
+		    "-l <CAfile> and/or -p <CApath> options");
+	if (!rpctls_comparehost && rpctls_wildcard !=
+	    X509_CHECK_FLAG_NO_WILDCARDS)
+		errx(1, "The -w or -W options require the -h option");
+	if (rpctls_cnuser && (!rpctls_do_mutual ||
+	    (rpctls_verify_cafile == NULL && rpctls_verify_capath == NULL)))
+		errx(1, "-u requires the -m plus the "
+		    "-l <CAfile> and/or -p <CApath> options");
 
 	if (modfind("krpc") < 0) {
 		/* Not present in kernel, try loading it */
@@ -195,6 +255,8 @@ main(int argc, char **argv)
 	signal(SIGTERM, rpctlssd_terminate);
 	signal(SIGPIPE, rpctlssd_terminate);
 	signal(SIGHUP, rpctls_huphandler);
+
+	pidfile_write(rpctls_pfh);
 
 	memset(&sun, 0, sizeof sun);
 	sun.sun_family = AF_LOCAL;
@@ -291,10 +353,12 @@ bool_t
 rpctlssd_connect_1_svc(void *argp,
     struct rpctlssd_connect_res *result, struct svc_req *rqstp)
 {
-	int s;
+	int ngrps, s;
 	SSL *ssl;
 	uint32_t flags;
 	struct ssl_entry *newslp;
+	uint32_t uid;
+	uint32_t *gidp;
 
 	rpctlssd_verbose_out("rpctlsd_connect_svc: started\n");
 	memset(result, 0, sizeof(*result));
@@ -305,11 +369,19 @@ rpctlssd_verbose_out("rpctlsd_connect_svc s=%d\n", s);
 		return (FALSE);
 
 	/* Do the server side of a TLS handshake. */
-	ssl = rpctls_server(rpctls_ctx, s, &flags);
-	if (ssl == NULL)
+	gidp = calloc(NGROUPS, sizeof(*gidp));
+	ssl = rpctls_server(rpctls_ctx, s, &flags, &uid, &ngrps, gidp);
+	if (ssl == NULL) {
+		free(gidp);
 		rpctlssd_verbose_out("rpctlssd_connect_svc: ssl "
 		    "accept failed\n");
-	else {
+		/*
+		 * For RPC-over-TLS, this upcall is expected
+		 * to close off the socket.
+		 */
+		close(s);
+		return (FALSE);
+	} else {
 		rpctlssd_verbose_out("rpctlssd_connect_svc: "
 		    "succeeded flags=0x%x\n", flags);
 		result->flags = flags;
@@ -319,15 +391,15 @@ rpctlssd_verbose_out("rpctlsd_connect_svc s=%d\n", s);
 		/* Hard to believe this could ever wrap around.. */
 		if (rpctls_ssl_refno == 0)
 			result->ssl = ++rpctls_ssl_refno;
-	}
-
-	if (ssl == NULL) {
-		/*
-		 * For RPC-over-TLS, this upcall is expected
-		 * to close off the socket.
-		 */
-		close(s);
-		return (FALSE);
+		if ((flags & RPCTLS_FLAGS_CNUSER) != 0) {
+			result->uid = uid;
+			result->gid.gid_len = ngrps;
+			result->gid.gid_val = gidp;
+		} else {
+			result->uid = 0;
+			result->gid.gid_len = 0;
+			result->gid.gid_val = gidp;
+		}
 	}
 
 	/* Maintain list of all current SSL *'s */
@@ -374,7 +446,13 @@ rpctlssd_disconnect_1_svc(struct rpctlssd_disconnect_arg *argp,
 int
 rpctlssd_1_freeresult(SVCXPRT *transp, xdrproc_t xdr_result, caddr_t result)
 {
+	rpctlssd_connect_res *res;
 
+	if (xdr_result == (xdrproc_t)xdr_rpctlssd_connect_res) {
+		res = (rpctlssd_connect_res *)result;
+		if (res->gid.gid_val != NULL)
+			free(res->gid.gid_val);
+	}
 	return (TRUE);
 }
 
@@ -383,6 +461,7 @@ rpctlssd_terminate(int sig __unused)
 {
 
 	gssd_syscall("S");
+	pidfile_remove(rpctls_pfh);
 	exit(0);
 }
 
@@ -390,12 +469,7 @@ rpctlssd_terminate(int sig __unused)
 static int
 rpctls_verify_callback(int preverify_ok, X509_STORE_CTX *x509_ctx)
 {
-	int err;
-	char *cp;
 
-	err = X509_STORE_CTX_get_error(x509_ctx);
-	cp = (char *)X509_STORE_CTX_get_cert_crl(x509_ctx);
-rpctlssd_verbose_out("verf cb pre=%d err=%d cercrl=%p\n", preverify_ok, err, cp);
 	return (1);
 }
 
@@ -458,13 +532,29 @@ rpctls_setup_ssl(const char *certdir)
 
 	/* Set Mutual authentication, as required. */
 	if (rpctls_do_mutual) {
-		rpctlssd_verbose_out("rpctls_setup_ssl: set mutual\n");
-		ret = rpctls_loadfiles(ctx);
-		if (ret == 0) {
-			rpctlssd_verbose_out("rpctls_setup_ssl: "
-			    "Load CAfile, CRLfile failed\n");
-			SSL_CTX_free(ctx);
-			return (NULL);
+		if (rpctls_verify_cafile != NULL ||
+		    rpctls_verify_capath != NULL) {
+			if (rpctls_crlfile != NULL) {
+				ret = rpctls_loadcrlfile(ctx);
+				if (ret == 0) {
+					rpctlssd_verbose_out("rpctls_setup_ssl:"
+					    " Load CRLfile failed\n");
+					SSL_CTX_free(ctx);
+					return (NULL);
+				}
+			}
+			ret = SSL_CTX_load_verify_locations(ctx,
+			    rpctls_verify_cafile, rpctls_verify_capath);
+			if (ret == 0) {
+				rpctlssd_verbose_out("rpctls_setup_ssl: "
+				    "Can't load verify locations\n");
+				SSL_CTX_free(ctx);
+				return (NULL);
+			}
+			if (rpctls_verify_cafile != NULL)
+				SSL_CTX_set_client_CA_list(ctx,
+				    SSL_load_client_CA_file(
+			    rpctls_verify_cafile));
 		}
 		SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER,
 		    rpctls_verify_callback);
@@ -473,20 +563,25 @@ rpctls_setup_ssl(const char *certdir)
 }
 
 static SSL *
-rpctls_server(SSL_CTX *ctx, int s, uint32_t *flags)
+rpctls_server(SSL_CTX *ctx, int s, uint32_t *flags, uint32_t *uidp,
+    int *ngrps, uint32_t *gidp)
 {
 	SSL *ssl;
 	X509 *cert;
-	int ret;
-	char *cp;
+	struct sockaddr *sad;
+	struct sockaddr_storage ad;
+	char hostnam[NI_MAXHOST];
+	int gethostret, ret;
+	char *cp, *cp2;
 
 	*flags = 0;
+	sad = (struct sockaddr *)&ad;
 	if (rpctls_gothup) {
 		rpctls_gothup = false;
-		ret = rpctls_loadfiles(ctx);
+		ret = rpctls_loadcrlfile(ctx);
 		if (ret == 0)
 			rpctlssd_verbose_out("rpctls_server: Can't "
-			    "load CAfile, CRLfile\n");
+			    "reload CRLfile\n");
 	}
 	ssl = SSL_new(ctx);
 	if (ssl == NULL) {
@@ -508,29 +603,44 @@ rpctls_server(SSL_CTX *ctx, int s, uint32_t *flags)
 	*flags |= RPCTLS_FLAGS_HANDSHAKE;
 	if (rpctls_do_mutual) {
 		cert = SSL_get_peer_certificate(ssl);
-		if (cert == NULL)
-			rpctlssd_verbose_out("rpctls_server: "
-			    "No peer certificate\n");
-		else {
-			cp = X509_NAME_oneline(X509_get_issuer_name(cert),
-			    NULL, 0);
-			rpctlssd_verbose_out("rpctls_server: cert "
-			    "issuerName=%s\n", cp);
-			cp = X509_NAME_oneline(X509_get_subject_name(cert),
-			    NULL, 0);
-			rpctlssd_verbose_out("rpctls_server: cert "
-			    "subjectName=%s\n", cp);
+		if (cert != NULL) {
+			gethostret = rpctls_gethost(s, sad, hostnam,
+			    sizeof(hostnam));
+			if (gethostret == 0)
+				hostnam[0] = '\0';
+			cp2 = X509_NAME_oneline(
+			    X509_get_subject_name(cert), NULL, 0);
+rpctlssd_verbose_out("%s\n", cp2);
 			*flags |= RPCTLS_FLAGS_GOTCERT;
 			ret = SSL_get_verify_result(ssl);
-			rpctlssd_verbose_out("rpctls_server: get "
-			    "verify result=%d\n", ret);
+			if (ret != X509_V_OK) {
+				cp = X509_NAME_oneline(
+				    X509_get_issuer_name(cert), NULL, 0);
+				if (rpctls_debug_level == 0)
+					syslog(LOG_INFO | LOG_DAEMON,
+					    "rpctls_server: client IP %s "
+					    "issuerName=%s subjectName=%s"
+					    " verify failed %s\n", hostnam,
+					    cp, cp2,
+					    X509_verify_cert_error_string(ret));
+				else
+					fprintf(stderr,
+					    "rpctls_server: client IP %s "
+					    "issuerName=%s subjectName=%s"
+					    " verify failed %s\n", hostnam,
+					    cp, cp2,
+					    X509_verify_cert_error_string(ret));
+			}
 			if (ret ==
 			    X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT ||
 			    ret == X509_V_ERR_SELF_SIGNED_CERT_IN_CHAIN)
 				*flags |= RPCTLS_FLAGS_SELFSIGNED;
 			else if (ret == X509_V_OK) {
 				if (rpctls_comparehost) {
-					ret = rpctls_checkhost(s, cert);
+					ret = 0;
+					if (gethostret != 0)
+						ret = rpctls_checkhost(sad,
+						    cert);
 					if (ret != 1) {
 						*flags |=
 						    RPCTLS_FLAGS_DISABLED;
@@ -540,97 +650,215 @@ rpctls_server(SSL_CTX *ctx, int s, uint32_t *flags)
 						    "failed\n");
 					}
 				}
+				if (rpctls_cnuser) {
+					ret = rpctls_cnname(cert, uidp,
+					    ngrps, gidp);
+					if (ret != 0)
+						*flags |= RPCTLS_FLAGS_CNUSER;
+				}
 				*flags |= RPCTLS_FLAGS_VERIFIED;
 			}
 			X509_free(cert);
-		}
+		} else
+			rpctlssd_verbose_out("rpctls_server: "
+			    "No peer certificate\n");
 	}
 	return (ssl);
 }
 
 /*
- * Check a client IP address against any host address in the
- * certificate.  Basically getpeername(2), getnameinfo(3) and
- * X509_check_host().
+ * Get the client's IP address.
  */
-int
-rpctls_checkhost(int s, X509 *cert)
+static int
+rpctls_gethost(int s, struct sockaddr *sad, char *hostip, size_t hostlen)
 {
-	struct sockaddr *sad;
-	struct sockaddr_storage ad;
-	char hostnam[NI_MAXHOST];
 	socklen_t slen;
 	int ret;
 
-	sad = (struct sockaddr *)&ad;
-	slen = sizeof(ad);
+	slen = sizeof(struct sockaddr_storage);
 	if (getpeername(s, sad, &slen) < 0)
 		return (0);
+	ret = 0;
 	if (getnameinfo((const struct sockaddr *)sad,
-	    sad->sa_len, hostnam, sizeof(hostnam),
-	    NULL, 0, NI_NUMERICHOST) == 0)
-		rpctlssd_verbose_out("rpctls_checkhost: %s\n",
-		    hostnam);
+	    sad->sa_len, hostip, hostlen,
+	    NULL, 0, NI_NUMERICHOST) == 0) {
+		rpctlssd_verbose_out("rpctls_gethost: %s\n",
+		    hostip);
+		ret = 1;
+	}
+	return (ret);
+}
+
+/*
+ * Check a client IP address against any host address in the
+ * certificate.  Basically getnameinfo(3) and
+ * X509_check_host().
+ */
+static int
+rpctls_checkhost(struct sockaddr *sad, X509 *cert)
+{
+	char hostnam[NI_MAXHOST];
+	int ret;
+
 	if (getnameinfo((const struct sockaddr *)sad,
 	    sad->sa_len, hostnam, sizeof(hostnam),
 	    NULL, 0, NI_NAMEREQD) != 0)
 		return (0);
 	rpctlssd_verbose_out("rpctls_checkhost: DNS %s\n",
 	    hostnam);
-	ret = X509_check_host(cert, hostnam, strlen(hostnam), 0, NULL);
+	ret = X509_check_host(cert, hostnam, strlen(hostnam),
+	    rpctls_wildcard, NULL);
 	return (ret);
 }
 
 /*
- * Load the CAfile (and optionally CRLfile) into the certificate
- * verification store.
+ * Acquire the dnsname for this server.
+ */
+static char *
+rpctls_getdnsname(char *hostname)
+{
+	char *cp, *dnsname;
+	struct addrinfo *aip, hints;
+	int error;
+
+	dnsname = NULL;
+	if (gethostname(hostname, MAXHOSTNAMELEN) == 0) {
+		if ((cp = strchr(hostname, '.')) != NULL &&
+		    *(cp + 1) != '\0') {
+			*cp = '@';
+			dnsname = cp;
+		} else {
+			memset((void *)&hints, 0, sizeof (hints));
+			hints.ai_flags = AI_CANONNAME;
+			error = getaddrinfo(hostname, NULL, &hints, &aip);
+			if (error == 0) {
+				if (aip->ai_canonname != NULL &&
+				    (cp = strchr(aip->ai_canonname, '.')) !=
+				    NULL && *(cp + 1) != '\0') {
+					hostname[0] = '@';
+					strlcpy(&hostname[1], cp + 1,
+					    MAXHOSTNAMELEN + 1);
+					dnsname = hostname;
+				}
+				freeaddrinfo(aip);
+			}
+		}
+	}
+	return (dnsname);
+}
+
+/*
+ * Check a commonName to see if it maps to "user@domain" and
+ * acquire a <uid, gidlist> for it if it does.
  */
 static int
-rpctls_loadfiles(SSL_CTX *ctx)
+rpctls_cnname(X509 *cert, uint32_t *uidp, int *ngrps, uint32_t *gidp)
+{
+	char *cp, usern[1024 + 1];
+	struct passwd *pwd;
+	gid_t gids[NGROUPS];
+	int i;
+	GENERAL_NAMES *genlist;
+	GENERAL_NAME *genname;
+	OTHERNAME *val;
+
+	/* First, find the otherName in the subjectAltName. */
+	genlist = X509_get_ext_d2i(cert, NID_subject_alt_name, NULL, NULL);
+rpctlssd_verbose_out("genlist=%p\n", genlist);
+	if (genlist == NULL)
+		return (0);
+	val = NULL;
+	for (i = 0; i < sk_GENERAL_NAME_num(genlist); i++) {
+		genname = sk_GENERAL_NAME_value(genlist, i);
+		if (genname->type != GEN_OTHERNAME)
+			continue;
+		val = genname->d.otherName;
+		break;
+	}
+	if (val == NULL)
+		return (0);
+rpctlssd_verbose_out("fnd type=0x%x len=%d anstyp=0x%x data=%s\n", val->value->type, val->value->value.utf8string->length, val->value->value.utf8string->type, val->value->value.utf8string->data);
+
+	/* Check to see that it is the correct OID. */
+	i = i2t_ASN1_OBJECT(usern, sizeof(usern), val->type_id);
+rpctlssd_verbose_out("obj=%d str=%s\n", i,  usern);
+	if (i != strlen(rpctls_cnuseroid) || memcmp(usern, rpctls_cnuseroid,
+	    i) != 0) {
+		rpctlssd_verbose_out("rpctls_cnname: invalid cnuser "
+		    "oid len=%d val=%s\n", i, usern);
+		return (0);
+	}
+
+	/* Sanity check the otherName. */
+	if (val->value->type != V_ASN1_UTF8STRING ||
+	    val->value->value.utf8string->length < 3 ||
+	    val->value->value.utf8string->length > sizeof(usern) - 1) {
+		rpctlssd_verbose_out("rpctls_cnname: invalid cnuser "
+		    "type=%d\n", val->value->type);
+		return (0);
+	}
+
+	/* Look for a "user" in the otherName */
+	memcpy(usern, val->value->value.utf8string->data,
+	    val->value->value.utf8string->length);
+	usern[val->value->value.utf8string->length] = '\0';
+	rpctlssd_verbose_out("rpctls_cnname: userstr %s\n", usern);
+
+	/* Now, look for the @dnsname suffix in the commonName. */
+	cp = strcasestr(usern, rpctls_dnsname);
+	if (cp == NULL)
+		return (0);
+rpctlssd_verbose_out("dns=%s\n", cp);
+	if (*(cp + strlen(rpctls_dnsname)) != '\0')
+		return (0);
+	*cp = '\0';
+
+	/* See if the "user" is in the passwd database. */
+rpctlssd_verbose_out("user=%s\n", usern);
+	pwd = getpwnam(usern);
+	if (pwd == NULL)
+		return (0);
+rpctlssd_verbose_out("pwname=%s\n", pwd->pw_name);
+	*uidp = pwd->pw_uid;
+	*ngrps = NGROUPS;
+	if (getgrouplist(pwd->pw_name, pwd->pw_gid, gids, ngrps) < 0)
+		return (0);
+	for (i = 0; i < *ngrps; i++)
+		gidp[i] = gids[i];
+	return (1);
+}
+
+/*
+ * (re)load the CRLfile into the certificate verification store.
+ */
+static int
+rpctls_loadcrlfile(SSL_CTX *ctx)
 {
 	X509_STORE *certstore;
 	X509_LOOKUP *certlookup;
 	int ret;
 
-	if (rpctls_verify_cafile != NULL ||
-	    rpctls_verify_capath != NULL) {
-		if (rpctls_crlfile != NULL) {
-			certstore = SSL_CTX_get_cert_store(ctx);
-			certlookup = X509_STORE_add_lookup(
-			    certstore, X509_LOOKUP_file());
-			ret = 0;
-			if (certlookup != NULL)
-				ret = X509_load_crl_file(certlookup,
-				    rpctls_crlfile, X509_FILETYPE_PEM);
-			if (ret != 0)
-				ret = X509_STORE_set_flags(certstore,
-				    X509_V_FLAG_CRL_CHECK |
-				    X509_V_FLAG_CRL_CHECK_ALL);
-			if (ret != 0)
-{
-X509_STORE_set_cert_crl(certstore, cert_crl);
-				X509_STORE_set_verify_cb_func(
-				    certstore, rpctls_verify_callback);
-}
-			if (ret == 0) {
-				rpctlssd_verbose_out(
-				    "rpctls_setup_ssl: Can't"
-				    " load CRLfile=%s\n",
-				    rpctls_crlfile);
-				return (ret);
-			}
-		}
-		ret = SSL_CTX_load_verify_locations(ctx,
-		    rpctls_verify_cafile, rpctls_verify_capath);
+	if ((rpctls_verify_cafile != NULL ||
+	    rpctls_verify_capath != NULL) &&
+	    rpctls_crlfile != NULL) {
+		certstore = SSL_CTX_get_cert_store(ctx);
+		certlookup = X509_STORE_add_lookup(
+		    certstore, X509_LOOKUP_file());
+		ret = 0;
+		if (certlookup != NULL)
+			ret = X509_load_crl_file(certlookup,
+			    rpctls_crlfile, X509_FILETYPE_PEM);
+		if (ret != 0)
+			ret = X509_STORE_set_flags(certstore,
+			    X509_V_FLAG_CRL_CHECK |
+			    X509_V_FLAG_CRL_CHECK_ALL);
 		if (ret == 0) {
-			rpctlssd_verbose_out("rpctls_setup_ssl: "
-			    "Can't load verify locations\n");
+			rpctlssd_verbose_out(
+			    "rpctls_loadcrlfile: Can't"
+			    " load CRLfile=%s\n",
+			    rpctls_crlfile);
 			return (ret);
 		}
-		if (rpctls_verify_cafile != NULL)
-			SSL_CTX_set_client_CA_list(ctx,
-			    SSL_load_client_CA_file(
-			    rpctls_verify_cafile));
 	}
 	return (1);
 }
@@ -642,42 +870,3 @@ rpctls_huphandler(int sig __unused)
 	rpctls_gothup = true;
 }
 
-static int cert_crl(X509_STORE_CTX *ctx, X509_CRL *crl, X509 *x)
-{
-    X509_REVOKED *rev;
-    int ret;
-
-rpctlssd_verbose_out("in cert_crl\n");
-    /*
-     * The rules changed for this... previously if a CRL contained unhandled
-     * critical extensions it could still be used to indicate a certificate
-     * was revoked. This has since been changed since critical extensions can
-     * change the meaning of CRL entries.
-     */
-#ifdef notnow
-    if (!(ctx->param->flags & X509_V_FLAG_IGNORE_CRITICAL)
-        && (crl->flags & EXFLAG_CRITICAL) &&
-        !verify_cb_crl(ctx, X509_V_ERR_UNHANDLED_CRITICAL_CRL_EXTENSION))
-        return 0;
-#endif
-    /*
-     * Look for serial number of certificate in CRL.  If found, make sure
-     * reason is not removeFromCRL.
-     */
-    ret = X509_CRL_get0_by_cert(crl, &rev, x);
-rpctlssd_verbose_out("get0 cert=%d\n", ret);
-    if (ret != 0) {
-#ifdef notnow
-        if (rev->reason == CRL_REASON_REMOVE_FROM_CRL)
-{ rpctls_verbose_out("ret 2\n");
-            return 2;
-}
-        if (!verify_cb_crl(ctx, X509_V_ERR_CERT_REVOKED))
-#endif
-rpctlssd_verbose_out("ret 0\n");
-            return 0;
-    }
-
-rpctlssd_verbose_out("ret 1\n");
-    return 1;
-}
