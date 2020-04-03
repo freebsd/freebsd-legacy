@@ -39,9 +39,13 @@
 .Op Fl h
 .Op Fl l Ar CAfile
 .Op Fl m
+.Op Fl n Ar domain_name
 .Op Fl p Ar CApath
 .Op Fl r Ar CRLfile
+.Op Fl u
 .Op Fl v
+.Op Fl W
+.Op Fl w
 .Sh DESCRIPTION
 The
 .Nm
@@ -50,22 +54,43 @@ implementation.
 This daemon must be running to allow the kernel RPC to perform the TLS
 handshake after a TCP client has sent the STARTTLS Null RPC request to
 the server.
-This is needed to support clients doing NFS over TLS.
+This daemon requires that the kernel be built with
+.Dq options KERNEL_TLS
+and be running on an architecture such as
+.Dq amd64
+that supports a direct map (not i386).
 Note that the
 .Fl tls
 option in the
 .Xr exports 5
-file specifies that the client must use RPC over TLS and the
+file specifies that the client must use RPC over TLS.
+The
 .Fl tlscert
 option in the
 .Xr exports 5
 file specifies that the client must provide a certificate
 that verifies.
-For this latter case, the
+The
+.Fl tlscertuser
+option in the
+.Xr exports 5
+file specifies that the client must provide a certificate
+that verifies and has a otherName:1.2.3.4.6.9;UTF8: field of
+subjectAltName of the form
+.Dq user@dns_domain
+that maps to a <uid, gid_list>.
+For the latter two cases, the
 .Fl m
-and
+and either the
 .Fl l
+or
+.Fl p
 options must be specified.
+The
+.Fl tlscertuser
+option also requires that the
+.Fl u
+option on this daemon be specified.
 .Pp
 Also, if the IP address used by the client cannot be trusted,
 the rules in
@@ -75,22 +100,46 @@ As such, the
 .Fl h
 option can be used along with
 .Fl m
-and
+and either the
 .Fl l
+or
+.Fl p
 options to require that the client certificate have the correct
-Fully Qualified Domain Name in it.
+Fully Qualified Domain Name (FQDN) in it.
 .Pp
 A certificate and associated key must exist in /etc/rpctlssd
-(or the ``certdir'' specified by the
+(or the
+.Dq certdir
+specified by the
 .Fl D
 option)
-in files named ``cert.pem'' and ``key.pem''.
+in files named
+.Dq cert.pem
+and
+.Dq key.pem .
+.Pp
+If a SIGHUP signal is sent to the daemon it will reload the
+.Dq CRLfile .
+If the
+.Fl r
+option was not specified, the SIGHUP signal will be ignored.
+.Pp
+The daemon will log failed certificate verifications via
+.Xr syslogd 8
+using LOG_INFO | LOG_DAEMON when the
+.Fl m
+option has been specified.
 .Pp
 The options are as follows:
 .Bl -tag -width indent
 .It Fl D Ar certdir
-Use ``certdir'' instead of /etc/rpctlssd as the location for the
-certificate in a file called ``cert.pem'' and key in ``key.pem''.
+Use
+.Dq certdir
+instead of /etc/rpctlssd as the location for the
+certificate in a file called
+.Dq cert.pem
+and key in
+.Dq key.pem .
 .It Fl d
 Run in debug mode.
 In this mode,
@@ -98,17 +147,23 @@ In this mode,
 will not fork when it starts.
 .It Fl h
 This option specifies that the client must provide a certificate
-that both verifies and has the Fully Qualified Domain Name (FQDN) for
-the IP address that the client uses to connect to the server
-in either the subjectAltName or commonName field of the
-certificate.
+that both verifies and has a FQDN that matches the reverse
+DNS name for the IP address that
+the client uses to connect to the server.
+The FQDN should be
+in the DNS field of the subjectAltName, but is also allowed
+to be in the CN field of the
+subjectName in the certificate.
+By default, a wildcard "*" in the FQDN is not allowed.
 With this option, a failure to verify the client certificate
-or find the FQDN in the certificate will result in the
+or match the FQDN will result in the
 server sending AUTH_REJECTEDCRED replies to all client RPCs.
 This option requires the
 .Fl m
-and
+and either the
 .Fl l
+or
+.Fl p
 options.
 .It Fl l Ar CAfile
 This option specifies the path name of a CA certificate(s) file
@@ -119,10 +174,13 @@ This path name is used in
 .Dq SSL_CTX_load_verify_locations(ctx,CAfile,NULL)
 and
 .Dq SSL_CTX_set_client_CA_list(ctx,SSL_load_client_CA_file(CAfile))
-openssl calls.
+openssl library calls.
 Note that this is a path name for the file and is not assumed to be
-in ``certdir''.
-This option should be specified when the
+in
+.Dq certdir .
+Either this option or the
+.Fl p
+option must be specified when the
 .Fl m
 option is specified so that the daemon can verify the client's
 certificate.
@@ -132,10 +190,28 @@ from the client during the TLS handshake.
 It does not require that the client provide a certificate.
 It should be specified unless no client doing RPC over TLS is
 required to have a certificate.
-For NFS, the export option
+For NFS, either the export option
 .Fl tlscert
-will be used to require a client to provide a certificate
+or
+.Fl tlscertuser
+may be used to require a client to provide a certificate
 that verifies.
+See
+.Xr exports 5 .
+.It Fl n Ar domain_name
+This option specifies what the
+.Dq domain_name
+is for use with the
+.Fl u
+option, overriding the domain_name of the server this daemon is running on.
+If you have specified the
+.Fl domain
+command line option for
+.Xr nfsuserd 8
+then you should specify this option with the same
+.Dq domain_name
+that was specified for
+.Xr nfsuserd 8 .
 .It Fl p Ar CApath
 This option is similar to the
 .Fl l
@@ -158,23 +234,90 @@ This option is meaningless unless either the
 or
 .Fl p
 have been specified.
+.It Fl u
+This option specifies that if the client provides a certificate
+that both verifies and has a subjectAltName with an otherName of the form
+.Dq otherName:1.2.3.4.6.9;UTF8:user@dns_domain
+the daemon will attempt to map
+.Dq user@dns_domain
+in the above
+to a <uid, gid_list>.
+The mapping of
+.Dq user@dns_domain
+is done in the same manner as the
+.Xr nfsuserd 8
+daemon, where
+.Dq dns_domain
+is the domain of the NFS server (or the one set via the
+.Fl n
+option) and
+.Dq user
+is a valid username in the password database.
+If this mapping is successful, then the <uid, gid_list> for
+.Dq user
+will be used for all
+RPCs on the mount instead of the credentials in the RPC request
+header.
+This option requires the
+.Fl m
+and either the
+.Fl l
+or
+.Fl p
+options.
+Use of this option does not conform to RFC-X, which does
+not allow certificates to be used for user authentication.
 .It Fl v
 Run in verbose mode.
 In this mode,
 .Nm
-will log activity messages to syslog using LOG_INFO | LOG_DAEMON or to
+will log activity messages to
+.Xr syslogd 8
+using LOG_INFO | LOG_DAEMON or to
 stderr, if the
 .Fl d
 option has also been specified.
+.It Fl W
+This option is used with the
+.Fl h
+option to allow use of a wildcard
+.Dq *
+that matches multiple
+components of the reverse DNS name for the client's IP
+address.
+For example, the FQDN
+.Dq *.uoguelph.ca
+would match both
+.Dq laptop21.uoguelph.ca
+and
+.Dq laptop3.cis.uoguelph.ca .
+.It Fl w
+Similar to
+.Fl W
+but allows the wildcard
+.Dq *
+to match a single component of the reverse DNS name.
+For example, the FQDN
+.Dq *.uoguelph.ca
+would match
+.Dq laptop21.uoguelph.ca
+but not
+.Dq laptop3.cis.uoguelph.ca .
+Only one of the
+.Fl W
+and
+.Fl w
+options is allowed.
 .El
 .Sh EXIT STATUS
 .Ex -std
 .Sh SEE ALSO
 .Xr openssl 1 ,
-.Xr syslog 3 ,
 .Xr exports 5 ,
 .Xr mount_nfs 8 ,
-.Xr rpctlscd 8
+.Xr nfsuserd 8 ,
+.Xr rpctlscd 8 ,
+.Xr syslogd 8
 .Sh BUGS
 This daemon cannot be safely shut down and restarted if there are
 any active RPC-over-TLS connections.
