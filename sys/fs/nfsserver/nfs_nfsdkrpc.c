@@ -243,6 +243,8 @@ nfssvc_program(struct svc_req *rqst, SVCXPRT *xprt)
 			nd.nd_flag |= ND_TLS;
 			if ((xprt->xp_tls & RPCTLS_FLAGS_VERIFIED) != 0)
 				nd.nd_flag |= ND_TLSCERT;
+			if ((xprt->xp_tls & RPCTLS_FLAGS_CNUSER) != 0)
+				nd.nd_flag |= ND_TLSCNUSER;
 		}
 		nd.nd_maxextsiz = 16384;
 #ifdef MAC

@@ -2130,21 +2130,28 @@ nfsd_checkrootexp(struct nfsrv_descript *nd)
 {
 
 	if ((nd->nd_flag & (ND_GSS | ND_EXAUTHSYS)) == ND_EXAUTHSYS)
-		return (0);
+		goto checktls;
 	if ((nd->nd_flag & (ND_GSSINTEGRITY | ND_EXGSSINTEGRITY)) ==
 	    (ND_GSSINTEGRITY | ND_EXGSSINTEGRITY))
-		return (0);
+		goto checktls;
 	if ((nd->nd_flag & (ND_GSSPRIVACY | ND_EXGSSPRIVACY)) ==
 	    (ND_GSSPRIVACY | ND_EXGSSPRIVACY))
-		return (0);
+		goto checktls;
 	if ((nd->nd_flag & (ND_GSS | ND_GSSINTEGRITY | ND_GSSPRIVACY |
 	     ND_EXGSS)) == (ND_GSS | ND_EXGSS))
+		goto checktls;
+	return (1);
+checktls:
+	if ((nd->nd_flag & ND_EXTLS) == 0)
 		return (0);
-	if ((nd->nd_flag & (ND_TLSCERT | ND_EXTLSCERT)) ==
+	if ((nd->nd_flag & (ND_TLSCNUSER | ND_EXTLSCNUSER)) ==
+	    (ND_TLSCNUSER | ND_EXTLSCNUSER))
+		return (0);
+	if ((nd->nd_flag & (ND_TLSCERT | ND_EXTLSCERT | ND_EXTLSCNUSER)) ==
 	    (ND_TLSCERT | ND_EXTLSCERT))
 		return (0);
-	if ((nd->nd_flag & (ND_EXTLSCERT | ND_EXTLS | ND_TLS)) ==
-	    (ND_EXTLS | ND_TLS))
+	if ((nd->nd_flag & (ND_TLS | ND_EXTLSCNUSER | ND_EXTLSCERT)) ==
+	    ND_TLS)
 		return (0);
 	return (1);
 }

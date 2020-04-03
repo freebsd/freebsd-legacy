@@ -3351,14 +3351,14 @@ nfsd_fhtovp(struct nfsrv_descript *nd, struct nfsrvfh *nfp, int lktype,
 	/*
 	 * If TLS is required by the export, check the flags in nd_flag.
 	 */
-printf("ndflag=0x%jx exflags=0x%x\n", (uintmax_t)nd->nd_flag, exp->nes_exflag);
 	if (nd->nd_repstat == 0 && ((NFSVNO_EXTLS(exp) &&
 	    (nd->nd_flag & ND_TLS) == 0) ||
 	     (NFSVNO_EXTLSCERT(exp) &&
-	      (nd->nd_flag & ND_TLSCERT) == 0))) {
+	      (nd->nd_flag & ND_TLSCERT) == 0) ||
+	     (NFSVNO_EXTLSCNUSER(exp) &&
+	      (nd->nd_flag & ND_TLSCNUSER) == 0))) {
 		vput(*vpp);
 		nd->nd_repstat = NFSERR_ACCES;
-printf("set eacces\n");
 	}
 
 	/*
@@ -3625,11 +3625,12 @@ nfsvno_v4rootexport(struct nfsrv_descript *nd)
 	}
 
 	/* And set ND_EXxx flags for TLS. */
-printf("v4root exflags=0x%x\n", exflags);
-	if ((exflags & RPCTLS_FLAGS_HANDSHAKE) != 0) {
+	if ((exflags & MNTEX_TLS) != 0) {
 		nd->nd_flag |= ND_EXTLS;
-		if ((exflags & RPCTLS_FLAGS_VERIFIED) != 0)
+		if ((exflags & MNTEX_TLSCERT) != 0)
 			nd->nd_flag |= ND_EXTLSCERT;
+		if ((exflags & MNTEX_TLSCNUSER) != 0)
+			nd->nd_flag |= ND_EXTLSCNUSER;
 	}
 
 out:

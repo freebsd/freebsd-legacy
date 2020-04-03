@@ -719,8 +719,10 @@ struct nfsrv_descript {
 #define	ND_NOMAP		0x800000000
 #define	ND_TLS			0x1000000000
 #define	ND_TLSCERT		0x2000000000
-#define	ND_EXTLS		0x4000000000
-#define	ND_EXTLSCERT		0x8000000000
+#define	ND_TLSCNUSER		0x4000000000
+#define	ND_EXTLS		0x8000000000
+#define	ND_EXTLSCERT		0x10000000000
+#define	ND_EXTLSCNUSER		0x20000000000
 
 /*
  * ND_GSS should be the "or" of all GSS type authentications.
