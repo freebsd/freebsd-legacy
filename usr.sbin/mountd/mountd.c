@@ -2753,7 +2753,9 @@ do_opt(char **cpp, char **endcpp, struct exportlist *ep, struct grouplist *grp,
 		} else if (!strcmp(cpopt, "tls")) {
 			*exflagsp |= MNTEX_TLS;
 		} else if (!strcmp(cpopt, "tlscert")) {
-			*exflagsp |= MNTEX_TLSCERT;
+			*exflagsp |= (MNTEX_TLS | MNTEX_TLSCERT);
+		} else if (!strcmp(cpopt, "tlscertuser")) {
+			*exflagsp |= (MNTEX_TLS | MNTEX_TLSCERT | MNTEX_TLSCNUSER);
 		} else {
 			syslog(LOG_ERR, "bad opt %s", cpopt);
 			return (1);
