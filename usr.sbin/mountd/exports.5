@@ -187,6 +187,58 @@ preferred flavor first.
 If this option is not present,
 the default security flavor list of just sys is used.
 .Pp
+.Fl tls
+specifies that all remote access must be done using RPC-over-TLS.
+This option requires the
+.Xr rpctlssd 8
+daemon be running on the server.
+.Pp
+.Fl tlscert
+specifies that all remote access must be done using RPC-over-TLS
+and that the NFS client(s) must provide a TLS/X509 certificate
+that verifies.
+This option requires the
+.Xr rpctlssd 8
+daemon be running on the server with the
+.Fl m
+command line option specified for it.
+.Pp
+.Fl tlscertuser
+is similar to
+.Fl tlscert
+but also requires that there be a
+.Dq otherName
+field in
+.Dq subjectAltName
+of the TLS/X509 certificate of the form
+.Dq 1.2.3.4.6.9;UTFS8:user@dns_domain
+where
+.Dq user@dns_domain
+maps to a valid user on the NFS server using the same technique as
+.Xr nfsuserd 8
+does.
+The
+.Dq user
+must be a valid username in the password database and
+.Dq dns_domain
+the domain of the server (or as set via the
+.Fl domain
+command line option for
+.Xr nfsuserd 8 .
+The
+.Dq user
+is then mapped to
+.Dq <uid, gid0,..., gidN>
+credentials that are used for all RPCs, in a manner similar
+to the
+.Fl mapall
+option.
+This option requires the
+.Xr rpctlssd 8
+daemon be running on the server with the
+.Fl u
+command line option specified for it.
+.Pp
 The
 .Fl ro
 option specifies that the file system should be exported read-only
@@ -537,6 +589,7 @@ afterwards, whereas NFSv3 rejects the mount request.
 .Xr netgroup 5 ,
 .Xr mountd 8 ,
 .Xr nfsd 8 ,
+.Xr nfsuserd ,
 .Xr showmount 8
 .Sh BUGS
 The export options are tied to the local mount points in the kernel and
