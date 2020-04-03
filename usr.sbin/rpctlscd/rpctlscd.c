@@ -41,6 +41,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/syslog.h>
 #include <sys/time.h>
 #include <err.h>
+#include <libutil.h>
 #include <netdb.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -67,10 +68,14 @@ __FBSDID("$FreeBSD$");
 #ifndef	_PATH_CERTANDKEY
 #define	_PATH_CERTANDKEY	"/etc/rpctlscd/"
 #endif
+#ifndef	_PATH_RPCTLSCDPID
+#define	_PATH_RPCTLSCDPID	"/var/run/rpctlscd.pid"
+#endif
 #ifndef	_PREFERRED_CIPHERS
 #define	_PREFERRED_CIPHERS	"SHA384:SHA256:!CAMELLIA"
 #endif
 
+static struct pidfh	*rpctls_pfh = NULL;
 static int		rpctls_debug_level;
 static bool		rpctls_verbose;
 static int testnossl;
@@ -79,8 +84,6 @@ static const char	*rpctls_verify_cafile = NULL;
 static const char	*rpctls_verify_capath = NULL;
 static const char	*rpctls_crlfile = NULL;
 static const char	*rpctls_certdir = _PATH_CERTANDKEY;
-static bool		rpctls_verify = false;
-static bool		rpctls_comparehost = false;
 static uint64_t		rpctls_ssl_refno = 0;
 static uint64_t		rpctls_ssl_sec = 0;
 static uint64_t		rpctls_ssl_usec = 0;
@@ -104,8 +107,10 @@ static struct ssl_list	rpctls_ssllist;
 static void		rpctlscd_terminate(int);
 static SSL_CTX		*rpctls_setupcl_ssl(bool cert);
 static SSL		*rpctls_connect(SSL_CTX *ctx, int s);
-static int		rpctls_checkhost(int s, X509 *cert);
-static int		rpctls_loadfiles(SSL_CTX *ctx);
+static int		rpctls_gethost(int s, struct sockaddr *sad,
+			    char *hostip, size_t hostlen);
+static int		rpctls_checkhost(struct sockaddr *sad, X509 *cert);
+static int		rpctls_loadcrlfile(SSL_CTX *ctx);
 static void		rpctls_huphandler(int sig __unused);
 
 extern void rpctlscd_1(struct svc_req *rqstp, SVCXPRT *transp);
@@ -125,6 +130,15 @@ main(int argc, char **argv)
 	bool cert;
 	struct timeval tm;
 	struct timezone tz;
+	pid_t otherpid;
+
+	/* Check that another rpctlscd isn't already running. */
+	rpctls_pfh = pidfile_open(_PATH_RPCTLSCDPID, 0600, &otherpid);
+	if (rpctls_pfh == NULL) {
+		if (errno == EEXIST)
+			errx(1, "rpctlscd already running, pid: %d.", otherpid);
+		warn("cannot open or create pidfile");
+	}
 
 	/* Get the time when this daemon is started. */
 	gettimeofday(&tm, &tz);
@@ -134,16 +148,13 @@ main(int argc, char **argv)
 	rpctls_verbose = false;
 	testnossl = 0;
 	cert = false;
-	while ((ch = getopt(argc, argv, "D:dhl:mp:rtVv")) != -1) {
+	while ((ch = getopt(argc, argv, "D:dl:mp:r:tv")) != -1) {
 		switch (ch) {
 		case 'D':
 			rpctls_certdir = optarg;
 			break;
 		case 'd':
 			rpctls_debug_level++;
-			break;
-		case 'h':
-			rpctls_comparehost = true;
 			break;
 		case 'l':
 			rpctls_verify_cafile = optarg;
@@ -160,28 +171,44 @@ main(int argc, char **argv)
 		case 't':
 			testnossl = 1;
 			break;
-		case 'V':
-			rpctls_verify = true;
-			break;
 		case 'v':
 			rpctls_verbose = true;
 			break;
 		default:
 			fprintf(stderr, "usage: %s "
-			    "[-D certdir] [-d] [-h] "
+			    "[-D certdir] [-d] "
 			    "[-l CAfile] [-m] "
 			    "[-p CApath] [-r CRLfile] "
-			    "[-V] [-v]\n", argv[0]);
+			    "[-v]\n", argv[0]);
 			exit(1);
 			break;
 		}
 	}
+	if (rpctls_crlfile != NULL && rpctls_verify_cafile == NULL &&
+	    rpctls_verify_capath == NULL)
+		errx(1, "-r requires the -l <CAfile> and/or "
+		    "-p <CApath> options");
 
 	if (modfind("krpc") < 0) {
 		/* Not present in kernel, try loading it */
 		if (kldload("krpc") < 0 || modfind("krpc") < 0)
 			errx(1, "Kernel RPC is not available");
 	}
+
+	/*
+	 * Set up the SSL_CTX *.
+	 * Do it now, before daemonizing, in case the private key
+	 * is encrypted and requires a passphrase to be entered.
+	 */
+	rpctls_ctx = rpctls_setupcl_ssl(cert);
+	if (rpctls_ctx == NULL) {
+		if (rpctls_debug_level == 0) {
+			syslog(LOG_ERR, "Can't set up TSL context");
+			exit(1);
+		}
+		err(1, "Can't set up TSL context");
+	}
+	LIST_INIT(&rpctls_ssllist);
 
 	if (!rpctls_debug_level) {
 		if (daemon(0, 0) != 0)
@@ -193,6 +220,8 @@ main(int argc, char **argv)
 	signal(SIGTERM, rpctlscd_terminate);
 	signal(SIGPIPE, rpctlscd_terminate);
 	signal(SIGHUP, rpctls_huphandler);
+
+	pidfile_write(rpctls_pfh);
 
 	memset(&sun, 0, sizeof sun);
 	sun.sun_family = AF_LOCAL;
@@ -241,17 +270,6 @@ main(int argc, char **argv)
 		}
 		err(1, "Can't register service for local rpctlscd socket");
 	}
-
-	/* Set up the OpenSSL TSL stuff. */
-	rpctls_ctx = rpctls_setupcl_ssl(cert);
-	if (rpctls_ctx == NULL) {
-		if (rpctls_debug_level == 0) {
-			syslog(LOG_ERR, "Can't set up TSL context");
-			exit(1);
-		}
-		err(1, "Can't set up TSL context");
-	}
-	LIST_INIT(&rpctls_ssllist);
 
 	gssd_syscall(_PATH_RPCTLSCDSOCK);
 	svc_run();
@@ -390,6 +408,7 @@ rpctlscd_terminate(int sig __unused)
 {
 
 	gssd_syscall("");
+	pidfile_remove(rpctls_pfh);
 	exit(0);
 }
 
@@ -461,10 +480,10 @@ rpctls_setupcl_ssl(bool cert)
 	}
 	if (rpctls_verify_cafile != NULL || rpctls_verify_capath != NULL) {
 		if (rpctls_crlfile != NULL) {
-			ret = rpctls_loadfiles(ctx);
+			ret = rpctls_loadcrlfile(ctx);
 			if (ret == 0) {
-				rpctlscd_verbose_out("rpctls_setup_ssl: "
-				    "Load CAfile, CRLfile failed\n");
+				rpctlscd_verbose_out("rpctls_setupcl_ssl: "
+				    "Load CRLfile failed\n");
 				SSL_CTX_free(ctx);
 				return (NULL);
 			}
@@ -503,15 +522,18 @@ rpctls_connect(SSL_CTX *ctx, int s)
 {
 	SSL *ssl;
 	X509 *cert;
-	int ret;
-	char *cp;
+	struct sockaddr *sad;
+	struct sockaddr_storage ad;
+	char hostnam[NI_MAXHOST];
+	int gethostret, ret;
+	char *cp, *cp2;
 
 	if (rpctls_gothup) {
 		rpctls_gothup = false;
-		ret = rpctls_loadfiles(ctx);
+		ret = rpctls_loadcrlfile(ctx);
 		if (ret == 0)
 			rpctlscd_verbose_out("rpctls_connect: Can't "
-			    "load CAfile, CRLfile\n");
+			    "reload CRLfile\n");
 	}
 	ssl = SSL_new(ctx);
 	if (ssl == NULL) {
@@ -542,18 +564,27 @@ rpctls_connect(SSL_CTX *ctx, int s)
 		SSL_free(ssl);
 		return (NULL);
 	}
-	cp = X509_NAME_oneline(X509_get_issuer_name(cert), NULL, 0);
-	rpctlscd_verbose_out("rpctls_connect: cert issuerName=%s\n", cp);
-	cp = X509_NAME_oneline(X509_get_subject_name(cert), NULL, 0);
-	rpctlscd_verbose_out("rpctls_connect: cert subjectName=%s\n", cp);
+	gethostret = rpctls_gethost(s, sad, hostnam, sizeof(hostnam));
+	if (gethostret == 0)
+		hostnam[0] = '\0';
 	ret = SSL_get_verify_result(ssl);
-	rpctlscd_verbose_out("rpctls_connect: get "
-	    "verify result=%d\n", ret);
-	if (ret == X509_V_OK && rpctls_comparehost &&
-	    rpctls_checkhost(s, cert) != 1)
+	if (ret == X509_V_OK && (rpctls_verify_cafile != NULL ||
+	    rpctls_verify_capath != NULL) && (gethostret == 0 ||
+	    rpctls_checkhost(sad, cert) != 1))
 		ret = X509_V_ERR_HOSTNAME_MISMATCH;
 	X509_free(cert);
-	if (rpctls_verify && ret != X509_V_OK) {
+	if (ret != X509_V_OK && (rpctls_verify_cafile != NULL ||
+	    rpctls_verify_capath != NULL)) {
+		if (ret != X509_V_OK) {
+			cp = X509_NAME_oneline(X509_get_issuer_name(cert),
+			    NULL, 0);
+			cp2 = X509_NAME_oneline(X509_get_subject_name(cert),
+			    NULL, 0);
+			syslog(LOG_INFO | LOG_DAEMON, "rpctls_connect: client"
+			    " IP %s issuerName=%s subjectName=%s verify "
+			    "failed %s\n", hostnam, cp, cp2,
+			    X509_verify_cert_error_string(ret));
+		}
 		SSL_shutdown(ssl);
 		SSL_free(ssl);
 		return (NULL);
@@ -569,81 +600,81 @@ rpctls_connect(SSL_CTX *ctx, int s)
 }
 
 /*
- * Check a client IP address against any host address in the
- * certificate.  Basically getpeername(2), getnameinfo(3) and
- * X509_check_host().
+ * Get the server's IP address.
  */
 static int
-rpctls_checkhost(int s, X509 *cert)
+rpctls_gethost(int s, struct sockaddr *sad, char *hostip, size_t hostlen)
 {
-	struct sockaddr *sad;
-	struct sockaddr_storage ad;
-	char hostnam[NI_MAXHOST];
 	socklen_t slen;
 	int ret;
 
-	sad = (struct sockaddr *)&ad;
-	slen = sizeof(ad);
+	slen = sizeof(struct sockaddr_storage);
 	if (getpeername(s, sad, &slen) < 0)
 		return (0);
+	ret = 0;
 	if (getnameinfo((const struct sockaddr *)sad,
-	    sad->sa_len, hostnam, sizeof(hostnam),
-	    NULL, 0, NI_NUMERICHOST) == 0)
-		rpctlscd_verbose_out("rpctls_checkhost: %s\n",
-		    hostnam);
-	if (getnameinfo((const struct sockaddr *)sad,
-	    sad->sa_len, hostnam, sizeof(hostnam),
-	    NULL, 0, NI_NAMEREQD) != 0)
-		return (0);
-	rpctlscd_verbose_out("rpctls_checkhost: DNS %s\n", hostnam);
-	ret = X509_check_host(cert, hostnam, strlen(hostnam), 0, NULL);
+	    sad->sa_len, hostip, hostlen,
+	    NULL, 0, NI_NUMERICHOST) == 0) {
+		rpctlscd_verbose_out("rpctls_gethost: %s\n",
+		    hostip);
+		ret = 1;
+	}
 	return (ret);
 }
 
 /*
- * Load the CAfile (and optionally CRLfile) into the certificate
- * verification store.
+ * Check a server IP address against any host address in the
+ * certificate.  Basically getnameinfo(3) and
+ * X509_check_host().
  */
 static int
-rpctls_loadfiles(SSL_CTX *ctx)
+rpctls_checkhost(struct sockaddr *sad, X509 *cert)
+{
+	char hostnam[NI_MAXHOST];
+	int ret;
+
+	if (getnameinfo((const struct sockaddr *)sad,
+	    sad->sa_len, hostnam, sizeof(hostnam),
+	    NULL, 0, NI_NAMEREQD) != 0)
+		return (0);
+	rpctlscd_verbose_out("rpctls_checkhost: DNS %s\n",
+	    hostnam);
+	ret = X509_check_host(cert, hostnam, strlen(hostnam),
+	    X509_CHECK_FLAG_NO_WILDCARDS, NULL);
+	return (ret);
+}
+
+/*
+ * (re)load the CRLfile into the certificate verification store.
+ */
+static int
+rpctls_loadcrlfile(SSL_CTX *ctx)
 {
 	X509_STORE *certstore;
 	X509_LOOKUP *certlookup;
 	int ret;
 
-	if (rpctls_verify_cafile != NULL ||
-	    rpctls_verify_capath != NULL) {
-		if (rpctls_crlfile != NULL) {
-			certstore = SSL_CTX_get_cert_store(ctx);
-			certlookup = X509_STORE_add_lookup(
-			    certstore, X509_LOOKUP_file());
-			ret = 0;
-			if (certlookup != NULL)
-				ret = X509_load_crl_file(certlookup,
-				    rpctls_crlfile, X509_FILETYPE_PEM);
-			if (ret != 0)
-				ret = X509_STORE_set_flags(certstore,
-				    X509_V_FLAG_CRL_CHECK |
-				    X509_V_FLAG_CRL_CHECK_ALL);
-			if (ret == 0) {
-				rpctlscd_verbose_out(
-				    "rpctls_loadfiles: Can't"
-				    " load CRLfile=%s\n",
-				    rpctls_crlfile);
-				return (ret);
-			}
-		}
-		ret = SSL_CTX_load_verify_locations(ctx,
-		    rpctls_verify_cafile, rpctls_verify_capath);
+	if ((rpctls_verify_cafile != NULL ||
+	    rpctls_verify_capath != NULL) &&
+	    rpctls_crlfile != NULL) {
+		certstore = SSL_CTX_get_cert_store(ctx);
+		certlookup = X509_STORE_add_lookup(
+		    certstore, X509_LOOKUP_file());
+		ret = 0;
+		if (certlookup != NULL)
+			ret = X509_load_crl_file(certlookup,
+			    rpctls_crlfile, X509_FILETYPE_PEM);
+		if (ret != 0)
+			ret = X509_STORE_set_flags(certstore,
+			    X509_V_FLAG_CRL_CHECK |
+			    X509_V_FLAG_CRL_CHECK_ALL);
 		if (ret == 0) {
-			rpctlscd_verbose_out("rpctls_loadfiles: "
-			    "Can't load verify locations\n");
+			rpctlscd_verbose_out(
+			    "rpctls_loadcrlfile: Can't"
+			    " load CRLfile=%s\n",
+			    rpctls_crlfile);
 			return (ret);
 		}
-		if (rpctls_verify_cafile != NULL)
-			SSL_CTX_set_client_CA_list(ctx,
-			    SSL_load_client_CA_file(
-			    rpctls_verify_cafile));
 	}
 	return (1);
 }
