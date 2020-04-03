@@ -41,6 +41,7 @@
 #define	RPCTLS_FLAGS_SELFSIGNED	0x04
 #define	RPCTLS_FLAGS_VERIFIED	0x08
 #define	RPCTLS_FLAGS_DISABLED	0x10
+#define	RPCTLS_FLAGS_CNUSER	0x20
 
 #ifdef _KERNEL
 /* Functions that perform upcalls to the rpctlsd daemon. */

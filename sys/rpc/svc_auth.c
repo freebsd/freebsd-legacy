@@ -179,10 +179,29 @@ svc_getcred(struct svc_req *rqst, struct ucred **crp, int *flavorp)
 	struct ucred *cr = NULL;
 	int flavor;
 	struct xucred *xcr;
+	SVCXPRT *xprt = rqst->rq_xprt;
 
 	flavor = rqst->rq_cred.oa_flavor;
 	if (flavorp)
 		*flavorp = flavor;
+
+	/*
+	 * If there are credentials acquired via a TLS
+	 * certificate for this TCP connection, use those
+	 * instead of what is in the RPC header.
+	 */
+	if ((xprt->xp_tls & (RPCTLS_FLAGS_CNUSER |
+	    RPCTLS_FLAGS_DISABLED)) == RPCTLS_FLAGS_CNUSER &&
+	    flavor == AUTH_UNIX) {
+		cr = crget();
+		cr->cr_uid = cr->cr_ruid = cr->cr_svuid = xprt->xp_uid;
+		crsetgroups(cr, xprt->xp_ngrps, xprt->xp_gidp);
+		cr->cr_rgid = cr->cr_svgid = xprt->xp_gidp[0];
+		cr->cr_prison = &prison0;
+		prison_hold(cr->cr_prison);
+		*crp = cr;
+		return (TRUE);
+	}
 
 	switch (flavor) {
 	case AUTH_UNIX:

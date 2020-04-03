@@ -181,6 +181,9 @@ typedef struct __rpc_svcxprt {
 	uint64_t	xp_sslsec;	/* Userland SSL * */
 	uint64_t	xp_sslusec;
 	uint64_t	xp_sslrefno;
+	int		xp_ngrps;	/* Cred. from TLS cert. */
+	uid_t		xp_uid;
+	gid_t		*xp_gidp;
 #else
 	int		xp_fd;
 	u_short		xp_port;	 /* associated port number */
