@@ -90,7 +90,8 @@ static struct opaque_auth rpctls_null_verf;
 static CLIENT		*rpctls_connect_client(void);
 static CLIENT		*rpctls_server_client(void);
 static enum clnt_stat	rpctls_server(struct socket *so,
-			    uint32_t *flags, uint64_t *sslp);
+			    uint32_t *flags, uint64_t *sslp,
+			    uid_t *uid, int *ngrps, gid_t **gids);
 
 static void
 rpctls_init(void *dummy)
@@ -425,11 +426,15 @@ printf("aft srv disconnect upcall=%d\n", stat);
 
 /* Do an upcall for a new server socket using TLS. */
 static enum clnt_stat
-rpctls_server(struct socket *so, uint32_t *flags, uint64_t *sslp)
+rpctls_server(struct socket *so, uint32_t *flags, uint64_t *sslp,
+    uid_t *uid, int *ngrps, gid_t **gids)
 {
 	enum clnt_stat stat;
 	CLIENT *cl;
 	struct rpctlssd_connect_res res;
+	gid_t *gidp;
+	uint32_t *gidv;
+	int i;
 	static bool rpctls_server_busy = false;
 
 printf("In rpctls_server\n");
@@ -455,6 +460,16 @@ printf("rpctls_conect so=%p\n", so);
 		*sslp++ = res.sec;
 		*sslp++ = res.usec;
 		*sslp = res.ssl;
+		if ((*flags & (RPCTLS_FLAGS_CNUSER |
+		    RPCTLS_FLAGS_DISABLED)) == RPCTLS_FLAGS_CNUSER) {
+			*ngrps = res.gid.gid_len;
+			*uid = res.uid;
+			*gids = gidp = mem_alloc(*ngrps * sizeof(gid_t));
+			gidv = res.gid.gid_val;
+printf("got uid=%d ngrps=%d gidv=%p gids=%p\n", *uid, *ngrps, gidv, gids);
+			for (i = 0; i < *ngrps; i++)
+				*gidp++ = *gidv++;
+		}
 	}
 printf("aft server upcall stat=%d flags=0x%x\n", stat, res.flags);
 	CLNT_RELEASE(cl);
@@ -484,6 +499,9 @@ _svcauth_rpcsec_tls(struct svc_req *rqst, struct rpc_msg *msg)
 	SVCXPRT *xprt;
 	uint32_t flags;
 	uint64_t ssl[3];
+	int ngrps;
+	uid_t uid;
+	gid_t *gidp;
 	
 	/* Initialize reply. */
 	rqst->rq_verf = rpctls_null_verf;
@@ -531,7 +549,7 @@ printf("authtls: null reply=%d\n", call_stat);
 
 	/* Do an upcall to do the TLS handshake. */
 	stat = rpctls_server(rqst->rq_xprt->xp_socket, &flags,
-	    ssl);
+	    ssl, &uid, &ngrps, &gidp);
 
 	/* Re-enable reception on the socket within the krpc. */
 	sx_xlock(&xprt->xp_lock);
@@ -541,6 +559,13 @@ printf("authtls: null reply=%d\n", call_stat);
 		xprt->xp_sslsec = ssl[0];
 		xprt->xp_sslusec = ssl[1];
 		xprt->xp_sslrefno = ssl[2];
+		if ((flags & (RPCTLS_FLAGS_CNUSER |
+		    RPCTLS_FLAGS_DISABLED)) == RPCTLS_FLAGS_CNUSER) {
+			xprt->xp_ngrps = ngrps;
+			xprt->xp_uid = uid;
+			xprt->xp_gidp = gidp;
+printf("got uid=%d ngrps=%d gidp=%p\n", uid, ngrps, gidp);
+		}
 	}
 	sx_xunlock(&xprt->xp_lock);
 	xprt_active(xprt);		/* Harmless if already active. */

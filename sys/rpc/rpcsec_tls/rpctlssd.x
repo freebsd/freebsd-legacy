@@ -27,13 +27,15 @@
 
 /* Modified from gssd.x for the server side of RPC-over-TLS. */
 
-/* $FreeBSD:$ */
+/* $FreeBSD$ */
 
 struct rpctlssd_connect_res {
 	uint32_t flags;
 	uint64_t sec;
 	uint64_t usec;
 	uint64_t ssl;
+	uint32_t uid;
+	uint32_t gid<>;
 };
 
 struct rpctlssd_disconnect_arg {
