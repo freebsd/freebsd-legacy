@@ -190,8 +190,8 @@ svc_getcred(struct svc_req *rqst, struct ucred **crp, int *flavorp)
 	 * certificate for this TCP connection, use those
 	 * instead of what is in the RPC header.
 	 */
-	if ((xprt->xp_tls & (RPCTLS_FLAGS_CNUSER |
-	    RPCTLS_FLAGS_DISABLED)) == RPCTLS_FLAGS_CNUSER &&
+	if ((xprt->xp_tls & (RPCTLS_FLAGS_CERTUSER |
+	    RPCTLS_FLAGS_DISABLED)) == RPCTLS_FLAGS_CERTUSER &&
 	    flavor == AUTH_UNIX) {
 		cr = crget();
 		cr->cr_uid = cr->cr_ruid = cr->cr_svuid = xprt->xp_uid;

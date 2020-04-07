@@ -3355,8 +3355,8 @@ nfsd_fhtovp(struct nfsrv_descript *nd, struct nfsrvfh *nfp, int lktype,
 	    (nd->nd_flag & ND_TLS) == 0) ||
 	     (NFSVNO_EXTLSCERT(exp) &&
 	      (nd->nd_flag & ND_TLSCERT) == 0) ||
-	     (NFSVNO_EXTLSCNUSER(exp) &&
-	      (nd->nd_flag & ND_TLSCNUSER) == 0))) {
+	     (NFSVNO_EXTLSCERTUSER(exp) &&
+	      (nd->nd_flag & ND_TLSCERTUSER) == 0))) {
 		vput(*vpp);
 		nd->nd_repstat = NFSERR_ACCES;
 	}
@@ -3629,8 +3629,8 @@ nfsvno_v4rootexport(struct nfsrv_descript *nd)
 		nd->nd_flag |= ND_EXTLS;
 		if ((exflags & MNTEX_TLSCERT) != 0)
 			nd->nd_flag |= ND_EXTLSCERT;
-		if ((exflags & MNTEX_TLSCNUSER) != 0)
-			nd->nd_flag |= ND_EXTLSCNUSER;
+		if ((exflags & MNTEX_TLSCERTUSER) != 0)
+			nd->nd_flag |= ND_EXTLSCERTUSER;
 	}
 
 out:

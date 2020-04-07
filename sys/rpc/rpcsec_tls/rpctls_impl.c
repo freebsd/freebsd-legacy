@@ -460,8 +460,8 @@ printf("rpctls_conect so=%p\n", so);
 		*sslp++ = res.sec;
 		*sslp++ = res.usec;
 		*sslp = res.ssl;
-		if ((*flags & (RPCTLS_FLAGS_CNUSER |
-		    RPCTLS_FLAGS_DISABLED)) == RPCTLS_FLAGS_CNUSER) {
+		if ((*flags & (RPCTLS_FLAGS_CERTUSER |
+		    RPCTLS_FLAGS_DISABLED)) == RPCTLS_FLAGS_CERTUSER) {
 			*ngrps = res.gid.gid_len;
 			*uid = res.uid;
 			*gids = gidp = mem_alloc(*ngrps * sizeof(gid_t));
@@ -559,8 +559,8 @@ printf("authtls: null reply=%d\n", call_stat);
 		xprt->xp_sslsec = ssl[0];
 		xprt->xp_sslusec = ssl[1];
 		xprt->xp_sslrefno = ssl[2];
-		if ((flags & (RPCTLS_FLAGS_CNUSER |
-		    RPCTLS_FLAGS_DISABLED)) == RPCTLS_FLAGS_CNUSER) {
+		if ((flags & (RPCTLS_FLAGS_CERTUSER |
+		    RPCTLS_FLAGS_DISABLED)) == RPCTLS_FLAGS_CERTUSER) {
 			xprt->xp_ngrps = ngrps;
 			xprt->xp_uid = uid;
 			xprt->xp_gidp = gidp;

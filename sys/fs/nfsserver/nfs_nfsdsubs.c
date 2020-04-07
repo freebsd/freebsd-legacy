@@ -2144,13 +2144,13 @@ nfsd_checkrootexp(struct nfsrv_descript *nd)
 checktls:
 	if ((nd->nd_flag & ND_EXTLS) == 0)
 		return (0);
-	if ((nd->nd_flag & (ND_TLSCNUSER | ND_EXTLSCNUSER)) ==
-	    (ND_TLSCNUSER | ND_EXTLSCNUSER))
+	if ((nd->nd_flag & (ND_TLSCERTUSER | ND_EXTLSCERTUSER)) ==
+	    (ND_TLSCERTUSER | ND_EXTLSCERTUSER))
 		return (0);
-	if ((nd->nd_flag & (ND_TLSCERT | ND_EXTLSCERT | ND_EXTLSCNUSER)) ==
+	if ((nd->nd_flag & (ND_TLSCERT | ND_EXTLSCERT | ND_EXTLSCERTUSER)) ==
 	    (ND_TLSCERT | ND_EXTLSCERT))
 		return (0);
-	if ((nd->nd_flag & (ND_TLS | ND_EXTLSCNUSER | ND_EXTLSCERT)) ==
+	if ((nd->nd_flag & (ND_TLS | ND_EXTLSCERTUSER | ND_EXTLSCERT)) ==
 	    ND_TLS)
 		return (0);
 	return (1);
