@@ -369,7 +369,8 @@ void          __mnt_vnode_markerfree_lazy(struct vnode **mvp, struct mount *mp);
  * compatibility with old versions of mountd, etc.
  */
 #define	MNTEX_TLS		0x0000000000000001ULL	/* TLS RPC required */
-#define	MNTEX_TLSCERT		0x0000000000000002ULL	/* verified certificate req */
+#define	MNTEX_TLSCERT		0x0000000000000002ULL	/* verified cert req */
+#define	MNTEX_TLSCERTUSER	0x0000000000000004ULL	/* user cert req */
 #define	MNTEX_EXPORTED		MNT_EXPORTED		/* filesystem exported */
 #define	MNTEX_RDONLY		MNT_EXRDONLY		/* exported read only */
 #define	MNTEX_EXPORTANON	MNT_EXPORTANON		/* anon uid mapping for all */
