@@ -60,9 +60,6 @@
    - To avoid repetition and possible human error, a few scripts were written
      to help keep things as automated as possible:
 
-     - zfs-setup.sh:
-       Destroys and creates pristine zfs datasets for each build.
-
      - setrev.sh:
        Retrieves the 'Last Changed Revision' from the target branch and writes
        the version to a 'svnrev_src' file, and outputs the date in YYYYMMDD
@@ -74,6 +71,9 @@
 
      - generate-email.pl:
        This script generates the snapshot announcement email text.
+
+     - zfs-cleanup.sh:
+       Destroys zfs datasets from previous builds.
 
 4) Example Usage:
 
