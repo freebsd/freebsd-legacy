@@ -89,6 +89,9 @@
 # sctp.sh	WiP							20200307
 # sctp2.sh	panic: soclose: SS_NOFDREF on enter			20200307
 # sctp3.sh	WiP							20190809
+# sendfile18.sh	WiP							20200313
+# sendfile19.sh	WiP							20200317
+# sendfile20.sh	WiP							20200318
 # signal.sh	Timing issues. Needs fixing				20171116
 # snap4.sh	panic: snapacct_ufs2: bad block				20181014
 # snap6.sh	panic: softdep_deallocate_dependencies: unrecovered ...	20130630
@@ -234,7 +237,7 @@ chmod 640 $alllast $alllog
 find ../testcases -perm -1 \( -name "*.debug" -o -name "*.full" \) -delete
 tail -2000 $alllog > ${alllog}.new; mv ${alllog}.new $alllog
 touch $allelapsed
-tail -10000 $allelapsed > ${allelapsed}.new; mv ${allelapsed}.new $allelapsed
+tail -20000 $allelapsed > ${allelapsed}.new; mv ${allelapsed}.new $allelapsed
 
 console=/dev/console
 printf "\r\n" > $console &
