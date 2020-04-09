@@ -52,7 +52,7 @@ s=0
 # an INVARIANTS kernel
 start=`date +%s`
 for i in `jot 500`; do
-	/tmp/signal0
+	/tmp/signal0 || { s=1; break; }
 	[ $((`date +%s` - start)) -gt 900 ] &&
 	    { echo "Timeout @ loop $i/500"; s=1; break; }
 done
@@ -67,6 +67,8 @@ EOF
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
+
+#define N 3000
 
 static void
 signal_handler(int signum, siginfo_t *si, void *context) {
@@ -90,7 +92,7 @@ main(void)
 	sa.sa_sigaction = signal_handler;
 	if (sigfillset(&sa.sa_mask) != 0) abort();
 	if (sigaction(SIGUSR1, &sa, NULL) != 0) abort();
-	for (int i = 0; i < 10000; i++) {
+	for (int i = 0; i < N; i++) {
 		pthread_t t;
 
 		if (pthread_create(&t, NULL, thread_func, NULL) == 0)
