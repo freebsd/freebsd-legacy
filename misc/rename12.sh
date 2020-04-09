@@ -110,8 +110,8 @@ cr(void)
 		snprintf(name, sizeof(name), "dir1/d.%06d.%06d", pid, i);
 		if (mkdir(name, 0700) == -1)
 			err(1, "mkdir(%s). %s:%d", name, __FILE__, __LINE__);
-			if (write(mvpipe[1], &i, sizeof(i)) != sizeof(i))
-				err(1, "write mvpipe");
+		if (write(mvpipe[1], &i, sizeof(i)) != sizeof(i))
+			err(1, "write mvpipe");
 	}
 
 	_exit(0);
@@ -132,7 +132,7 @@ mv(void)
 		snprintf(name, sizeof(name), "dir1/d.%06d.%06d", pid, i);
 		snprintf(to  , sizeof(to  ), "dir2/d.%06d.%06d", pid, i);
 		if (rename(name, to) == -1)
-				warn("rename(%s, %s)", name, to);
+			warn("rename(%s, %s)", name, to);
 		if (write(rmpipe[1], &i, sizeof(i)) != sizeof(i))
 			err(1, "write rmpipe");
 	}
