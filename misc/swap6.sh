@@ -35,19 +35,18 @@
 
 [ `sysctl -n vm.swap_total` -eq 0 ] && exit 0
 min=5	# percent swap usage
-(cd ../testcases/swap; ./swap -t 5m -i 20 -l 100 -h > /dev/null) &
-sleep 5
+(cd ../testcases/swap; ./swap -t 10m -i 40 -l 100 -h > /dev/null) &
 mx=0
 while pgrep -q swap; do
 	n=`swapinfo | tail -1 | sed 's/.* //; s/%//'`
 	[ $n -gt $mx ] && mx=$n
 	[ $mx -ge $min ] && pkill swap
-	sleep 2
 done
 wait
 if [ $mx -lt $min ]; then
 	echo "FAIL Only $mx% swap used"
 	exit 1
 else
+	echo "$mx% swap used"
 	exit 0
 fi
