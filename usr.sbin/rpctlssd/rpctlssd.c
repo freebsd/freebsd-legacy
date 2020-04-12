@@ -391,7 +391,7 @@ rpctlssd_verbose_out("rpctlsd_connect_svc s=%d\n", s);
 		/* Hard to believe this could ever wrap around.. */
 		if (rpctls_ssl_refno == 0)
 			result->ssl = ++rpctls_ssl_refno;
-		if ((flags & RPCTLS_FLAGS_CNUSER) != 0) {
+		if ((flags & RPCTLS_FLAGS_CERTUSER) != 0) {
 			result->uid = uid;
 			result->gid.gid_len = ngrps;
 			result->gid.gid_val = gidp;
@@ -654,7 +654,7 @@ rpctlssd_verbose_out("%s\n", cp2);
 					ret = rpctls_cnname(cert, uidp,
 					    ngrps, gidp);
 					if (ret != 0)
-						*flags |= RPCTLS_FLAGS_CNUSER;
+						*flags |= RPCTLS_FLAGS_CERTUSER;
 				}
 				*flags |= RPCTLS_FLAGS_VERIFIED;
 			}
