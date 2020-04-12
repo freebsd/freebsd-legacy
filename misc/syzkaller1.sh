@@ -244,5 +244,5 @@ mycc -o /tmp/syzkaller1 -Wall -Wextra -O2 /tmp/syzkaller1.c -lpthread ||
 
 (cd /tmp; ./syzkaller1)
 
-rm /tmp/syzkaller1 /tmp/syzkaller1.c
+rm -f /tmp/syzkaller1 /tmp/syzkaller1.c /tmp/syzkaller1.core
 exit 0

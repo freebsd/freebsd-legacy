@@ -87,5 +87,5 @@ rm /tmp/syzkaller2.c
 
 (cd /tmp; ./syzkaller2)
 
-rm /tmp/syzkaller2
+rm -f /tmp/syzkaller2 /tmp/syzkaller2.core
 exit 0
