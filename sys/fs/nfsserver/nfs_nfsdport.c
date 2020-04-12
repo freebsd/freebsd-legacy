@@ -903,18 +903,18 @@ nfsrv_createiovecw(int retlen, struct mbuf *m, char *cp, struct iovec **ivpp,
 	cnt = 0;
 	len = retlen;
 	mp = m;
-	i = mtod(mp, caddr_t) + mbuf_len(mp) - cp;
+	i = mtod(mp, caddr_t) + mp->m_len - cp;
 	while (len > 0) {
 		if (i > 0) {
 			len -= i;
 			cnt++;
 		}
-		mp = mbuf_next(mp);
+		mp = mp->m_next;
 		if (!mp) {
 			if (len > 0)
 				return (EBADRPC);
 		} else
-			i = mbuf_len(mp);
+			i = mp->m_len;
 	}
 
 	/* Now, create the iovec. */
@@ -6443,7 +6443,6 @@ DECLARE_MODULE(nfsd, nfsd_mod, SI_SUB_VFS, SI_ORDER_ANY);
 /* So that loader and kldload(2) can find us, wherever we are.. */
 MODULE_VERSION(nfsd, 1);
 MODULE_DEPEND(nfsd, nfscommon, 1, 1, 1);
-MODULE_DEPEND(nfsd, nfslock, 1, 1, 1);
 MODULE_DEPEND(nfsd, nfslockd, 1, 1, 1);
 MODULE_DEPEND(nfsd, krpc, 1, 1, 1);
 MODULE_DEPEND(nfsd, nfssvc, 1, 1, 1);
