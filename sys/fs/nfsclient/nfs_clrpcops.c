@@ -242,7 +242,7 @@ nfsrpc_null(vnode_t vp, struct ucred *cred, NFSPROC_T *p)
 	error = nfscl_request(nd, vp, p, cred, NULL);
 	if (nd->nd_repstat && !error)
 		error = nd->nd_repstat;
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -348,7 +348,7 @@ nfsrpc_accessrpc(vnode_t vp, u_int32_t mode, struct ucred *cred,
 	} else
 		error = nd->nd_repstat;
 nfsmout:
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -684,7 +684,7 @@ nfsmout:
 		*dpp = ndp;
 	else if (ndp != NULL)
 		free(ndp, M_NFSCLDELEG);
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -727,7 +727,7 @@ nfsrpc_opendowngrade(vnode_t vp, u_int32_t mode, struct nfsclopen *op,
 	if (error == NFSERR_STALESTATEID)
 		nfscl_initiate_recovery(op->nfso_own->nfsow_clp);
 nfsmout:
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -885,7 +885,7 @@ nfsrpc_closerpc(struct nfsrv_descript *nd, struct nfsmount *nmp,
 	if (error == NFSERR_STALESTATEID)
 		nfscl_initiate_recovery(op->nfso_own->nfsow_clp);
 nfsmout:
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -927,7 +927,7 @@ nfsrpc_openconfirm(vnode_t vp, u_int8_t *nfhp, int fhlen,
 	if (error == NFSERR_STALESTATEID)
 		nfscl_initiate_recovery(op->nfso_own->nfsow_clp);
 nfsmout:
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -1083,7 +1083,7 @@ nfsrpc_setclient(struct nfsmount *nmp, struct nfsclclient *clp, int reclaim,
 	    tsep->nfsess_clientid.lval[1] = *tl++;
 	    confirm.lval[0] = *tl++;
 	    confirm.lval[1] = *tl;
-	    mbuf_freem(nd->nd_mrep);
+	    m_freem(nd->nd_mrep);
 	    nd->nd_mrep = NULL;
 
 	    /*
@@ -1101,7 +1101,7 @@ nfsrpc_setclient(struct nfsmount *nmp, struct nfsclclient *clp, int reclaim,
 		cred, NFS_PROG, NFS_VER4, NULL, 1, NULL, NULL);
 	    if (error)
 		return (error);
-	    mbuf_freem(nd->nd_mrep);
+	    m_freem(nd->nd_mrep);
 	    nd->nd_mrep = NULL;
 	    if (nd->nd_repstat == 0) {
 		nfscl_reqstart(nd, NFSPROC_GETATTR, nmp, nmp->nm_fh,
@@ -1129,7 +1129,7 @@ nfsrpc_setclient(struct nfsmount *nmp, struct nfsclclient *clp, int reclaim,
 	}
 	error = nd->nd_repstat;
 nfsmout:
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -1156,7 +1156,7 @@ nfsrpc_getattr(vnode_t vp, struct ucred *cred, NFSPROC_T *p,
 		error = nfsm_loadattr(nd, nap);
 	else
 		error = nd->nd_repstat;
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -1197,7 +1197,7 @@ nfsrpc_getattrnovp(struct nfsmount *nmp, u_int8_t *fhp, int fhlen, int syscred,
 			error = nfsm_loadattr(nd, nap);
 	} else
 		error = nd->nd_repstat;
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -1322,7 +1322,7 @@ nfsrpc_setattrrpc(vnode_t vp, struct vattr *vap,
 		error = nfsrv_getattrbits(nd, &attrbits, NULL, NULL);
 	if (!(nd->nd_flag & ND_NFSV3) && !nd->nd_repstat && !error)
 		error = nfscl_postop_attr(nd, rnap, attrflagp, stuff);
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	if (nd->nd_repstat && !error)
 		error = nd->nd_repstat;
 	return (error);
@@ -1394,7 +1394,7 @@ nfsrpc_lookup(vnode_t dvp, char *name, int len, struct ucred *cred,
 		    nfhp->nfh_len = np->n_fhp->nfh_len;
 		    NFSBCOPY(np->n_fhp->nfh_fh, nfhp->nfh_fh, nfhp->nfh_len);
 		    *nfhpp = nfhp;
-		    mbuf_freem(nd->nd_mrep);
+		    m_freem(nd->nd_mrep);
 		    return (0);
 		}
 		if (nd->nd_flag & ND_NFSV3)
@@ -1425,7 +1425,7 @@ nfsrpc_lookup(vnode_t dvp, char *name, int len, struct ucred *cred,
 	if ((nd->nd_flag & ND_NFSV3) && !error)
 		error = nfscl_postop_attr(nd, dnap, dattrflagp, stuff);
 nfsmout:
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	if (!error && nd->nd_repstat)
 		error = nd->nd_repstat;
 	return (error);
@@ -1483,7 +1483,7 @@ nfsrpc_readlink(vnode_t vp, struct uio *uiop, struct ucred *cred,
 	if (nd->nd_repstat && !error)
 		error = nd->nd_repstat;
 nfsmout:
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -1624,7 +1624,7 @@ nfsrpc_readrpc(vnode_t vp, struct uio *uiop, struct ucred *cred,
 		error = nfsm_mbufuio(nd, uiop, retlen);
 		if (error)
 			goto nfsmout;
-		mbuf_freem(nd->nd_mrep);
+		m_freem(nd->nd_mrep);
 		nd->nd_mrep = NULL;
 		tsiz -= retlen;
 		if (!(nd->nd_flag & ND_NFSV2)) {
@@ -1636,7 +1636,7 @@ nfsrpc_readrpc(vnode_t vp, struct uio *uiop, struct ucred *cred,
 	return (0);
 nfsmout:
 	if (nd->nd_mrep != NULL)
-		mbuf_freem(nd->nd_mrep);
+		m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -1898,13 +1898,13 @@ nfsrpc_writerpc(vnode_t vp, struct uio *uiop, int *iomode,
 		if (error)
 			goto nfsmout;
 		NFSWRITERPC_SETTIME(wccflag, np, nap, (nd->nd_flag & ND_NFSV4));
-		mbuf_freem(nd->nd_mrep);
+		m_freem(nd->nd_mrep);
 		nd->nd_mrep = NULL;
 		tsiz -= len;
 	}
 nfsmout:
 	if (nd->nd_mrep != NULL)
-		mbuf_freem(nd->nd_mrep);
+		m_freem(nd->nd_mrep);
 	*iomode = committed;
 	if (nd->nd_repstat && !error)
 		error = nd->nd_repstat;
@@ -1987,7 +1987,7 @@ nfsrpc_mknod(vnode_t dvp, char *name, int namelen, struct vattr *vap,
 	if (!error && nd->nd_repstat)
 		error = nd->nd_repstat;
 nfsmout:
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -2111,7 +2111,7 @@ nfsrpc_createv23(vnode_t dvp, char *name, int namelen, struct vattr *vap,
 	if (nd->nd_repstat != 0 && error == 0)
 		error = nd->nd_repstat;
 nfsmout:
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -2356,7 +2356,7 @@ nfsmout:
 		*dpp = dp;
 	else if (dp != NULL)
 		free(dp, M_NFSCLDELEG);
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -2417,7 +2417,7 @@ tryagain:
 			 * If the Delegreturn failed, try again without
 			 * it. The server will Recall, as required.
 			 */
-			mbuf_freem(nd->nd_mrep);
+			m_freem(nd->nd_mrep);
 			goto tryagain;
 		}
 		for (i = 0; i < (ret * 2); i++) {
@@ -2433,7 +2433,7 @@ tryagain:
 	if (nd->nd_repstat && !error)
 		error = nd->nd_repstat;
 nfsmout:
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -2545,7 +2545,7 @@ tryagain:
 			 * If the Delegreturn failed, try again without
 			 * it. The server will Recall, as required.
 			 */
-			mbuf_freem(nd->nd_mrep);
+			m_freem(nd->nd_mrep);
 			goto tryagain;
 		}
 		for (i = 0; i < (ret * 2); i++) {
@@ -2561,7 +2561,7 @@ tryagain:
 				     * If ret > 1, the first iteration of this
 				     * loop is the second DelegReturn result.
 				     */
-				    mbuf_freem(nd->nd_mrep);
+				    m_freem(nd->nd_mrep);
 				    goto tryagain;
 				} else {
 				    nd->nd_flag |= ND_NOMOREDATA;
@@ -2591,7 +2591,7 @@ tryagain:
 	if (nd->nd_repstat && !error)
 		error = nd->nd_repstat;
 nfsmout:
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -2654,7 +2654,7 @@ nfsrpc_link(vnode_t dvp, vnode_t vp, char *name, int namelen,
 	if (nd->nd_repstat && !error)
 		error = nd->nd_repstat;
 nfsmout:
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -2706,7 +2706,7 @@ nfsrpc_symlink(vnode_t dvp, char *name, int namelen, const char *target,
 	}
 	if (nd->nd_repstat && !error)
 		error = nd->nd_repstat;
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	/*
 	 * Kludge: Map EEXIST => 0 assuming that it is a reply to a retry.
 	 * Only do this if vfs.nfs.ignore_eexist is set.
@@ -2788,7 +2788,7 @@ nfsrpc_mkdir(vnode_t dvp, char *name, int namelen, struct vattr *vap,
 	if (nd->nd_repstat && !error)
 		error = nd->nd_repstat;
 nfsmout:
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	/*
 	 * Kludge: Map EEXIST => 0 assuming that it is a reply to a retry.
 	 * Only do this if vfs.nfs.ignore_eexist is set.
@@ -2823,7 +2823,7 @@ nfsrpc_rmdir(vnode_t dvp, char *name, int namelen, struct ucred *cred,
 		error = nfscl_wcc_data(nd, dvp, dnap, dattrflagp, NULL, dstuff);
 	if (nd->nd_repstat && !error)
 		error = nd->nd_repstat;
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	/*
 	 * Kludge: Map ENOENT => 0 assuming that you have a reply to a retry.
 	 */
@@ -2989,7 +2989,7 @@ nfsrpc_readdir(vnode_t vp, struct uio *uiop, nfsuint64 *cookiep,
 			} else {
 			    error = nd->nd_repstat;
 			}
-			mbuf_freem(nd->nd_mrep);
+			m_freem(nd->nd_mrep);
 			if (error)
 			    return (error);
 			nd->nd_mrep = NULL;
@@ -3238,7 +3238,7 @@ nfsrpc_readdir(vnode_t vp, struct uio *uiop, nfsuint64 *cookiep,
 					goto nfsmout;
 			}
 		}
-		mbuf_freem(nd->nd_mrep);
+		m_freem(nd->nd_mrep);
 		nd->nd_mrep = NULL;
 	}
 	/*
@@ -3289,7 +3289,7 @@ nfsrpc_readdir(vnode_t vp, struct uio *uiop, nfsuint64 *cookiep,
 
 nfsmout:
 	if (nd->nd_mrep != NULL)
-		mbuf_freem(nd->nd_mrep);
+		m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -3426,7 +3426,7 @@ nfsrpc_readdirplus(vnode_t vp, struct uio *uiop, nfsuint64 *cookiep,
 			} else {
 			    error = nd->nd_repstat;
 			}
-			mbuf_freem(nd->nd_mrep);
+			m_freem(nd->nd_mrep);
 			if (error)
 			    return (error);
 			nd->nd_mrep = NULL;
@@ -3741,7 +3741,7 @@ nfsrpc_readdirplus(vnode_t vp, struct uio *uiop, nfsuint64 *cookiep,
 					goto nfsmout;
 			}
 		}
-		mbuf_freem(nd->nd_mrep);
+		m_freem(nd->nd_mrep);
 		nd->nd_mrep = NULL;
 	}
 	/*
@@ -3792,7 +3792,7 @@ nfsrpc_readdirplus(vnode_t vp, struct uio *uiop, nfsuint64 *cookiep,
 
 nfsmout:
 	if (nd->nd_mrep != NULL)
-		mbuf_freem(nd->nd_mrep);
+		m_freem(nd->nd_mrep);
 	return (error);
 }
 #endif	/* !APPLE */
@@ -3843,7 +3843,7 @@ nfsrpc_commit(vnode_t vp, u_quad_t offset, int cnt, struct ucred *cred,
 nfsmout:
 	if (!error && nd->nd_repstat)
 		error = nd->nd_repstat;
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -4086,7 +4086,7 @@ nfsrpc_lockt(struct nfsrv_descript *nd, vnode_t vp,
 	} else if (nd->nd_repstat == NFSERR_STALECLIENTID)
 		nfscl_initiate_recovery(clp);
 nfsmout:
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -4136,7 +4136,7 @@ nfsrpc_locku(struct nfsrv_descript *nd, struct nfsmount *nmp,
 	} else if (nd->nd_repstat == NFSERR_STALESTATEID)
 		nfscl_initiate_recovery(lp->nfsl_open->nfso_own->nfsow_clp);
 nfsmout:
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -4225,7 +4225,7 @@ nfsrpc_lock(struct nfsrv_descript *nd, struct nfsmount *nmp, vnode_t vp,
 	} else if (nd->nd_repstat == NFSERR_STALESTATEID)
 		nfscl_initiate_recovery(lp->nfsl_open->nfso_own->nfsow_clp);
 nfsmout:
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -4305,7 +4305,7 @@ nfsrpc_statfs(vnode_t vp, struct nfsstatfs *sbp, struct nfsfsinfo *fsp,
 		sbp->sf_bavail = fxdr_unsigned(u_int32_t, *tl);
 	}
 nfsmout:
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -4366,7 +4366,7 @@ nfsrpc_pathconf(vnode_t vp, struct nfsv3_pathconf *pc,
 		}
 	}
 nfsmout:
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -4405,7 +4405,7 @@ nfsrpc_fsinfo(vnode_t vp, struct nfsfsinfo *fsp, struct ucred *cred,
 		fsp->fs_properties = fxdr_unsigned(u_int32_t, *tl);
 	}
 nfsmout:
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -4459,7 +4459,7 @@ nfsrpc_renew(struct nfsclclient *clp, struct nfsclds *dsp, struct ucred *cred,
 	if (error)
 		return (error);
 	error = nd->nd_repstat;
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -4498,7 +4498,7 @@ nfsrpc_rellockown(struct nfsmount *nmp, struct nfscllockowner *lp,
 	if (error)
 		return (error);
 	error = nd->nd_repstat;
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -4567,7 +4567,7 @@ nfsrpc_getdirpath(struct nfsmount *nmp, u_char *dirpath, struct ucred *cred,
 	}
 	error = nd->nd_repstat;
 nfsmout:
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -4600,7 +4600,7 @@ nfsrpc_delegreturn(struct nfscldeleg *dp, struct ucred *cred,
 	if (error)
 		return (error);
 	error = nd->nd_repstat;
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -4630,7 +4630,7 @@ nfsrpc_getacl(vnode_t vp, struct ucred *cred, NFSPROC_T *p,
 		    NULL, NULL, NULL, aclp, 0, NULL, NULL, NULL, p, cred);
 	else
 		error = nd->nd_repstat;
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -4674,7 +4674,7 @@ nfsrpc_setaclrpc(vnode_t vp, struct ucred *cred, NFSPROC_T *p,
 	if (error)
 		return (error);
 	/* Don't care about the pre/postop attributes */
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (nd->nd_repstat);
 }
 
@@ -4764,7 +4764,7 @@ nfsrpc_exchangeid(struct nfsmount *nmp, struct nfsclclient *clp,
 	}
 	error = nd->nd_repstat;
 nfsmout:
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -4902,7 +4902,7 @@ nfsrpc_createsession(struct nfsmount *nmp, struct nfsclsession *sep,
 	}
 	error = nd->nd_repstat;
 nfsmout:
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -4930,7 +4930,7 @@ nfsrpc_destroysession(struct nfsmount *nmp, struct nfsclclient *clp,
 	if (error != 0)
 		return (error);
 	error = nd->nd_repstat;
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -4959,7 +4959,7 @@ nfsrpc_destroyclient(struct nfsmount *nmp, struct nfsclclient *clp,
 	if (error != 0)
 		return (error);
 	error = nd->nd_repstat;
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -4991,7 +4991,7 @@ nfsrpc_layoutget(struct nfsmount *nmp, uint8_t *fhp, int fhlen, int iomode,
 		    flhp);
 	if (error == 0 && nd->nd_repstat != 0)
 		error = nd->nd_repstat;
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -5225,7 +5225,7 @@ nfsrpc_getdeviceinfo(struct nfsmount *nmp, uint8_t *deviceid, int layouttype,
 nfsmout:
 	if (error != 0 && ndi != NULL)
 		nfscl_freedevinfo(ndi);
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -5274,7 +5274,7 @@ nfsrpc_layoutcommit(struct nfsmount *nmp, uint8_t *fh, int fhlen, int reclaim,
 	if (error != 0)
 		return (error);
 	error = nd->nd_repstat;
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -5362,7 +5362,7 @@ nfsrpc_layoutreturn(struct nfsmount *nmp, uint8_t *fh, int fhlen, int reclaim,
 	} else
 		error = nd->nd_repstat;
 nfsmout:
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -5659,7 +5659,7 @@ nfsrpc_reclaimcomplete(struct nfsmount *nmp, struct ucred *cred, NFSPROC_T *p)
 	if (error != 0)
 		return (error);
 	error = nd->nd_repstat;
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -6297,7 +6297,7 @@ nfsrpc_readds(vnode_t vp, struct uio *uiop, nfsv4stateid_t *stateidp, int *eofp,
 	error = nfsm_mbufuio(nd, uiop, retlen);
 nfsmout:
 	if (nd->nd_mrep != NULL)
-		mbuf_freem(nd->nd_mrep);
+		m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -6424,7 +6424,7 @@ nfsrpc_writeds(vnode_t vp, struct uio *uiop, int *iomode, int *must_commit,
 	}
 nfsmout:
 	if (nd->nd_mrep != NULL)
-		mbuf_freem(nd->nd_mrep);
+		m_freem(nd->nd_mrep);
 	*iomode = committed;
 	if (nd->nd_repstat != 0 && error == 0)
 		error = nd->nd_repstat;
@@ -6537,7 +6537,7 @@ nfsrpc_writedsmir(vnode_t vp, int *iomode, int *must_commit,
 	}
 nfsmout:
 	if (nd->nd_mrep != NULL)
-		mbuf_freem(nd->nd_mrep);
+		m_freem(nd->nd_mrep);
 	*iomode = committed;
 	if (nd->nd_repstat != 0 && error == 0)
 		error = nd->nd_repstat;
@@ -6726,7 +6726,7 @@ nfsrpc_commitds(vnode_t vp, uint64_t offset, int cnt, struct nfsclds *dsp,
 nfsmout:
 	if (error == 0 && nd->nd_repstat != 0)
 		error = nd->nd_repstat;
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -6811,7 +6811,7 @@ nfsrpc_advise(vnode_t vp, off_t offset, uint64_t cnt, int advise,
 		return (error);
 	if (nd->nd_repstat != 0)
 		error = nd->nd_repstat;
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -6866,7 +6866,7 @@ nfsrpc_adviseds(vnode_t vp, uint64_t offset, int cnt, int advise,
 		return (error);
 	if (nd->nd_repstat != 0)
 		error = nd->nd_repstat;
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -7030,7 +7030,7 @@ nfsrpc_allocaterpc(vnode_t vp, off_t off, off_t len, nfsv4stateid_t *stateidp,
 	} else
 		error = nd->nd_repstat;
 nfsmout:
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -7645,7 +7645,7 @@ nfsrpc_openlayoutrpc(struct nfsmount *nmp, vnode_t vp, u_int8_t *nfhp,
 		error = nd->nd_repstat;
 nfsmout:
 	free(ndp, M_NFSCLDELEG);
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -7902,7 +7902,7 @@ nfsmout:
 		*dpp = dp;
 	else
 		free(dp, M_NFSCLDELEG);
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -8219,7 +8219,7 @@ nfsrpc_copyrpc(vnode_t invp, off_t inoff, vnode_t outvp, off_t outoff,
 	if (error == 0)
 		error = nd->nd_repstat;
 nfsmout:
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -8313,7 +8313,7 @@ nfsrpc_seekrpc(vnode_t vp, off_t *offp, nfsv4stateid_t *stateidp, bool *eofp,
 	}
 	error = nd->nd_repstat;
 nfsmout:
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -8384,7 +8384,7 @@ nfsrpc_getextattr(vnode_t vp, const char *name, struct uio *uiop, ssize_t *lenp,
 	if (error == 0)
 		error = nd->nd_repstat;
 nfsmout:
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -8413,7 +8413,7 @@ nfsrpc_setextattr(vnode_t vp, const char *name, struct uio *uiop,
 	    NULL, 0, 0, use_ext);
 	if (uiop->uio_resid > nd->nd_maxreq) {
 		/* nd_maxreq is set by NFSCL_REQSTART(). */
-		mbuf_freem(nd->nd_mreq);
+		m_freem(nd->nd_mreq);
 		return (EINVAL);
 	}
 	NFSM_BUILD(tl, uint32_t *, NFSX_UNSIGNED);
@@ -8440,7 +8440,7 @@ nfsrpc_setextattr(vnode_t vp, const char *name, struct uio *uiop,
 	if (error == 0)
 		error = nd->nd_repstat;
 nfsmout:
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -8478,7 +8478,7 @@ nfsrpc_rmextattr(vnode_t vp, const char *name, struct nfsvattr *nap,
 	if (error == 0)
 		error = nd->nd_repstat;
 nfsmout:
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 
@@ -8555,7 +8555,7 @@ nfsrpc_listextattr(vnode_t vp, uint64_t *cookiep, struct uio *uiop,
 	if (error == 0)
 		error = nd->nd_repstat;
 nfsmout:
-	mbuf_freem(nd->nd_mrep);
+	m_freem(nd->nd_mrep);
 	return (error);
 }
 

@@ -3764,7 +3764,7 @@ nfsrv_getuser(int procnum, uid_t uid, gid_t gid, char *name)
 	NFSUNLOCKNAMEID();
 	NFSFREECRED(cred);
 	if (!error) {
-		mbuf_freem(nd->nd_mrep);
+		m_freem(nd->nd_mrep);
 		error = nd->nd_repstat;
 	}
 out:
