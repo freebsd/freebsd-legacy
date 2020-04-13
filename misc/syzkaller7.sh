@@ -1,10 +1,10 @@
 #!/bin/sh
 
-# panic: Duplicate free of 0xfffff800049ad800 from zone 
+# panic: Duplicate free of 0xfffff800049ad800 from zone
 # 0xfffff800041e82c0(mbuf) slab 0xfffff800049adf90(8)
 #
 # KDB: stack backtrace:
-# db_trace_self_wrapper() at db_trace_self_wrapper+0x47/frame 
+# db_trace_self_wrapper() at db_trace_self_wrapper+0x47/frame
 # 0xfffffe0016b2c4a0
 # vpanic() at vpanic+0x1e0/frame 0xfffffe0016b2c500
 # panic() at panic+0x43/frame 0xfffffe0016b2c560
@@ -12,7 +12,7 @@
 # uma_zfree_arg() at uma_zfree_arg+0x1aa/frame 0xfffffe0016b2c640
 # uipc_ready() at uipc_ready+0x19f/frame 0xfffffe0016b2c690
 # sendfile_iodone() at sendfile_iodone+0x342/frame 0xfffffe0016b2c6f0
-# vnode_pager_generic_getpages_done_async() at 
+# vnode_pager_generic_getpages_done_async() at
 # vnode_pager_generic_getpages_done_async+0x4a/frame 0xfffffe0016b2c720
 # bufdone() at bufdone+0xa1/frame 0xfffffe0016b2c7a0
 # g_io_deliver() at g_io_deliver+0x35b/frame 0xfffffe0016b2c800
@@ -28,7 +28,7 @@
 
 # $FreeBSD$
 
-# Not reproduced on r359769
+# Reproduced on r359769
 # Fixed by r359779
 
 [ `uname -p` = "i386" ] && exit 0
@@ -146,7 +146,7 @@ void execute_one(void)
 }
 int main(void)
 {
-  syscall(SYS_mmap, 0x20000000, 0x1000000, 3, 0x1012, -1, 0);
+  syscall(SYS_mmap, 0x20000000, 0x1000000, 3, 0x1012, -1, 0ul);
   loop();
   return 0;
 }
