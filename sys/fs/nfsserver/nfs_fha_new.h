@@ -33,6 +33,8 @@
 
 #ifdef	_KERNEL
 
+#define	FHANEW_SERVER_NAME	"nfsd"
+
 /* Sysctl defaults. */
 #define FHA_DEF_ENABLE			1
 #define FHA_DEF_READ			1
@@ -99,8 +101,6 @@ struct fha_params {
 	char server_name[32];
 	SVCPOOL **pool;
 };
-
-#define	FHANEW_SERVER_NAME	"nfsd"
 
 SVCTHREAD *fhanew_assign(SVCTHREAD *this_thread, struct svc_req *req);
 void fhanew_nd_complete(SVCTHREAD *, struct svc_req *);
