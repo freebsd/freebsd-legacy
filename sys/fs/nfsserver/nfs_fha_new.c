@@ -29,30 +29,32 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
-#include <fs/nfs/nfsport.h>
-
+#include <sys/types.h>
+#include <sys/mbuf.h>
 #include <sys/sbuf.h>
-#include <rpc/rpc.h>
-#include <fs/nfs/xdr_subs.h>
-#include <fs/nfs/nfs.h>
-#include <fs/nfs/nfsproto.h>
-#include <fs/nfs/nfsm_subs.h>
+
+#include <fs/nfs/nfsport.h>
 #include <fs/nfsserver/nfs_fha_new.h>
+
+#include <rpc/rpc.h>
 
 static MALLOC_DEFINE(M_NFS_FHA, "NFS FHA", "NFS FHA");
 
-static void fhanew_init(void *foo);
-static void fhanew_uninit(void *foo);
-rpcproc_t fhanew_get_procnum(rpcproc_t procnum);
-int fhanew_realign(struct mbuf **mb, int malloc_flags);
-int fhanew_get_fh(uint64_t *fh, int v3, struct nfsrv_descript *nd);
-int fhanew_is_read(rpcproc_t procnum);
-int fhanew_is_write(rpcproc_t procnum);
-int fhanew_get_offset(struct nfsrv_descript *nd, int v3,
-		      struct fha_info *info);
-int fhanew_no_offset(rpcproc_t procnum);
-void fhanew_set_locktype(rpcproc_t procnum, struct fha_info *info);
-static int fhenew_stats_sysctl(SYSCTL_HANDLER_ARGS);
+static void		fhanew_init(void *foo);
+static void		fhanew_uninit(void *foo);
+static rpcproc_t	fhanew_get_procnum(rpcproc_t procnum);
+static int		fhanew_get_fh(uint64_t *fh, int v3,
+			    struct nfsrv_descript *nd);
+static int		fhanew_is_read(rpcproc_t procnum);
+static int		fhanew_is_write(rpcproc_t procnum);
+static int		fhanew_get_offset(struct nfsrv_descript *nd,
+			    int v3, struct fha_info *info);
+static int		fhanew_no_offset(rpcproc_t procnum);
+static void		fhanew_set_locktype(rpcproc_t procnum,
+			    struct fha_info *info);
+static int		fhenew_stats_sysctl(SYSCTL_HANDLER_ARGS);
+static void		fha_extract_info(struct svc_req *req,
+			    struct fha_info *i);
 
 static struct fha_params fhanew_softc;
 
@@ -63,6 +65,293 @@ extern SVCPOOL	*nfsrvd_pool;
 
 SYSINIT(nfs_fhanew, SI_SUB_ROOT_CONF, SI_ORDER_ANY, fhanew_init, NULL);
 SYSUNINIT(nfs_fhanew, SI_SUB_ROOT_CONF, SI_ORDER_ANY, fhanew_uninit, NULL);
+
+static void
+fhanew_init(void *foo)
+{
+	struct fha_params *softc;
+	int i;
+
+	softc = &fhanew_softc;
+
+	bzero(softc, sizeof(*softc));
+
+	snprintf(softc->server_name, sizeof(softc->server_name),
+	    FHANEW_SERVER_NAME);
+
+	softc->pool = &nfsrvd_pool;
+
+	/*
+	 * Initialize the sysctl context list for the fha module.
+	 */
+	sysctl_ctx_init(&softc->sysctl_ctx);
+	softc->sysctl_tree = SYSCTL_ADD_NODE(&softc->sysctl_ctx,
+	    SYSCTL_STATIC_CHILDREN(_vfs_nfsd), OID_AUTO, "fha",
+	    CTLFLAG_RD | CTLFLAG_MPSAFE, 0, "NFS File Handle Affinity (FHA)");
+	if (softc->sysctl_tree == NULL) {
+		printf("%s: unable to allocate sysctl tree\n", __func__);
+		return;
+	}
+
+	for (i = 0; i < FHA_HASH_SIZE; i++)
+		mtx_init(&softc->fha_hash[i].mtx, "fhalock", NULL, MTX_DEF);
+
+	/*
+	 * Set the default tuning parameters.
+	 */
+	softc->ctls.enable = FHA_DEF_ENABLE;
+	softc->ctls.read = FHA_DEF_READ;
+	softc->ctls.write = FHA_DEF_WRITE;
+	softc->ctls.bin_shift = FHA_DEF_BIN_SHIFT;
+	softc->ctls.max_nfsds_per_fh = FHA_DEF_MAX_NFSDS_PER_FH;
+	softc->ctls.max_reqs_per_nfsd = FHA_DEF_MAX_REQS_PER_NFSD;
+
+	/*
+	 * Add sysctls so the user can change the tuning parameters.
+	 */
+	SYSCTL_ADD_UINT(&softc->sysctl_ctx, SYSCTL_CHILDREN(softc->sysctl_tree),
+	    OID_AUTO, "enable", CTLFLAG_RWTUN,
+	    &softc->ctls.enable, 0, "Enable NFS File Handle Affinity (FHA)");
+
+	SYSCTL_ADD_UINT(&softc->sysctl_ctx, SYSCTL_CHILDREN(softc->sysctl_tree),
+	    OID_AUTO, "read", CTLFLAG_RWTUN,
+	    &softc->ctls.read, 0, "Enable NFS FHA read locality");
+
+	SYSCTL_ADD_UINT(&softc->sysctl_ctx, SYSCTL_CHILDREN(softc->sysctl_tree),
+	    OID_AUTO, "write", CTLFLAG_RWTUN,
+	    &softc->ctls.write, 0, "Enable NFS FHA write locality");
+
+	SYSCTL_ADD_UINT(&softc->sysctl_ctx, SYSCTL_CHILDREN(softc->sysctl_tree),
+	    OID_AUTO, "bin_shift", CTLFLAG_RWTUN,
+	    &softc->ctls.bin_shift, 0,
+	    "Maximum locality distance 2^(bin_shift) bytes");
+
+	SYSCTL_ADD_UINT(&softc->sysctl_ctx, SYSCTL_CHILDREN(softc->sysctl_tree),
+	    OID_AUTO, "max_nfsds_per_fh", CTLFLAG_RWTUN,
+	    &softc->ctls.max_nfsds_per_fh, 0, "Maximum nfsd threads that "
+	    "should be working on requests for the same file handle");
+
+	SYSCTL_ADD_UINT(&softc->sysctl_ctx, SYSCTL_CHILDREN(softc->sysctl_tree),
+	    OID_AUTO, "max_reqs_per_nfsd", CTLFLAG_RWTUN,
+	    &softc->ctls.max_reqs_per_nfsd, 0, "Maximum requests that "
+	    "single nfsd thread should be working on at any time");
+
+	SYSCTL_ADD_OID(&softc->sysctl_ctx, SYSCTL_CHILDREN(softc->sysctl_tree),
+	    OID_AUTO, "fhe_stats", CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE,
+	    0, 0, fhenew_stats_sysctl, "A", "");
+}
+
+static void
+fhanew_uninit(void *foo)
+{
+	struct fha_params *softc;
+	int i;
+
+	softc = &fhanew_softc;
+
+	sysctl_ctx_free(&softc->sysctl_ctx);
+	for (i = 0; i < FHA_HASH_SIZE; i++)
+		mtx_destroy(&softc->fha_hash[i].mtx);
+}
+
+static rpcproc_t
+fhanew_get_procnum(rpcproc_t procnum)
+{
+	if (procnum > NFSV2PROC_STATFS)
+		return (-1);
+
+	return (newnfs_nfsv3_procid[procnum]);
+}
+
+static int
+fhanew_get_fh(uint64_t *fh, int v3, struct nfsrv_descript *nd)
+{
+	uint32_t *tl;
+	uint8_t *buf;
+	uint64_t t;
+	int error, len, i;
+
+	error = 0;
+	len = 0;
+
+	if (v3) {
+		NFSM_DISSECT_NONBLOCK(tl, uint32_t *, NFSX_UNSIGNED);
+		if ((len = fxdr_unsigned(int, *tl)) <= 0 || len > NFSX_FHMAX) {
+			error = EBADRPC;
+			goto nfsmout;
+		}
+	} else {
+		len = NFSX_V2FH;
+	}
+
+	t = 0;
+	if (len != 0) {
+		NFSM_DISSECT_NONBLOCK(buf, uint8_t *, len);
+		for (i = 0; i < len; i++)
+			t ^= ((uint64_t)buf[i] << (i & 7) * 8);
+	}
+	*fh = t;
+
+nfsmout:
+	return (error);
+}
+
+static int
+fhanew_is_read(rpcproc_t procnum)
+{
+	if (procnum == NFSPROC_READ)
+		return (1);
+	else
+		return (0);
+}
+
+static int
+fhanew_is_write(rpcproc_t procnum)
+{
+	if (procnum == NFSPROC_WRITE)
+		return (1);
+	else
+		return (0);
+}
+
+static int
+fhanew_get_offset(struct nfsrv_descript *nd, int v3,
+    struct fha_info *info)
+{
+	uint32_t *tl;
+	int error;
+
+	error = 0;
+
+	if (v3) {
+		NFSM_DISSECT_NONBLOCK(tl, uint32_t *, 2 * NFSX_UNSIGNED);
+		info->offset = fxdr_hyper(tl);
+	} else {
+		NFSM_DISSECT_NONBLOCK(tl, uint32_t *, NFSX_UNSIGNED);
+		info->offset = fxdr_unsigned(uint32_t, *tl);
+	}
+
+nfsmout:
+	return (error);
+}
+
+static int
+fhanew_no_offset(rpcproc_t procnum)
+{
+	if (procnum == NFSPROC_FSSTAT ||
+	    procnum == NFSPROC_FSINFO ||
+	    procnum == NFSPROC_PATHCONF ||
+	    procnum == NFSPROC_NOOP ||
+	    procnum == NFSPROC_NULL)
+		return (1);
+	else
+		return (0);
+}
+
+static void
+fhanew_set_locktype(rpcproc_t procnum, struct fha_info *info)
+{
+	switch (procnum) {
+	case NFSPROC_NULL:
+	case NFSPROC_GETATTR:
+	case NFSPROC_LOOKUP:
+	case NFSPROC_ACCESS:
+	case NFSPROC_READLINK:
+	case NFSPROC_READ:
+	case NFSPROC_READDIR:
+	case NFSPROC_READDIRPLUS:
+	case NFSPROC_WRITE:
+		info->locktype = LK_SHARED;
+		break;
+	case NFSPROC_SETATTR:
+	case NFSPROC_CREATE:
+	case NFSPROC_MKDIR:
+	case NFSPROC_SYMLINK:
+	case NFSPROC_MKNOD:
+	case NFSPROC_REMOVE:
+	case NFSPROC_RMDIR:
+	case NFSPROC_RENAME:
+	case NFSPROC_LINK:
+	case NFSPROC_FSSTAT:
+	case NFSPROC_FSINFO:
+	case NFSPROC_PATHCONF:
+	case NFSPROC_COMMIT:
+	case NFSPROC_NOOP:
+		info->locktype = LK_EXCLUSIVE;
+		break;
+	}
+}
+
+
+/*
+ * This just specifies that offsets should obey affinity when within
+ * the same 1Mbyte (1<<20) chunk for the file (reads only for now).
+ */
+static void
+fha_extract_info(struct svc_req *req, struct fha_info *i)
+{
+	static u_int64_t random_fh = 0;
+	int error;
+	int v3 = (req->rq_vers == 3);
+	rpcproc_t procnum;
+	struct nfsrv_descript lnd, *nd;
+
+	nd = &lnd;
+	/*
+	 * We start off with a random fh.  If we get a reasonable
+	 * procnum, we set the fh.  If there's a concept of offset
+	 * that we're interested in, we set that.
+	 */
+	i->fh = ++random_fh;
+	i->offset = 0;
+	i->locktype = LK_EXCLUSIVE;
+	i->read = i->write = 0;
+
+	/*
+	 * Extract the procnum and convert to v3 form if necessary,
+	 * taking care to deal with out-of-range procnums.  Caller will
+	 * ensure that rq_vers is either 2 or 3.
+	 */
+	procnum = req->rq_proc;
+	if (!v3) {
+		rpcproc_t tmp_procnum;
+
+		tmp_procnum = fhanew_get_procnum(procnum);
+		if (tmp_procnum == -1)
+			goto out;
+		procnum = tmp_procnum;
+	}
+
+	/*
+	 * We do affinity for most.  However, we divide a realm of affinity
+	 * by file offset so as to allow for concurrent random access.  We
+	 * only do this for reads today, but this may change when IFS supports
+	 * efficient concurrent writes.
+	 */
+	if (fhanew_no_offset(procnum))
+		goto out;
+
+	i->read = fhanew_is_read(procnum);
+	i->write = fhanew_is_write(procnum);
+
+	error = newnfs_realign(&req->rq_args, M_NOWAIT);
+	if (error)
+		goto out;
+	nd->nd_md = req->rq_args;
+	nfsm_set(nd, req->rq_xprt->xp_mbufoffs, false);
+
+	/* Grab the filehandle. */
+	error = fhanew_get_fh(&i->fh, v3, nd);
+	if (error)
+		goto out;
+
+	/* Content ourselves with zero offset for all but reads. */
+	if (i->read || i->write)
+		fhanew_get_offset(nd, v3, i);
+
+out:
+	fhanew_set_locktype(procnum, i);
+}
 
 static struct fha_hash_entry *
 fha_hash_entry_new(u_int64_t fh)
@@ -248,321 +537,17 @@ noloc:
 	return (thread);
 }
 
-static void
-fha_init(struct fha_params *softc)
-{
-	int i;
-
-	for (i = 0; i < FHA_HASH_SIZE; i++)
-		mtx_init(&softc->fha_hash[i].mtx, "fhalock", NULL, MTX_DEF);
-
-	/*
-	 * Set the default tuning parameters.
-	 */
-	softc->ctls.enable = FHA_DEF_ENABLE;
-	softc->ctls.read = FHA_DEF_READ;
-	softc->ctls.write = FHA_DEF_WRITE;
-	softc->ctls.bin_shift = FHA_DEF_BIN_SHIFT;
-	softc->ctls.max_nfsds_per_fh = FHA_DEF_MAX_NFSDS_PER_FH;
-	softc->ctls.max_reqs_per_nfsd = FHA_DEF_MAX_REQS_PER_NFSD;
-
-	/*
-	 * Add sysctls so the user can change the tuning parameters.
-	 */
-	SYSCTL_ADD_UINT(&softc->sysctl_ctx, SYSCTL_CHILDREN(softc->sysctl_tree),
-	    OID_AUTO, "enable", CTLFLAG_RWTUN,
-	    &softc->ctls.enable, 0, "Enable NFS File Handle Affinity (FHA)");
-
-	SYSCTL_ADD_UINT(&softc->sysctl_ctx, SYSCTL_CHILDREN(softc->sysctl_tree),
-	    OID_AUTO, "read", CTLFLAG_RWTUN,
-	    &softc->ctls.read, 0, "Enable NFS FHA read locality");
-
-	SYSCTL_ADD_UINT(&softc->sysctl_ctx, SYSCTL_CHILDREN(softc->sysctl_tree),
-	    OID_AUTO, "write", CTLFLAG_RWTUN,
-	    &softc->ctls.write, 0, "Enable NFS FHA write locality");
-
-	SYSCTL_ADD_UINT(&softc->sysctl_ctx, SYSCTL_CHILDREN(softc->sysctl_tree),
-	    OID_AUTO, "bin_shift", CTLFLAG_RWTUN,
-	    &softc->ctls.bin_shift, 0, "Maximum locality distance 2^(bin_shift) bytes");
-
-	SYSCTL_ADD_UINT(&softc->sysctl_ctx, SYSCTL_CHILDREN(softc->sysctl_tree),
-	    OID_AUTO, "max_nfsds_per_fh", CTLFLAG_RWTUN,
-	    &softc->ctls.max_nfsds_per_fh, 0, "Maximum nfsd threads that "
-	    "should be working on requests for the same file handle");
-
-	SYSCTL_ADD_UINT(&softc->sysctl_ctx, SYSCTL_CHILDREN(softc->sysctl_tree),
-	    OID_AUTO, "max_reqs_per_nfsd", CTLFLAG_RWTUN,
-	    &softc->ctls.max_reqs_per_nfsd, 0, "Maximum requests that "
-	    "single nfsd thread should be working on at any time");
-
-	SYSCTL_ADD_OID(&softc->sysctl_ctx, SYSCTL_CHILDREN(softc->sysctl_tree),
-	    OID_AUTO, "fhe_stats", CTLTYPE_STRING | CTLFLAG_RD, 0, 0,
-	    fhenew_stats_sysctl, "A", "");
-
-}
-
-static void
-fha_uninit(struct fha_params *softc)
-{
-	int i;
-
-	sysctl_ctx_free(&softc->sysctl_ctx);
-	for (i = 0; i < FHA_HASH_SIZE; i++)
-		mtx_destroy(&softc->fha_hash[i].mtx);
-}
-
 /*
- * This just specifies that offsets should obey affinity when within
- * the same 1Mbyte (1<<20) chunk for the file (reads only for now).
+ * After getting a request, try to assign it to some thread.  Usually we
+ * handle it ourselves.
  */
-static void
-fha_extract_info(struct svc_req *req, struct fha_info *i)
-{
-	static u_int64_t random_fh = 0;
-	int error;
-	int v3 = (req->rq_vers == 3);
-	rpcproc_t procnum;
-	struct nfsrv_descript lnd, *nd;
-
-	nd = &lnd;
-	/*
-	 * We start off with a random fh.  If we get a reasonable
-	 * procnum, we set the fh.  If there's a concept of offset
-	 * that we're interested in, we set that.
-	 */
-	i->fh = ++random_fh;
-	i->offset = 0;
-	i->locktype = LK_EXCLUSIVE;
-	i->read = i->write = 0;
-
-	/*
-	 * Extract the procnum and convert to v3 form if necessary,
-	 * taking care to deal with out-of-range procnums.  Caller will
-	 * ensure that rq_vers is either 2 or 3.
-	 */
-	procnum = req->rq_proc;
-	if (!v3) {
-		rpcproc_t tmp_procnum;
-
-		tmp_procnum = fhanew_get_procnum(procnum);
-		if (tmp_procnum == -1)
-			goto out;
-		procnum = tmp_procnum;
-	}
-
-	/*
-	 * We do affinity for most.  However, we divide a realm of affinity
-	 * by file offset so as to allow for concurrent random access.  We
-	 * only do this for reads today, but this may change when IFS supports
-	 * efficient concurrent writes.
-	 */
-	if (fhanew_no_offset(procnum))
-		goto out;
-
-	i->read = fhanew_is_read(procnum);
-	i->write = fhanew_is_write(procnum);
-
-	error = fhanew_realign(&req->rq_args, M_NOWAIT);
-	if (error)
-		goto out;
-	nd->nd_md = req->rq_args;
-	nfsm_set(nd, req->rq_xprt->xp_mbufoffs, false);
-
-	/* Grab the filehandle. */
-	error = fhanew_get_fh(&i->fh, v3, nd);
-	if (error)
-		goto out;
-
-	/* Content ourselves with zero offset for all but reads. */
-	if (i->read || i->write)
-		fhanew_get_offset(nd, v3, i);
-
-out:
-	fhanew_set_locktype(procnum, i);
-}
-
-static void
-fhanew_init(void *foo)
-{
-	struct fha_params *softc;
-
-	softc = &fhanew_softc;
-
-	bzero(softc, sizeof(*softc));
-
-	snprintf(softc->server_name, sizeof(softc->server_name),
-	    FHANEW_SERVER_NAME);
-
-	softc->pool = &nfsrvd_pool;
-
-	/*
-	 * Initialize the sysctl context list for the fha module.
-	 */
-	sysctl_ctx_init(&softc->sysctl_ctx);
-	softc->sysctl_tree = SYSCTL_ADD_NODE(&softc->sysctl_ctx,
-	    SYSCTL_STATIC_CHILDREN(_vfs_nfsd), OID_AUTO, "fha", CTLFLAG_RD,
-	    0, "NFS File Handle Affinity (FHA)");
-	if (softc->sysctl_tree == NULL) {
-		printf("%s: unable to allocate sysctl tree\n", __func__);
-		return;
-	}
-
-	fha_init(softc);
-}
-
-static void
-fhanew_uninit(void *foo)
-{
-	struct fha_params *softc;
-
-	softc = &fhanew_softc;
-
-	fha_uninit(softc);
-}
-
-rpcproc_t
-fhanew_get_procnum(rpcproc_t procnum)
-{
-	if (procnum > NFSV2PROC_STATFS)
-		return (-1);
-
-	return (newnfs_nfsv3_procid[procnum]);
-}
-
-int
-fhanew_realign(struct mbuf **mb, int malloc_flags)
-{
-	return (newnfs_realign(mb, malloc_flags));
-}
-
-int
-fhanew_get_fh(uint64_t *fh, int v3, struct nfsrv_descript *nd)
-{
-	uint32_t *tl;
-	uint8_t *buf;
-	uint64_t t;
-	int error, len, i;
-
-	error = 0;
-	len = 0;
-
-	if (v3) {
-		NFSM_DISSECT_NONBLOCK(tl, uint32_t *, NFSX_UNSIGNED);
-		if ((len = fxdr_unsigned(int, *tl)) <= 0 || len > NFSX_FHMAX) {
-			error = EBADRPC;
-			goto nfsmout;
-		}
-	} else {
-		len = NFSX_V2FH;
-	}
-
-	t = 0;
-	if (len != 0) {
-		NFSM_DISSECT_NONBLOCK(buf, uint8_t *, len);
-		for (i = 0; i < len; i++)
-			t ^= ((uint64_t)buf[i] << (i & 7) * 8);
-	}
-	*fh = t;
-
-nfsmout:
-	return (error);
-}
-
-int
-fhanew_is_read(rpcproc_t procnum)
-{
-	if (procnum == NFSPROC_READ)
-		return (1);
-	else
-		return (0);
-}
-
-int
-fhanew_is_write(rpcproc_t procnum)
-{
-	if (procnum == NFSPROC_WRITE)
-		return (1);
-	else
-		return (0);
-}
-
-int
-fhanew_get_offset(struct nfsrv_descript *nd, int v3,
-		  struct fha_info *info)
-{
-	uint32_t *tl;
-	int error;
-
-	error = 0;
-
-	if (v3) {
-		NFSM_DISSECT_NONBLOCK(tl, uint32_t *, 2 * NFSX_UNSIGNED);
-		info->offset = fxdr_hyper(tl);
-	} else {
-		NFSM_DISSECT_NONBLOCK(tl, uint32_t *, NFSX_UNSIGNED);
-		info->offset = fxdr_unsigned(uint32_t, *tl);
-	}
-
-nfsmout:
-	return (error);
-}
-
-int
-fhanew_no_offset(rpcproc_t procnum)
-{
-	if (procnum == NFSPROC_FSSTAT ||
-	    procnum == NFSPROC_FSINFO ||
-	    procnum == NFSPROC_PATHCONF ||
-	    procnum == NFSPROC_NOOP ||
-	    procnum == NFSPROC_NULL)
-		return (1);
-	else
-		return (0);
-}
-
-void
-fhanew_set_locktype(rpcproc_t procnum, struct fha_info *info)
-{
-	switch (procnum) {
-	case NFSPROC_NULL:
-	case NFSPROC_GETATTR:
-	case NFSPROC_LOOKUP:
-	case NFSPROC_ACCESS:
-	case NFSPROC_READLINK:
-	case NFSPROC_READ:
-	case NFSPROC_READDIR:
-	case NFSPROC_READDIRPLUS:
-	case NFSPROC_WRITE:
-		info->locktype = LK_SHARED;
-		break;
-	case NFSPROC_SETATTR:
-	case NFSPROC_CREATE:
-	case NFSPROC_MKDIR:
-	case NFSPROC_SYMLINK:
-	case NFSPROC_MKNOD:
-	case NFSPROC_REMOVE:
-	case NFSPROC_RMDIR:
-	case NFSPROC_RENAME:
-	case NFSPROC_LINK:
-	case NFSPROC_FSSTAT:
-	case NFSPROC_FSINFO:
-	case NFSPROC_PATHCONF:
-	case NFSPROC_COMMIT:
-	case NFSPROC_NOOP:
-		info->locktype = LK_EXCLUSIVE;
-		break;
-	}
-}
-
 SVCTHREAD *
 fhanew_assign(SVCTHREAD *this_thread, struct svc_req *req)
 {
+	struct fha_params *softc = &fhanew_softc;
 	SVCTHREAD *thread;
 	struct fha_info i;
 	struct fha_hash_entry *fhe;
-	struct fha_params *softc;
-
-	softc = &fhanew_softc;
 
 	/* Check to see whether we're enabled. */
 	if (softc->ctls.enable == 0)
@@ -612,73 +597,6 @@ thist:
 	return (this_thread);
 }
 
-static int
-fhenew_stats_sysctl(SYSCTL_HANDLER_ARGS)
-{
-	int error, i;
-	struct sbuf sb;
-	struct fha_hash_entry *fhe;
-	bool_t first, hfirst;
-	SVCTHREAD *thread;
-	struct fha_params *softc;
-
-	softc = &fhanew_softc;
-
-	sbuf_new(&sb, NULL, 65536, SBUF_FIXEDLEN);
-
-	if (!*softc->pool) {
-		sbuf_printf(&sb, "NFSD not running\n");
-		goto out;
-	}
-
-	for (i = 0; i < FHA_HASH_SIZE; i++)
-		if (!LIST_EMPTY(&softc->fha_hash[i].list))
-			break;
-
-	if (i == FHA_HASH_SIZE) {
-		sbuf_printf(&sb, "No file handle entries.\n");
-		goto out;
-	}
-
-	hfirst = TRUE;
-	for (; i < FHA_HASH_SIZE; i++) {
-		mtx_lock(&softc->fha_hash[i].mtx);
-		if (LIST_EMPTY(&softc->fha_hash[i].list)) {
-			mtx_unlock(&softc->fha_hash[i].mtx);
-			continue;
-		}
-		sbuf_printf(&sb, "%shash %d: {\n", hfirst ? "" : ", ", i);
-		first = TRUE;
-		LIST_FOREACH(fhe, &softc->fha_hash[i].list, link) {
-			sbuf_printf(&sb, "%sfhe %p: {\n", first ? "  " : ", ", fhe);
-
-			sbuf_printf(&sb, "    fh: %ju\n", (uintmax_t) fhe->fh);
-			sbuf_printf(&sb, "    num_rw/exclusive: %d/%d\n",
-			    fhe->num_rw, fhe->num_exclusive);
-			sbuf_printf(&sb, "    num_threads: %d\n", fhe->num_threads);
-
-			LIST_FOREACH(thread, &fhe->threads, st_alink) {
-				sbuf_printf(&sb, "      thread %p offset %ju "
-				    "reqs %d\n", thread,
-				    thread->st_p3, thread->st_p2);
-			}
-
-			sbuf_printf(&sb, "  }");
-			first = FALSE;
-		}
-		sbuf_printf(&sb, "\n}");
-		mtx_unlock(&softc->fha_hash[i].mtx);
-		hfirst = FALSE;
-	}
-
- out:
-	sbuf_trim(&sb);
-	sbuf_finish(&sb);
-	error = sysctl_handle_string(oidp, sbuf_data(&sb), sbuf_len(&sb), req);
-	sbuf_delete(&sb);
-	return (error);
-}
-
 /*
  * Called when we're done with an operation.  The request has already
  * been de-queued.
@@ -708,4 +626,70 @@ fhanew_nd_complete(SVCTHREAD *thread, struct svc_req *req)
 			fha_hash_entry_remove(fhe);
 	}
 	mtx_unlock(mtx);
+}
+
+static int
+fhenew_stats_sysctl(SYSCTL_HANDLER_ARGS)
+{
+	struct fha_params *softc = &fhanew_softc;
+	int error, i;
+	struct sbuf sb;
+	struct fha_hash_entry *fhe;
+	bool_t first, hfirst;
+	SVCTHREAD *thread;
+
+	sbuf_new(&sb, NULL, 65536, SBUF_FIXEDLEN);
+
+	if (!*softc->pool) {
+		sbuf_printf(&sb, "NFSD not running\n");
+		goto out;
+	}
+
+	for (i = 0; i < FHA_HASH_SIZE; i++)
+		if (!LIST_EMPTY(&softc->fha_hash[i].list))
+			break;
+
+	if (i == FHA_HASH_SIZE) {
+		sbuf_printf(&sb, "No file handle entries.\n");
+		goto out;
+	}
+
+	hfirst = TRUE;
+	for (; i < FHA_HASH_SIZE; i++) {
+		mtx_lock(&softc->fha_hash[i].mtx);
+		if (LIST_EMPTY(&softc->fha_hash[i].list)) {
+			mtx_unlock(&softc->fha_hash[i].mtx);
+			continue;
+		}
+		sbuf_printf(&sb, "%shash %d: {\n", hfirst ? "" : ", ", i);
+		first = TRUE;
+		LIST_FOREACH(fhe, &softc->fha_hash[i].list, link) {
+			sbuf_printf(&sb, "%sfhe %p: {\n", first ? "  " : ", ",
+			    fhe);
+			sbuf_printf(&sb, "    fh: %ju\n", (uintmax_t) fhe->fh);
+			sbuf_printf(&sb, "    num_rw/exclusive: %d/%d\n",
+			    fhe->num_rw, fhe->num_exclusive);
+			sbuf_printf(&sb, "    num_threads: %d\n",
+			    fhe->num_threads);
+
+			LIST_FOREACH(thread, &fhe->threads, st_alink) {
+				sbuf_printf(&sb, "      thread %p offset %ju "
+				    "reqs %d\n", thread,
+				    thread->st_p3, thread->st_p2);
+			}
+
+			sbuf_printf(&sb, "  }");
+			first = FALSE;
+		}
+		sbuf_printf(&sb, "\n}");
+		mtx_unlock(&softc->fha_hash[i].mtx);
+		hfirst = FALSE;
+	}
+
+ out:
+	sbuf_trim(&sb);
+	sbuf_finish(&sb);
+	error = sysctl_handle_string(oidp, sbuf_data(&sb), sbuf_len(&sb), req);
+	sbuf_delete(&sb);
+	return (error);
 }
