@@ -859,9 +859,9 @@ out:
 APPLESTATIC int
 nfsm_strtom(struct nfsrv_descript *nd, const char *cp, int siz)
 {
-	mbuf_t m2;
+	struct mbuf *m2;
 	int xfer, left;
-	mbuf_t m1;
+	struct mbuf *m1;
 	int rem, bytesize;
 	u_int32_t *tl;
 	char *cp2;
@@ -4473,7 +4473,7 @@ nfsrv_refstrbigenough(int siz, u_char **cpp, u_char **cpp2, int *slenp)
 APPLESTATIC void
 nfsrvd_rephead(struct nfsrv_descript *nd)
 {
-	mbuf_t mreq;
+	struct mbuf *mreq;
 
 	if ((nd->nd_flag & ND_NOMAP) != 0) {
 		mreq = mb_alloc_ext_plus_pages(PAGE_SIZE, M_WAITOK, false,

@@ -325,7 +325,7 @@ int nfsm_mbufuio(struct nfsrv_descript *, struct uio *, int);
 int nfsm_fhtom(struct nfsrv_descript *, u_int8_t *, int, int);
 int nfsm_advance(struct nfsrv_descript *, int, int);
 void *nfsm_dissct(struct nfsrv_descript *, int, int);
-void nfsm_trimtrailing(struct nfsrv_descript *, mbuf_t,
+void nfsm_trimtrailing(struct nfsrv_descript *, struct mbuf *,
     caddr_t, int, int);
 void newnfs_copycred(struct nfscred *, struct ucred *);
 void newnfs_copyincred(struct ucred *, struct nfscred *);
@@ -682,10 +682,10 @@ int nfsvno_namei(struct nfsrv_descript *, struct nameidata *,
     vnode_t, int, struct nfsexstuff *, NFSPROC_T *, vnode_t *);
 void nfsvno_setpathbuf(struct nameidata *, char **, u_long **);
 void nfsvno_relpathbuf(struct nameidata *);
-int nfsvno_readlink(vnode_t, struct ucred *, int, NFSPROC_T *, mbuf_t *,
-    mbuf_t *, int *);
+int nfsvno_readlink(vnode_t, struct ucred *, int, NFSPROC_T *, struct mbuf **,
+    struct mbuf **, int *);
 int nfsvno_read(vnode_t, off_t, int, struct ucred *, int, NFSPROC_T *,
-    mbuf_t *, mbuf_t *);
+    struct mbuf **, struct mbuf **);
 int nfsvno_write(vnode_t, off_t, int, int *, struct nfsrv_descript *,
     NFSPROC_T *);
 int nfsvno_createsub(struct nfsrv_descript *, struct nameidata *,
