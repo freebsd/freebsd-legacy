@@ -160,7 +160,7 @@ rip_inshash(struct inpcb *inp)
 
 	INP_INFO_WLOCK_ASSERT(pcbinfo);
 	INP_WLOCK_ASSERT(inp);
-	
+
 	if (inp->inp_ip_p != 0 &&
 	    inp->inp_laddr.s_addr != INADDR_ANY &&
 	    inp->inp_faddr.s_addr != INADDR_ANY) {
@@ -892,7 +892,7 @@ rip_detach(struct socket *so)
 
 	inp = sotoinpcb(so);
 	KASSERT(inp != NULL, ("rip_detach: inp == NULL"));
-	KASSERT(inp->inp_faddr.s_addr == INADDR_ANY, 
+	KASSERT(inp->inp_faddr.s_addr == INADDR_ANY,
 	    ("rip_detach: not closed"));
 
 	INP_INFO_WLOCK(&V_ripcbinfo);
@@ -1137,8 +1137,9 @@ rip_pcblist(SYSCTL_HANDLER_ARGS)
 }
 
 SYSCTL_PROC(_net_inet_raw, OID_AUTO/*XXX*/, pcblist,
-    CTLTYPE_OPAQUE | CTLFLAG_RD, NULL, 0,
-    rip_pcblist, "S,xinpcb", "List of active raw IP sockets");
+    CTLTYPE_OPAQUE | CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, 0,
+    rip_pcblist, "S,xinpcb",
+    "List of active raw IP sockets");
 
 #ifdef INET
 struct pr_usrreqs rip_usrreqs = {

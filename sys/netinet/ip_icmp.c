@@ -52,6 +52,7 @@ __FBSDID("$FreeBSD$");
 #include <net/if_var.h>
 #include <net/if_types.h>
 #include <net/route.h>
+#include <net/route/nhop.h>
 #include <net/vnet.h>
 
 #include <netinet/in.h>
@@ -563,7 +564,7 @@ icmp_input(struct mbuf **mp, int *offp, int proto)
 		 * - The outer IP header has no options.
 		 * - The outer IP header, the ICMP header, the inner IP header,
 		 *   and the first n bytes of the inner payload are contiguous.
-		 *   n is at least 8, but might be larger based on 
+		 *   n is at least 8, but might be larger based on
 		 *   ICMP_ADVLENPREF. See its definition in ip_icmp.h.
 		 */
 		ctlfunc = inetsw[ip_protox[icp->icmp_ip.ip_p]].pr_ctlinput;
@@ -629,7 +630,7 @@ icmp_input(struct mbuf **mp, int *offp, int proto)
 			    (struct sockaddr *)&icmpdst, m->m_pkthdr.rcvif);
 		if (ia == NULL)
 			break;
-		if (ia->ia_ifp == NULL) 
+		if (ia->ia_ifp == NULL)
 			break;
 		icp->icmp_type = ICMP_MASKREPLY;
 		if (V_icmpmaskfake == 0)
@@ -937,7 +938,7 @@ done:
  *
  * @src: sockaddr with address of redirect originator
  * @dst: sockaddr with destination in question
- * @gateway: new proposed gateway 
+ * @gateway: new proposed gateway
  *
  * Returns 0 on success.
  */
@@ -945,7 +946,7 @@ static int
 icmp_verify_redirect_gateway(struct sockaddr_in *src, struct sockaddr_in *dst,
     struct sockaddr_in *gateway, u_int fibnum)
 {
-	struct rtentry *rt;
+	struct nhop_object *nh;
 	struct ifaddr *ifa;
 
 	NET_EPOCH_ASSERT();
@@ -958,8 +959,8 @@ icmp_verify_redirect_gateway(struct sockaddr_in *src, struct sockaddr_in *dst,
 	if (ifa_ifwithaddr_check((struct sockaddr *)gateway))
 		return (EHOSTUNREACH);
 
-	rt = rtalloc1_fib((struct sockaddr *)dst, 0, 0UL, fibnum); /* NB: rt is locked */
-	if (rt == NULL)
+	nh = fib4_lookup(fibnum, dst->sin_addr, 0, NHR_NONE, 0);
+	if (nh == NULL)
 		return (EINVAL);
 
 	/*
@@ -968,28 +969,19 @@ icmp_verify_redirect_gateway(struct sockaddr_in *src, struct sockaddr_in *dst,
 	 * we have a routing loop, perhaps as a result of an interface
 	 * going down recently.
 	 */
-	if (!sa_equal((struct sockaddr *)src, rt->rt_gateway)) {
-		RTFREE_LOCKED(rt);
+	if (!sa_equal((struct sockaddr *)src, &nh->gw_sa))
 		return (EINVAL);
-	}
-	if (rt->rt_ifa != ifa && ifa->ifa_addr->sa_family != AF_LINK) {
-		RTFREE_LOCKED(rt);
+	if (nh->nh_ifa != ifa && ifa->ifa_addr->sa_family != AF_LINK)
 		return (EINVAL);
-	}
 
 	/* If host route already exists, ignore redirect. */
-	if (rt->rt_flags & RTF_HOST) {
-		RTFREE_LOCKED(rt);
+	if (nh->nh_flags & NHF_HOST)
 		return (EEXIST);
-	}
 
 	/* If the prefix is directly reachable, ignore redirect. */
-	if (!(rt->rt_flags & RTF_GATEWAY)) {
-		RTFREE_LOCKED(rt);
+	if (!(nh->nh_flags & NHF_GATEWAY))
 		return (EEXIST);
-	}
 
-	RTFREE_LOCKED(rt);
 	return (0);
 }
 

@@ -143,7 +143,7 @@ void nfsrv_throwawayallstate(NFSPROC_T *);
 int nfsrv_checksequence(struct nfsrv_descript *, uint32_t, uint32_t *,
     uint32_t *, int, uint32_t *, NFSPROC_T *);
 int nfsrv_checkreclaimcomplete(struct nfsrv_descript *, int);
-void nfsrv_cache_session(uint8_t *, uint32_t, int, struct mbuf **);
+void nfsrv_cache_session(struct nfsrv_descript *, struct mbuf **);
 void nfsrv_freeallbackchannel_xprts(void);
 int nfsrv_layoutcommit(struct nfsrv_descript *, vnode_t, int, int, uint64_t,
     uint64_t, uint64_t, int, struct timespec *, int, nfsv4stateid_t *,
@@ -457,7 +457,7 @@ int nfsrpc_closerpc(struct nfsrv_descript *, struct nfsmount *,
 int nfsrpc_openconfirm(vnode_t, u_int8_t *, int, struct nfsclopen *,
     struct ucred *, NFSPROC_T *);
 int nfsrpc_setclient(struct nfsmount *, struct nfsclclient *, int,
-    struct ucred *, NFSPROC_T *);
+    bool *, struct ucred *, NFSPROC_T *);
 int nfsrpc_getattr(vnode_t, struct ucred *, NFSPROC_T *,
     struct nfsvattr *, void *);
 int nfsrpc_getattrnovp(struct nfsmount *, u_int8_t *, int, int,

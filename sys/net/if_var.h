@@ -44,7 +44,7 @@
  * received from its medium.
  *
  * Output occurs when the routine if_output is called, with three parameters:
- *	(*ifp->if_output)(ifp, m, dst, rt)
+ *	(*ifp->if_output)(ifp, m, dst, ro)
  * Here m is the mbuf chain to be sent and dst is the destination address.
  * The output routine encapsulates the supplied datagram if necessary,
  * and then transmits it on its medium.
@@ -198,6 +198,7 @@ struct if_snd_tag_alloc_header {
 	uint32_t type;		/* send tag type, see IF_SND_TAG_XXX */
 	uint32_t flowid;	/* mbuf hash value */
 	uint32_t flowtype;	/* mbuf hash type */
+	uint8_t numa_domain;	/* numa domain of associated inp */
 };
 
 struct if_snd_tag_alloc_rate_limit {
@@ -252,6 +253,7 @@ union if_snd_tag_query_params {
 					 */
 #define RT_IS_FIXED_TABLE 0x00000004	/* A fixed table is attached */
 #define RT_IS_UNUSABLE	  0x00000008	/* It is not usable for this */
+#define RT_IS_SETUP_REQ	  0x00000010	/* The interface setup must be called before use */
 
 struct if_ratelimit_query_results {
 	const uint64_t *rate_table;	/* Pointer to table if present */
@@ -268,7 +270,7 @@ typedef int (if_snd_tag_query_t)(struct m_snd_tag *, union if_snd_tag_query_para
 typedef void (if_snd_tag_free_t)(struct m_snd_tag *);
 typedef void (if_ratelimit_query_t)(struct ifnet *,
     struct if_ratelimit_query_results *);
-
+typedef int (if_ratelimit_setup_t)(struct ifnet *, uint64_t, uint32_t);
 
 /*
  * Structure defining a network interface.
@@ -368,7 +370,7 @@ struct ifnet {
 	if_init_fn_t	if_init;	/* Init routine */
 	int	(*if_resolvemulti)	/* validate/resolve multicast */
 		(struct ifnet *, struct sockaddr **, struct sockaddr *);
-	if_qflush_fn_t	if_qflush;	/* flush any queue */	
+	if_qflush_fn_t	if_qflush;	/* flush any queue */
 	if_transmit_fn_t if_transmit;   /* initiate output routine */
 
 	void	(*if_reassign)		/* reassign to vnet routine */
@@ -411,6 +413,7 @@ struct ifnet {
 	if_snd_tag_query_t *if_snd_tag_query;
 	if_snd_tag_free_t *if_snd_tag_free;
 	if_ratelimit_query_t *if_ratelimit_query;
+	if_ratelimit_setup_t *if_ratelimit_setup;
 
 	/* Ethernet PCP */
 	uint8_t if_pcp;
@@ -555,7 +558,7 @@ struct ifaddr {
 	u_int	ifa_refcnt;		/* references to this structure */
 
 	counter_u64_t	ifa_ipackets;
-	counter_u64_t	ifa_opackets;	 
+	counter_u64_t	ifa_opackets;
 	counter_u64_t	ifa_ibytes;
 	counter_u64_t	ifa_obytes;
 	struct	epoch_context	ifa_epoch_ctx;
@@ -769,7 +772,7 @@ void if_setstartfn(if_t ifp, void (*)(if_t));
 void if_settransmitfn(if_t ifp, if_transmit_fn_t);
 void if_setqflushfn(if_t ifp, if_qflush_fn_t);
 void if_setgetcounterfn(if_t ifp, if_get_counter_t);
- 
+
 /* Revisit the below. These are inline functions originally */
 int drbr_inuse_drv(if_t ifp, struct buf_ring *br);
 struct mbuf* drbr_dequeue_drv(if_t ifp, struct buf_ring *br);
@@ -782,6 +785,8 @@ int if_hw_tsomax_update(if_t ifp, struct ifnet_hw_tsomax *);
 
 /* accessors for struct ifreq */
 void *ifr_data_get_ptr(void *ifrp);
+void *ifr_buffer_get_buffer(void *data);
+size_t ifr_buffer_get_length(void *data);
 
 int ifhwioctl(u_long, struct ifnet *, caddr_t, struct thread *);
 

@@ -65,6 +65,16 @@ struct uio;
 
 typedef int (*mmap_check_fp_fn)(struct file *, int, int, int);
 
+struct mmap_req {
+	vm_offset_t		mr_hint;
+	vm_size_t		mr_len;
+	int			mr_prot;
+	int			mr_flags;
+	int			mr_fd;
+	off_t			mr_pos;
+	mmap_check_fp_fn	mr_check_fp_fn;
+};
+
 int	kern___getcwd(struct thread *td, char *buf, enum uio_seg bufseg,
 	    size_t buflen, size_t path_max);
 int	kern_accept(struct thread *td, int s, struct sockaddr **name,
@@ -93,6 +103,9 @@ int	kern_clock_nanosleep(struct thread *td, clockid_t clock_id, int flags,
 	    const struct timespec *rqtp, struct timespec *rmtp);
 int	kern_clock_settime(struct thread *td, clockid_t clock_id,
 	    struct timespec *ats);
+void	kern_thread_cputime(struct thread *targettd, struct timespec *ats);
+void	kern_process_cputime(struct proc *targetp, struct timespec *ats);
+int	kern_close_range(struct thread *td, u_int lowfd, u_int highfd);
 int	kern_close(struct thread *td, int fd);
 int	kern_connectat(struct thread *td, int dirfd, int fd,
 	    struct sockaddr *sa);
@@ -182,9 +195,7 @@ int	kern_mlock(struct proc *proc, struct ucred *cred, uintptr_t addr,
 	    size_t len);
 int	kern_mmap(struct thread *td, uintptr_t addr, size_t len, int prot,
 	    int flags, int fd, off_t pos);
-int	kern_mmap_fpcheck(struct thread *td, uintptr_t addr, size_t len,
-	    int prot, int flags, int fd, off_t pos,
-	    mmap_check_fp_fn check_fp_fn);
+int	kern_mmap_req(struct thread *td, const struct mmap_req *mrp);
 int	kern_mmap_maxprot(struct proc *p, int prot);
 int	kern_mprotect(struct thread *td, uintptr_t addr, size_t size, int prot);
 int	kern_msgctl(struct thread *, int, int, struct msqid_ds *);

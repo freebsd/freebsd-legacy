@@ -493,7 +493,6 @@ kcsan_copyout(const void *kaddr, void *uaddr, size_t len)
 		atomic_subtract_##name(ptr, val); 			\
 	}
 
-
 #define	CSAN_ATOMIC_FUNC_SUBTRACT(name, type)				\
 	_CSAN_ATOMIC_FUNC_SUBTRACT(name, type)				\
 	_CSAN_ATOMIC_FUNC_SUBTRACT(acq_##name, type)			\
@@ -535,12 +534,11 @@ kcsan_copyout(const void *kaddr, void *uaddr, size_t len)
 		return (atomic_testandset_##name(ptr, val)); 		\
 	}
 
-
 CSAN_ATOMIC_FUNC_ADD(8, uint8_t)
 CSAN_ATOMIC_FUNC_CLEAR(8, uint8_t)
 CSAN_ATOMIC_FUNC_CMPSET(8, uint8_t)
 CSAN_ATOMIC_FUNC_FCMPSET(8, uint8_t)
-_CSAN_ATOMIC_FUNC_LOAD(8, uint8_t)
+CSAN_ATOMIC_FUNC_LOAD(8, uint8_t)
 CSAN_ATOMIC_FUNC_SET(8, uint8_t)
 CSAN_ATOMIC_FUNC_SUBTRACT(8, uint8_t)
 _CSAN_ATOMIC_FUNC_STORE(8, uint8_t)
@@ -556,11 +554,7 @@ CSAN_ATOMIC_FUNC_ADD(16, uint16_t)
 CSAN_ATOMIC_FUNC_CLEAR(16, uint16_t)
 CSAN_ATOMIC_FUNC_CMPSET(16, uint16_t)
 CSAN_ATOMIC_FUNC_FCMPSET(16, uint16_t)
-#if defined(__aarch64__)
-_CSAN_ATOMIC_FUNC_LOAD(16, uint16_t)
-#else
 CSAN_ATOMIC_FUNC_LOAD(16, uint16_t)
-#endif
 CSAN_ATOMIC_FUNC_SET(16, uint16_t)
 CSAN_ATOMIC_FUNC_SUBTRACT(16, uint16_t)
 _CSAN_ATOMIC_FUNC_STORE(16, uint16_t)
@@ -634,6 +628,7 @@ CSAN_ATOMIC_FUNC_SWAP(long, u_long)
 #if !defined(__aarch64__)
 CSAN_ATOMIC_FUNC_TESTANDCLEAR(long, u_long)
 CSAN_ATOMIC_FUNC_TESTANDSET(long, u_long)
+CSAN_ATOMIC_FUNC_TESTANDSET(acq_long, u_long)
 #endif
 
 CSAN_ATOMIC_FUNC_ADD(ptr, uintptr_t)
@@ -659,7 +654,6 @@ CSAN_ATOMIC_FUNC_TESTANDSET(ptr, uintptr_t)
 	{								\
 		atomic_thread_fence_##name();				\
 	}
-
 
 CSAN_ATOMIC_FUNC_THREAD_FENCE(acq)
 CSAN_ATOMIC_FUNC_THREAD_FENCE(acq_rel)

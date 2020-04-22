@@ -153,7 +153,8 @@ static int nfsrv_pnfsstatfs(struct statfs *, struct mount *);
 
 int nfs_pnfsio(task_fn_t *, void *);
 
-SYSCTL_NODE(_vfs, OID_AUTO, nfsd, CTLFLAG_RW, 0, "NFS server");
+SYSCTL_NODE(_vfs, OID_AUTO, nfsd, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+    "NFS server");
 SYSCTL_INT(_vfs_nfsd, OID_AUTO, mirrormnt, CTLFLAG_RW,
     &nfsrv_enable_crossmntpt, 0, "Enable nfsd to cross mount points");
 SYSCTL_INT(_vfs_nfsd, OID_AUTO, commit_blks, CTLFLAG_RW, &nfs_commit_blks,
@@ -3252,6 +3253,11 @@ nfsvno_checkexp(struct mount *mp, struct sockaddr *nam, struct nfsexstuff *exp,
 			exp->nes_numsecflavor = 0;
 			error = 0;
 		}
+	} else if (exp->nes_numsecflavor < 1 || exp->nes_numsecflavor >
+	    MAXSECFLAVORS) {
+		printf("nfsvno_checkexp: numsecflavors out of range\n");
+		exp->nes_numsecflavor = 0;
+		error = EACCES;
 	} else {
 		/* Copy the security flavors. */
 		for (i = 0; i < exp->nes_numsecflavor; i++)
@@ -3288,6 +3294,12 @@ nfsvno_fhtovp(struct mount *mp, fhandle_t *fhp, struct sockaddr *nam,
 			} else {
 				vput(*vpp);
 			}
+		} else if (exp->nes_numsecflavor < 1 || exp->nes_numsecflavor >
+		    MAXSECFLAVORS) {
+			printf("nfsvno_fhtovp: numsecflavors out of range\n");
+			exp->nes_numsecflavor = 0;
+			error = EACCES;
+			vput(*vpp);
 		} else {
 			/* Copy the security flavors. */
 			for (i = 0; i < exp->nes_numsecflavor; i++)
@@ -6442,8 +6454,9 @@ nfsvno_getxattr(struct vnode *vp, char *name, uint32_t maxresp,
 		goto out;
 #endif
 
-	error = VOP_GETEXTATTR(vp, EXTATTR_NAMESPACE_USER, name, uiop, NULL,
-	    cred, p);
+	if (tlen > 0)
+		error = VOP_GETEXTATTR(vp, EXTATTR_NAMESPACE_USER, name, uiop,
+		    NULL, cred, p);
 	if (error != 0)
 		goto out;
 	if (uiop->uio_resid > 0) {
@@ -6464,7 +6477,8 @@ nfsvno_getxattr(struct vnode *vp, char *name, uint32_t maxresp,
 
 out:
 	if (error != 0) {
-		m_freem(m);
+		if (m != NULL)
+			m_freem(m);
 		*lenp = 0;
 	}
 	free(iv, M_TEMP);
@@ -6721,7 +6735,6 @@ DECLARE_MODULE(nfsd, nfsd_mod, SI_SUB_VFS, SI_ORDER_ANY);
 /* So that loader and kldload(2) can find us, wherever we are.. */
 MODULE_VERSION(nfsd, 1);
 MODULE_DEPEND(nfsd, nfscommon, 1, 1, 1);
-MODULE_DEPEND(nfsd, nfslock, 1, 1, 1);
 MODULE_DEPEND(nfsd, nfslockd, 1, 1, 1);
 MODULE_DEPEND(nfsd, krpc, 1, 1, 1);
 MODULE_DEPEND(nfsd, nfssvc, 1, 1, 1);

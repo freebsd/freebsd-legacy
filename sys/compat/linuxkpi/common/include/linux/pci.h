@@ -37,8 +37,10 @@
 
 #include <sys/param.h>
 #include <sys/bus.h>
+#include <sys/nv.h>
 #include <sys/pciio.h>
 #include <sys/rman.h>
+#include <sys/bus.h>
 #include <dev/pci/pcivar.h>
 #include <dev/pci/pcireg.h>
 #include <dev/pci/pci_private.h>
@@ -201,6 +203,11 @@ struct pci_driver {
 	struct device_driver		driver;
 	const struct pci_error_handlers       *err_handler;
 	bool				isdrm;
+	int  (*bsd_iov_init)(device_t dev, uint16_t num_vfs,
+	    const nvlist_t *pf_config);
+	void  (*bsd_iov_uninit)(device_t dev);
+	int  (*bsd_iov_add_vf)(device_t dev, uint16_t vfnum,
+	    const nvlist_t *vf_config);
 };
 
 struct pci_bus {
@@ -946,5 +953,16 @@ pcie_get_width_cap(struct pci_dev *dev)
 
 	return (PCIE_LNK_WIDTH_UNKNOWN);
 }
+
+/*
+ * The following functions can be used to attach/detach the LinuxKPI's
+ * PCI device runtime. The pci_driver and pci_device_id pointer is
+ * allowed to be NULL. Other pointers must be all valid.
+ * The pci_dev structure should be zero-initialized before passed
+ * to the linux_pci_attach_device function.
+ */
+extern int linux_pci_attach_device(device_t, struct pci_driver *,
+    const struct pci_device_id *, struct pci_dev *);
+extern int linux_pci_detach_device(struct pci_dev *);
 
 #endif	/* _LINUX_PCI_H_ */

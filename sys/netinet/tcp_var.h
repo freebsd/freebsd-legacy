@@ -169,6 +169,8 @@ struct tcpcb {
 	u_int	t_starttime;		/* time connection was established */
 
 	u_int	t_pmtud_saved_maxseg;	/* pre-blackhole MSS */
+	int	t_blackhole_enter;	/* when to enter blackhole detection */
+	int	t_blackhole_exit;	/* when to exit blackhole detection */
 	u_int	t_rttmin;		/* minimum rtt allowed */
 
 	u_int	t_rttbest;		/* best rtt we've seen */
@@ -186,8 +188,6 @@ struct tcpcb {
 	TAILQ_HEAD(sackhole_head, sackhole) snd_holes;
 					/* SACK scoreboard (sorted) */
 	tcp_seq	snd_fack;		/* last seq number(+1) sack'd by rcv'r*/
-	tcp_seq sack_newdata;		/* New data xmitted in this recovery
-					   episode starts at this seq number */
 	struct sackblk sackblks[MAX_SACK_BLKS]; /* seq nos. of sack blocks */
 	struct sackhint	sackhint;	/* SACK scoreboard hint */
 	int	t_rttlow;		/* smallest observerved RTT */
@@ -240,7 +240,7 @@ struct tcptemp {
 /* Minimum map entries limit value, if set */
 #define TCP_MIN_MAP_ENTRIES_LIMIT	128
 
-/* 
+/*
  * TODO: We yet need to brave plowing in
  * to tcp_input() and the pru_usrreq() block.
  * Right now these go to the old standards which
@@ -612,7 +612,7 @@ struct	tcpstat {
 	uint64_t tcps_sack_rcv_blocks;	    /* SACK blocks (options) received */
 	uint64_t tcps_sack_send_blocks;	    /* SACK blocks (options) sent     */
 	uint64_t tcps_sack_sboverflow;	    /* times scoreboard overflowed */
-	
+
 	/* ECN related stats */
 	uint64_t tcps_ecn_ce;		/* ECN Congestion Experienced */
 	uint64_t tcps_ecn_ect0;		/* ECN Capable Transport */
@@ -654,9 +654,10 @@ VNET_PCPUSTAT_DECLARE(struct tcpstat, tcpstat);	/* tcp statistics */
 /*
  * Kernel module consumers must use this accessor macro.
  */
-void	kmod_tcpstat_inc(int statnum);
-#define	KMOD_TCPSTAT_INC(name)						\
-    kmod_tcpstat_inc(offsetof(struct tcpstat, name) / sizeof(uint64_t))
+void	kmod_tcpstat_add(int statnum, int val);
+#define	KMOD_TCPSTAT_ADD(name, val)					\
+    kmod_tcpstat_add(offsetof(struct tcpstat, name) / sizeof(uint64_t), val)
+#define	KMOD_TCPSTAT_INC(name)	KMOD_TCPSTAT_ADD(name, 1)
 
 /*
  * Running TCP connection count by state.

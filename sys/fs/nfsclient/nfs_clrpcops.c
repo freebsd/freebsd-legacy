@@ -937,7 +937,7 @@ nfsmout:
  */
 APPLESTATIC int
 nfsrpc_setclient(struct nfsmount *nmp, struct nfsclclient *clp, int reclaim,
-    struct ucred *cred, NFSPROC_T *p)
+    bool *retokp, struct ucred *cred, NFSPROC_T *p)
 {
 	u_int32_t *tl;
 	struct nfsrv_descript nfsd;
@@ -949,26 +949,81 @@ nfsrpc_setclient(struct nfsmount *nmp, struct nfsclclient *clp, int reclaim,
 	nfsquad_t confirm;
 	u_int32_t lease;
 	static u_int32_t rev = 0;
-	struct nfsclds *dsp;
+	struct nfsclds *dsp, *odsp;
 	struct in6_addr a6;
 	struct nfsclsession *tsep;
 
 	if (nfsboottime.tv_sec == 0)
 		NFSSETBOOTTIME(nfsboottime);
-	clp->nfsc_rev = rev++;
 	if (NFSHASNFSV4N(nmp)) {
-		/*
-		 * Either there was no previous session or the
-		 * previous session has failed, so...
-		 * do an ExchangeID followed by the CreateSession.
-		 */
-		error = nfsrpc_exchangeid(nmp, clp, &nmp->nm_sockreq, 0,
-		    NFSV4EXCH_USEPNFSMDS | NFSV4EXCH_USENONPNFS, &dsp, cred, p);
-		NFSCL_DEBUG(1, "aft exch=%d\n", error);
-		if (error == 0)
+		error = NFSERR_BADSESSION;
+		odsp = dsp = NULL;
+		if (retokp != NULL) {
+			NFSLOCKMNT(nmp);
+			odsp = TAILQ_FIRST(&nmp->nm_sess);
+			NFSUNLOCKMNT(nmp);
+		}
+		if (odsp != NULL) {
+			/*
+			 * When a session already exists, first try a
+			 * CreateSession with the extant ClientID.
+			 */
+			dsp = malloc(sizeof(struct nfsclds) +
+			    odsp->nfsclds_servownlen + 1, M_NFSCLDS,
+			    M_WAITOK | M_ZERO);
+			dsp->nfsclds_expire = NFSD_MONOSEC + clp->nfsc_renew;
+			dsp->nfsclds_servownlen = odsp->nfsclds_servownlen;
+			dsp->nfsclds_sess.nfsess_clientid =
+			    odsp->nfsclds_sess.nfsess_clientid;
+			dsp->nfsclds_sess.nfsess_sequenceid =
+			    odsp->nfsclds_sess.nfsess_sequenceid;
+			dsp->nfsclds_flags = odsp->nfsclds_flags;
+			if (dsp->nfsclds_servownlen > 0)
+				memcpy(dsp->nfsclds_serverown,
+				    odsp->nfsclds_serverown,
+				    dsp->nfsclds_servownlen + 1);
+			mtx_init(&dsp->nfsclds_mtx, "nfsds", NULL, MTX_DEF);
+			mtx_init(&dsp->nfsclds_sess.nfsess_mtx, "nfssession",
+			    NULL, MTX_DEF);
+			nfscl_initsessionslots(&dsp->nfsclds_sess);
 			error = nfsrpc_createsession(nmp, &dsp->nfsclds_sess,
 			    &nmp->nm_sockreq, NULL,
 			    dsp->nfsclds_sess.nfsess_sequenceid, 1, cred, p);
+			NFSCL_DEBUG(1, "create session for extant "
+			    "ClientID=%d\n", error);
+			if (error != 0) {
+				nfscl_freenfsclds(dsp);
+				dsp = NULL;
+				/*
+				 * If *retokp is true, return any error other
+				 * than NFSERR_STALECLIENTID,
+				 * NFSERR_BADSESSION or NFSERR_STALEDONTRECOVER
+				 * so that nfscl_recover() will not loop.
+				 */
+				if (*retokp)
+					return (NFSERR_IO);
+			} else
+				*retokp = true;
+		} else if (retokp != NULL && *retokp)
+			return (NFSERR_IO);
+		if (error != 0) {
+			/*
+			 * Either there was no previous session or the
+			 * CreateSession attempt failed, so...
+			 * do an ExchangeID followed by the CreateSession.
+			 */
+			clp->nfsc_rev = rev++;
+			error = nfsrpc_exchangeid(nmp, clp, &nmp->nm_sockreq, 0,
+			    NFSV4EXCH_USEPNFSMDS | NFSV4EXCH_USENONPNFS, &dsp,
+			    cred, p);
+			NFSCL_DEBUG(1, "aft exch=%d\n", error);
+			if (error == 0)
+				error = nfsrpc_createsession(nmp,
+				    &dsp->nfsclds_sess, &nmp->nm_sockreq, NULL,
+				    dsp->nfsclds_sess.nfsess_sequenceid, 1,
+				    cred, p);
+			NFSCL_DEBUG(1, "aft createsess=%d\n", error);
+		}
 		if (error == 0) {
 			NFSLOCKMNT(nmp);
 			/*
@@ -993,9 +1048,8 @@ nfsrpc_setclient(struct nfsmount *nmp, struct nfsclclient *clp, int reclaim,
 				wakeup(&tsep->nfsess_slots);
 			wakeup(&nmp->nm_sess);
 			NFSUNLOCKMNT(nmp);
-		} else
+		} else if (dsp != NULL)
 			nfscl_freenfsclds(dsp);
-		NFSCL_DEBUG(1, "aft createsess=%d\n", error);
 		if (error == 0 && reclaim == 0) {
 			error = nfsrpc_reclaimcomplete(nmp, cred, p);
 			NFSCL_DEBUG(1, "aft reclaimcomp=%d\n", error);
@@ -1005,7 +1059,9 @@ nfsrpc_setclient(struct nfsmount *nmp, struct nfsclclient *clp, int reclaim,
 				error = 0;
 		}
 		return (error);
-	}
+	} else if (retokp != NULL && *retokp)
+		return (NFSERR_IO);
+	clp->nfsc_rev = rev++;
 
 	/*
 	 * Allocate a single session structure for NFSv4.0, because some of
@@ -8370,7 +8426,7 @@ nfsrpc_getextattr(vnode_t vp, const char *name, struct uio *uiop, ssize_t *lenp,
 		} else if (uiop == NULL && len > 0) {
 			/* Just wants the length and not the data. */
 			error = nfsm_advance(nd, NFSM_RNDUP(len), -1);
-		} else
+		} else if (len > 0)
 			error = ENOATTR;
 		if (error != 0)
 			goto nfsmout;
@@ -8469,7 +8525,7 @@ nfsrpc_rmextattr(vnode_t vp, const char *name, struct nfsvattr *nap,
 		return (error);
 	if (nd->nd_repstat == 0) {
 		/* Just skip over the reply and Getattr op status. */
-		NFSM_DISSECT(tl, uint32_t *, 2 * NFSX_HYPER + 2 *
+		NFSM_DISSECT(tl, uint32_t *, 2 * NFSX_HYPER + 3 *
 		    NFSX_UNSIGNED);
 		error = nfsm_loadattr(nd, nap);
 		if (error == 0)

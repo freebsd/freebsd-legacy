@@ -133,7 +133,6 @@ retry:									\
 	(a) = next_file_id;						\
 } while(0)
 
-
 /* XXX wrong name; we're looking at version provision tags here, not modules */
 typedef TAILQ_HEAD(, modlist) modlisthead_t;
 struct modlist {
@@ -1766,7 +1765,7 @@ SYSCTL_STRING(_kern, OID_AUTO, module_path, CTLFLAG_RWTUN, linker_path,
 
 TUNABLE_STR("module_path", linker_path, sizeof(linker_path));
 
-static char *linker_ext_list[] = {
+static const char * const linker_ext_list[] = {
 	"",
 	".ko",
 	NULL
@@ -1783,7 +1782,8 @@ linker_lookup_file(const char *path, int pathlen, const char *name,
 {
 	struct nameidata nd;
 	struct thread *td = curthread;	/* XXX */
-	char *result, **cpp, *sep;
+	const char * const *cpp, *sep;
+	char *result;
 	int error, len, extlen, reclen, flags;
 	enum vtype type;
 
@@ -1839,8 +1839,9 @@ linker_hints_lookup(const char *path, int pathlen, const char *modname,
 	struct ucred *cred = td ? td->td_ucred : NULL;
 	struct nameidata nd;
 	struct vattr vattr, mattr;
+	const char *best, *sep;
 	u_char *hints = NULL;
-	u_char *cp, *recptr, *bufend, *result, *best, *pathbuf, *sep;
+	u_char *cp, *recptr, *bufend, *result, *pathbuf;
 	int error, ival, bestver, *intp, found, flags, clen, blen;
 	ssize_t reclen;
 
@@ -2062,6 +2063,22 @@ linker_hwpmc_list_objects(void)
 }
 #endif
 
+/* check if root file system is not mounted */
+static bool
+linker_root_mounted(void)
+{
+	struct pwd *pwd;
+	bool ret;
+
+	if (rootvnode == NULL)
+		return (false);
+
+	pwd = pwd_hold(curthread);
+	ret = pwd->pwd_rdir != NULL;
+	pwd_drop(pwd);
+	return (ret);
+}
+
 /*
  * Find a file which contains given module and load it, if "parent" is not
  * NULL, register a reference to it.
@@ -2083,15 +2100,13 @@ linker_load_module(const char *kldname, const char *modname,
  		 */
 		KASSERT(verinfo == NULL, ("linker_load_module: verinfo"
 		    " is not NULL"));
-		/* check if root file system is not mounted */
-		if (rootvnode == NULL || curproc->p_fd->fd_rdir == NULL)
+		if (!linker_root_mounted())
 			return (ENXIO);
 		pathname = linker_search_kld(kldname);
 	} else {
 		if (modlist_lookup2(modname, verinfo) != NULL)
 			return (EEXIST);
-		/* check if root file system is not mounted */
-		if (rootvnode == NULL || curproc->p_fd->fd_rdir == NULL)
+		if (!linker_root_mounted())
 			return (ENXIO);
 		if (kldname != NULL)
 			pathname = strdup(kldname, M_LINKER);
@@ -2259,5 +2274,7 @@ sysctl_kern_function_list(SYSCTL_HANDLER_ARGS)
 	return (SYSCTL_OUT(req, "", 1));
 }
 
-SYSCTL_PROC(_kern, OID_AUTO, function_list, CTLTYPE_OPAQUE | CTLFLAG_RD,
-    NULL, 0, sysctl_kern_function_list, "", "kernel function list");
+SYSCTL_PROC(_kern, OID_AUTO, function_list,
+    CTLTYPE_OPAQUE | CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, 0,
+    sysctl_kern_function_list, "",
+    "kernel function list");

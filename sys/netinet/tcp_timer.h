@@ -119,7 +119,7 @@
 
 #define	TCP_MAXRXTSHIFT	12			/* maximum retransmits */
 
-#define	TCPTV_DELACK	( hz/10 )		/* 100ms timeout */
+#define	TCPTV_DELACK	( hz/25 )		/* 40ms timeout */
 
 /*
  * If we exceed this number of retransmits for a single segment, we'll consider
@@ -168,7 +168,7 @@ struct tcp_timer {
 #define TT_2MSL		0x0010
 #define TT_MASK		(TT_DELACK|TT_REXMT|TT_PERSIST|TT_KEEP|TT_2MSL)
 
-/* 
+/*
  * Suspend flags - used when suspending a timer
  * from ever running again.
  */

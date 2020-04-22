@@ -68,7 +68,8 @@
 extern const char *freebsd32_syscallnames[];
 static void ppc32_fixlimit(struct rlimit *rl, int which);
 
-static SYSCTL_NODE(_compat, OID_AUTO, ppc32, CTLFLAG_RW, 0, "32-bit mode");
+static SYSCTL_NODE(_compat, OID_AUTO, ppc32, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+    "32-bit mode");
 
 #define PPC32_MAXDSIZ (1024*1024*1024)
 static u_long ppc32_maxdsiz = PPC32_MAXDSIZ;
@@ -402,7 +403,7 @@ ppc32_runtime_resolve()
 }
 
 int
-elf_cpu_parse_dynamic(linker_file_t lf, Elf_Dyn *dynamic)
+elf_cpu_parse_dynamic(caddr_t loadbase, Elf_Dyn *dynamic)
 {
 	Elf_Dyn *dp;
 	bool has_plt = false;
@@ -413,7 +414,7 @@ elf_cpu_parse_dynamic(linker_file_t lf, Elf_Dyn *dynamic)
 		switch (dp->d_tag) {
 		case DT_PPC_GOT:
 			secure_plt = true;
-			got = (Elf_Addr *)(lf->address + dp->d_un.d_ptr);
+			got = (Elf_Addr *)(loadbase + dp->d_un.d_ptr);
 			/* Install runtime resolver canary. */
 			got[1] = (Elf_Addr)ppc32_runtime_resolve;
 			got[2] = (Elf_Addr)0;

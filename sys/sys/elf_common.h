@@ -790,6 +790,7 @@ typedef struct {
 #define	NT_FREEBSD_FCTL_ASLR_DISABLE	0x00000001
 #define	NT_FREEBSD_FCTL_PROTMAX_DISABLE	0x00000002
 #define	NT_FREEBSD_FCTL_STKGAP_DISABLE	0x00000004
+#define	NT_FREEBSD_FCTL_WXNEEDED	0x00000008
 
 /* Values for n_type.  Used in core files. */
 #define	NT_PRSTATUS	1	/* Process status. */
@@ -954,8 +955,14 @@ typedef struct {
 #define	AT_EHDRFLAGS	24	/* e_flags field from elf hdr */
 #define	AT_HWCAP	25	/* CPU feature flags. */
 #define	AT_HWCAP2	26	/* CPU feature flags 2. */
+#define	AT_BSDFLAGS	27	/* ELF BSD Flags. */
+#define	AT_ARGC		28	/* Argument count */
+#define	AT_ARGV		29	/* Argument vector */
+#define	AT_ENVC		30	/* Environment count */
+#define	AT_ENVV		31	/* Environment vector */
+#define	AT_PS_STRINGS	32	/* struct ps_strings */
 
-#define	AT_COUNT	27	/* Count of defined aux entry types. */
+#define	AT_COUNT	33	/* Count of defined aux entry types. */
 
 /*
  * Relocation types.
@@ -1456,5 +1463,6 @@ typedef struct {
 #define	R_X86_64_TLSDESC	36
 #define	R_X86_64_IRELATIVE	37
 
+#define	ELF_BSDF_SIGFASTBLK	0x0001	/* Kernel supports fast sigblock */
 
 #endif /* !_SYS_ELF_COMMON_H_ */

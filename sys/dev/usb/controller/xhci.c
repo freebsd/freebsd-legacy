@@ -89,7 +89,8 @@
    ((struct xhci_softc *)(((uint8_t *)(bus)) - \
     ((uint8_t *)&(((struct xhci_softc *)0)->sc_bus))))
 
-static SYSCTL_NODE(_hw_usb, OID_AUTO, xhci, CTLFLAG_RW, 0, "USB XHCI");
+static SYSCTL_NODE(_hw_usb, OID_AUTO, xhci, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+    "USB XHCI");
 
 static int xhcistreams;
 SYSCTL_INT(_hw_usb_xhci, OID_AUTO, streams, CTLFLAG_RWTUN,
@@ -2664,23 +2665,6 @@ xhci_configure_device(struct usb_device *udev)
 		    sc->sc_hw.devs[index].nports);
 	}
 
-	switch (udev->speed) {
-	case USB_SPEED_SUPER:
-		switch (sc->sc_hw.devs[index].state) {
-		case XHCI_ST_ADDRESSED:
-		case XHCI_ST_CONFIGURED:
-			/* enable power save */
-			temp |= XHCI_SCTX_1_MAX_EL_SET(sc->sc_exit_lat_max);
-			break;
-		default:
-			/* disable power save */
-			break;
-		}
-		break;
-	default:
-		break;
-	}
-
 	xhci_ctx_set_le32(sc, &pinp->ctx_slot.dwSctx1, temp);
 
 	temp = XHCI_SCTX_2_IRQ_TARGET_SET(0);
@@ -3590,13 +3574,10 @@ xhci_roothub_exec(struct usb_device *udev,
 			i |= UPS_OVERCURRENT_INDICATOR;
 		if (v & XHCI_PS_PR)
 			i |= UPS_RESET;
-		if (v & XHCI_PS_PP) {
-			/*
-			 * The USB 3.0 RH is using the
-			 * USB 2.0's power bit
-			 */
-			i |= UPS_PORT_POWER;
-		}
+#if 0
+		if (v & XHCI_PS_PP)
+			/* XXX undefined */
+#endif
 		USETW(sc->sc_hub_desc.ps.wPortStatus, i);
 
 		i = 0;

@@ -1171,7 +1171,7 @@ exec_setregs(struct thread *td, struct image_params *imgp, uintptr_t stack)
 	regs->tf_cs = _ucodesel;
 
 	/* PS_STRINGS value for BSD/OS binaries.  It is 0 for non-BSD/OS. */
-	regs->tf_ebx = imgp->ps_strings;
+	regs->tf_ebx = (register_t)imgp->ps_strings;
 
         /*
          * Reset the hardware debug registers if they were in use.
@@ -2666,8 +2666,10 @@ smap_sysctl_handler(SYSCTL_HANDLER_ARGS)
 	}
 	return (error);
 }
-SYSCTL_PROC(_machdep, OID_AUTO, smap, CTLTYPE_OPAQUE|CTLFLAG_RD, NULL, 0,
-    smap_sysctl_handler, "S,bios_smap_xattr", "Raw BIOS SMAP data");
+SYSCTL_PROC(_machdep, OID_AUTO, smap,
+    CTLTYPE_OPAQUE | CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, 0,
+    smap_sysctl_handler, "S,bios_smap_xattr",
+    "Raw BIOS SMAP data");
 
 void
 spinlock_enter(void)

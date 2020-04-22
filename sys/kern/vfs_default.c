@@ -513,7 +513,7 @@ vop_stdlock(ap)
 	struct mtx *ilk;
 
 	ilk = VI_MTX(vp);
-	return (lockmgr_lock_fast_path(vp->v_vnlock, ap->a_flags,
+	return (lockmgr_lock_flags(vp->v_vnlock, ap->a_flags,
 	    &ilk->lock_object, ap->a_file, ap->a_line));
 }
 
@@ -573,7 +573,7 @@ vop_lock(ap)
 	}
 other:
 	ilk = VI_MTX(vp);
-	return (lockmgr_lock_fast_path(&vp->v_lock, flags,
+	return (lockmgr_lock_flags(&vp->v_lock, flags,
 	    &ilk->lock_object, ap->a_file, ap->a_line));
 }
 
@@ -765,7 +765,8 @@ vop_stdgetpages_async(struct vop_getpages_async_args *ap)
 
 	error = VOP_GETPAGES(ap->a_vp, ap->a_m, ap->a_count, ap->a_rbehind,
 	    ap->a_rahead);
-	ap->a_iodone(ap->a_arg, ap->a_m, ap->a_count, error);
+	if (ap->a_iodone != NULL)
+		ap->a_iodone(ap->a_arg, ap->a_m, ap->a_count, error);
 	return (error);
 }
 
@@ -804,7 +805,7 @@ vop_stdvptocnp(struct vop_vptocnp_args *ap)
 	struct vnode **dvp = ap->a_vpp;
 	struct ucred *cred = ap->a_cred;
 	char *buf = ap->a_buf;
-	int *buflen = ap->a_buflen;
+	size_t *buflen = ap->a_buflen;
 	char *dirbuf, *cpos;
 	int i, error, eofflag, dirbuflen, flags, locked, len, covered;
 	off_t off;

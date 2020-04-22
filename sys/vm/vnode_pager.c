@@ -248,7 +248,7 @@ vnode_pager_alloc(void *handle, vm_ooffset_t size, vm_prot_t prot,
 
 	vp = (struct vnode *)handle;
 	ASSERT_VOP_LOCKED(vp, "vnode_pager_alloc");
-	KASSERT(vp->v_usecount != 0, ("vnode_pager_alloc: no vnode reference"));
+	VNPASS(vp->v_usecount > 0, vp);
 retry:
 	object = vp->v_object;
 
@@ -628,8 +628,11 @@ vnode_pager_input_smlfs(vm_object_t object, vm_page_t m)
 
 			bwait(bp, PVM, "vnsrd");
 
-			if ((bp->b_ioflags & BIO_ERROR) != 0)
-				error = EIO;
+			if ((bp->b_ioflags & BIO_ERROR) != 0) {
+				KASSERT(bp->b_error != 0,
+				    ("%s: buf error but b_error == 0\n", __func__));
+				error = bp->b_error;
+			}
 
 			/*
 			 * free the buffer header back to the swap buffer pool
@@ -773,9 +776,13 @@ vnode_pager_local_getpages(struct vop_getpages_args *ap)
 int
 vnode_pager_local_getpages_async(struct vop_getpages_async_args *ap)
 {
+	int error;
 
-	return (vnode_pager_generic_getpages(ap->a_vp, ap->a_m, ap->a_count,
-	    ap->a_rbehind, ap->a_rahead, ap->a_iodone, ap->a_arg));
+	error = vnode_pager_generic_getpages(ap->a_vp, ap->a_m, ap->a_count,
+	    ap->a_rbehind, ap->a_rahead, ap->a_iodone, ap->a_arg);
+	if (error != 0 && ap->a_iodone != NULL)
+		ap->a_iodone(ap->a_arg, ap->a_m, ap->a_count, error);
+	return (error);
 }
 
 /*
@@ -1113,7 +1120,9 @@ vnode_pager_generic_getpages_done(struct buf *bp)
 	off_t tfoff, nextoff;
 	int i, error;
 
-	error = (bp->b_ioflags & BIO_ERROR) != 0 ? EIO : 0;
+	KASSERT((bp->b_ioflags & BIO_ERROR) == 0 || bp->b_error != 0,
+	    ("%s: buf error but b_error == 0\n", __func__));
+	error = (bp->b_ioflags & BIO_ERROR) != 0 ? bp->b_error : 0;
 	object = bp->b_vp->v_object;
 
 	if (error == 0 && bp->b_bcount != bp->b_npages * PAGE_SIZE) {
@@ -1169,8 +1178,6 @@ vnode_pager_generic_getpages_done(struct buf *bp)
 			vm_page_readahead_finish(mt);
 	}
 	VM_OBJECT_RUNLOCK(object);
-	if (error != 0)
-		printf("%s: I/O read error %d\n", __func__, error);
 
 	return (error);
 }

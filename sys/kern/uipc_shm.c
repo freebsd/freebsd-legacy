@@ -176,23 +176,25 @@ uiomove_object_page(vm_object_t obj, size_t len, struct uio *uio)
 	offset = uio->uio_offset & PAGE_MASK;
 	tlen = MIN(PAGE_SIZE - offset, len);
 
-	VM_OBJECT_WLOCK(obj);
+	rv = vm_page_grab_valid_unlocked(&m, obj, idx,
+	    VM_ALLOC_SBUSY | VM_ALLOC_IGN_SBUSY | VM_ALLOC_NOCREAT);
+	if (rv == VM_PAGER_OK)
+		goto found;
 
 	/*
 	 * Read I/O without either a corresponding resident page or swap
 	 * page: use zero_region.  This is intended to avoid instantiating
 	 * pages on read from a sparse region.
 	 */
-	if (uio->uio_rw == UIO_READ && vm_page_lookup(obj, idx) == NULL &&
+	VM_OBJECT_WLOCK(obj);
+	m = vm_page_lookup(obj, idx);
+	if (uio->uio_rw == UIO_READ && m == NULL &&
 	    !vm_pager_has_page(obj, idx, NULL, NULL)) {
 		VM_OBJECT_WUNLOCK(obj);
 		return (uiomove(__DECONST(void *, zero_region), tlen, uio));
 	}
 
 	/*
-	 * Parallel reads of the page content from disk are prevented
-	 * by exclusive busy.
-	 *
 	 * Although the tmpfs vnode lock is held here, it is
 	 * nonetheless safe to sleep waiting for a free page.  The
 	 * pageout daemon does not need to acquire the tmpfs vnode
@@ -208,6 +210,8 @@ uiomove_object_page(vm_object_t obj, size_t len, struct uio *uio)
 		return (EIO);
 	}
 	VM_OBJECT_WUNLOCK(obj);
+
+found:
 	error = uiomove_fromphys(&m, offset, tlen, uio);
 	if (uio->uio_rw == UIO_WRITE && error == 0)
 		vm_page_set_dirty(m);
@@ -957,7 +961,7 @@ sys_shm_unlink(struct thread *td, struct shm_unlink_args *uap)
 	sx_xlock(&shm_dict_lock);
 	error = shm_remove(path, fnv, td->td_ucred);
 	sx_xunlock(&shm_dict_lock);
-	free(path, M_TEMP);
+	free(path, M_SHMFD);
 
 	return (error);
 }
@@ -1132,23 +1136,30 @@ shm_mmap(struct file *fp, vm_map_t map, vm_offset_t *addr, vm_size_t objsize,
 
 	/*
 	 * If FWRITE's set, we can allow VM_PROT_WRITE unless it's a shared
-	 * mapping with a write seal applied.
+	 * mapping with a write seal applied.  Private mappings are always
+	 * writeable.
 	 */
-	if ((fp->f_flag & FWRITE) != 0 && ((flags & MAP_SHARED) == 0 ||
-	    (shmfd->shm_seals & F_SEAL_WRITE) == 0))
+	if ((flags & MAP_SHARED) == 0) {
+		cap_maxprot |= VM_PROT_WRITE;
 		maxprot |= VM_PROT_WRITE;
+		writecnt = false;
+	} else {
+		if ((fp->f_flag & FWRITE) != 0 &&
+		    (shmfd->shm_seals & F_SEAL_WRITE) == 0)
+			maxprot |= VM_PROT_WRITE;
 
-	writecnt = (flags & MAP_SHARED) != 0 && (prot & VM_PROT_WRITE) != 0;
-
-	if (writecnt && (shmfd->shm_seals & F_SEAL_WRITE) != 0) {
-		error = EPERM;
-		goto out;
-	}
-
-	/* Don't permit shared writable mappings on read-only descriptors. */
-	if (writecnt && (maxprot & VM_PROT_WRITE) == 0) {
-		error = EACCES;
-		goto out;
+		/*
+		 * Any mappings from a writable descriptor may be upgraded to
+		 * VM_PROT_WRITE with mprotect(2), unless a write-seal was
+		 * applied between the open and subsequent mmap(2).  We want to
+		 * reject application of a write seal as long as any such
+		 * mapping exists so that the seal cannot be trivially bypassed.
+		 */
+		writecnt = (maxprot & VM_PROT_WRITE) != 0;
+		if (!writecnt && (prot & VM_PROT_WRITE) != 0) {
+			error = EACCES;
+			goto out;
+		}
 	}
 	maxprot &= cap_maxprot;
 

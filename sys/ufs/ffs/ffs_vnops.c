@@ -441,13 +441,11 @@ ffs_lock(ap)
 		flags = ap->a_flags;
 		for (;;) {
 #ifdef DEBUG_VFS_LOCKS
-			KASSERT(vp->v_holdcnt != 0,
-			    ("ffs_lock %p: zero hold count", vp));
+			VNPASS(vp->v_holdcnt != 0, vp);
 #endif
 			lkp = vp->v_vnlock;
-			result = _lockmgr_args(lkp, flags, VI_MTX(vp),
-			    LK_WMESG_DEFAULT, LK_PRIO_DEFAULT, LK_TIMO_DEFAULT,
-			    ap->a_file, ap->a_line);
+			result = lockmgr_lock_flags(lkp, flags,
+			    &VI_MTX(vp)->lock_object, ap->a_file, ap->a_line);
 			if (lkp == vp->v_vnlock || result != 0)
 				break;
 			/*
@@ -458,9 +456,7 @@ ffs_lock(ap)
 			 * right lock.  Release it, and try to get the
 			 * new lock.
 			 */
-			(void) _lockmgr_args(lkp, LK_RELEASE, NULL,
-			    LK_WMESG_DEFAULT, LK_PRIO_DEFAULT, LK_TIMO_DEFAULT,
-			    ap->a_file, ap->a_line);
+			lockmgr_unlock(lkp);
 			if ((flags & (LK_INTERLOCK | LK_NOWAIT)) ==
 			    (LK_INTERLOCK | LK_NOWAIT))
 				return (EBUSY);
@@ -1784,18 +1780,25 @@ ffs_getpages_async(struct vop_getpages_async_args *ap)
 {
 	struct vnode *vp;
 	struct ufsmount *um;
+	bool do_iodone;
 	int error;
 
 	vp = ap->a_vp;
 	um = VFSTOUFS(vp->v_mount);
+	do_iodone = true;
 
-	if (um->um_devvp->v_bufobj.bo_bsize <= PAGE_SIZE)
-		return (vnode_pager_generic_getpages(vp, ap->a_m, ap->a_count,
-		    ap->a_rbehind, ap->a_rahead, ap->a_iodone, ap->a_arg));
-
-	error = vfs_bio_getpages(vp, ap->a_m, ap->a_count, ap->a_rbehind,
-	    ap->a_rahead, ffs_gbp_getblkno, ffs_gbp_getblksz);
-	ap->a_iodone(ap->a_arg, ap->a_m, ap->a_count, error);
+	if (um->um_devvp->v_bufobj.bo_bsize <= PAGE_SIZE) {
+		error = vnode_pager_generic_getpages(vp, ap->a_m, ap->a_count,
+		    ap->a_rbehind, ap->a_rahead, ap->a_iodone, ap->a_arg);
+		if (error == 0)
+			do_iodone = false;
+	} else {
+		error = vfs_bio_getpages(vp, ap->a_m, ap->a_count,
+		    ap->a_rbehind, ap->a_rahead, ffs_gbp_getblkno,
+		    ffs_gbp_getblksz);
+	}
+	if (do_iodone && ap->a_iodone != NULL)
+		ap->a_iodone(ap->a_arg, ap->a_m, ap->a_count, error);
 
 	return (error);
 }

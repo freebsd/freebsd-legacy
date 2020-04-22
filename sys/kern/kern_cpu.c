@@ -136,7 +136,7 @@ DRIVER_MODULE(cpufreq, cpu, cpufreq_driver, cpufreq_dc, 0, 0);
 
 static int		cf_lowest_freq;
 static int		cf_verbose;
-static SYSCTL_NODE(_debug, OID_AUTO, cpufreq, CTLFLAG_RD, NULL,
+static SYSCTL_NODE(_debug, OID_AUTO, cpufreq, CTLFLAG_RD | CTLFLAG_MPSAFE, NULL,
     "cpufreq debugging");
 SYSCTL_INT(_debug_cpufreq, OID_AUTO, lowest, CTLFLAG_RWTUN, &cf_lowest_freq, 1,
     "Don't provide levels below this frequency.");
@@ -183,11 +183,12 @@ cpufreq_attach(device_t dev)
 	    M_DEVBUF, M_WAITOK);
 	SYSCTL_ADD_PROC(&sc->sysctl_ctx,
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(parent)),
-	    OID_AUTO, "freq", CTLTYPE_INT | CTLFLAG_RW, sc, 0,
-	    cpufreq_curr_sysctl, "I", "Current CPU frequency");
+	    OID_AUTO, "freq", CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_NEEDGIANT,
+	    sc, 0, cpufreq_curr_sysctl, "I", "Current CPU frequency");
 	SYSCTL_ADD_PROC(&sc->sysctl_ctx,
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(parent)),
-	    OID_AUTO, "freq_levels", CTLTYPE_STRING | CTLFLAG_RD, sc, 0,
+	    OID_AUTO, "freq_levels",
+	    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_NEEDGIANT, sc, 0,
 	    cpufreq_levels_sysctl, "A", "CPU frequency levels");
 
 	/*
@@ -473,11 +474,12 @@ cf_get_method(device_t dev, struct cf_level *level)
 		 * first try the driver and if that fails, fall back to
 		 * estimating.
 		 */
-		if (CPUFREQ_DRV_GET(sc->cf_drv_dev, &set) != 0)
-			goto estimate;
-		sc->curr_level.total_set = set;
-		CF_DEBUG("get returning immediate freq %d\n", curr_set->freq);
-		goto out;
+		if (CPUFREQ_DRV_GET(sc->cf_drv_dev, &set) == 0) {
+			sc->curr_level.total_set = set;
+			CF_DEBUG("get returning immediate freq %d\n",
+			    curr_set->freq);
+			goto out;
+		}
 	} else if (curr_set->freq != CPUFREQ_VAL_UNKNOWN) {
 		CF_DEBUG("get returning known freq %d\n", curr_set->freq);
 		error = 0;
@@ -522,9 +524,6 @@ cf_get_method(device_t dev, struct cf_level *level)
 		CF_DEBUG("get matched freq %d from drivers\n", curr_set->freq);
 		goto out;
 	}
-
-estimate:
-	CF_MTX_ASSERT(&sc->lock);
 
 	/*
 	 * We couldn't find an exact match, so attempt to estimate and then
@@ -1082,7 +1081,8 @@ cpufreq_register(device_t dev)
 	/* Add a sysctl to get each driver's settings separately. */
 	SYSCTL_ADD_PROC(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)),
-	    OID_AUTO, "freq_settings", CTLTYPE_STRING | CTLFLAG_RD, dev, 0,
+	    OID_AUTO, "freq_settings",
+	    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_NEEDGIANT, dev, 0,
 	    cpufreq_settings_sysctl, "A", "CPU frequency driver settings");
 
 	/*

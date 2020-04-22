@@ -1195,7 +1195,8 @@ nfs_lookup(struct vop_lookup_args *ap)
 	}
 	NFSUNLOCKNODE(np);
 
-	if ((error = VOP_ACCESS(dvp, VEXEC, cnp->cn_cred, td)) != 0)
+	error = vn_dir_check_exec(dvp, cnp);
+	if (error != 0)
 		return (error);
 	error = cache_lookup(dvp, vpp, cnp, &nctime, &ncticks);
 	if (error > 0 && error != ENOENT)
@@ -3981,7 +3982,7 @@ nfs_setextattr(struct vop_setextattr_args *ap)
 	}
 	mtx_unlock(&nmp->nm_mtx);
 
-	if (ap->a_uio->uio_resid <= 0)
+	if (ap->a_uio->uio_resid < 0)
 		return (EINVAL);
 	cred = ap->a_cred;
 	if (cred == NULL)

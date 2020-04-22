@@ -283,6 +283,7 @@ CmDoCompile (
 
     LsDumpParseTree ();
 
+    UtEndEvent (Event);
     UtEndEvent (FullCompile);
     return (AE_OK);
 
@@ -647,7 +648,7 @@ void
 AslCompilerFileHeader (
     UINT32                  FileId)
 {
-    struct tm               *NewTime;
+    char                    *NewTime;
     time_t                  Aclock;
     char                    *Prefix = "";
 
@@ -691,13 +692,17 @@ AslCompilerFileHeader (
 
     /* Compilation header with timestamp */
 
-    (void) time (&Aclock);
-    NewTime = localtime (&Aclock);
+    Aclock = time (NULL);
+    NewTime = ctime (&Aclock);
 
     FlPrintFile (FileId,
-        "%sCompilation of \"%s\" - %s%s\n",
-        Prefix, AslGbl_Files[ASL_FILE_INPUT].Filename, asctime (NewTime),
-        Prefix);
+        "%sCompilation of \"%s\" -",
+        Prefix, AslGbl_Files[ASL_FILE_INPUT].Filename);
+
+    if (NewTime)
+    {
+        FlPrintFile (FileId, " %s%s\n", NewTime, Prefix);
+    }
 
     switch (FileId)
     {
