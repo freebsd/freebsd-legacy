@@ -195,7 +195,7 @@ newnfs_realign(struct mbuf **pm, int how)
 	m = *pm;
 	while ((m->m_flags & M_NOMAP) != 0) {
 		if ((m->m_len & 0x3) != 0 ||
-		    (m->m_ext.ext_pgs->first_pg_off & 0x3) != 0) {
+		    (m->m_ext_pgs.first_pg_off & 0x3) != 0) {
 			copyit = true;
 			break;
 		}

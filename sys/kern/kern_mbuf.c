@@ -1568,16 +1568,16 @@ m_snd_tag_destroy(struct m_snd_tag *mst)
  * Allocate an mbuf with anonymous external pages.
  */
 struct mbuf *
-mb_alloc_ext_plus_pages(int len, int how, bool pkthdr, m_ext_free_t ext_free)
+mb_alloc_ext_plus_pages(int len, int how, m_ext_free_t ext_free)
 {
 	struct mbuf *m;
 	vm_page_t pg;
 	int i, npgs;
 
-	m = mb_alloc_ext_pgs(how, pkthdr, ext_free);
+	m = mb_alloc_ext_pgs(how, ext_free);
 	if (m == NULL)
 		return (NULL);
-	m->m_ext.ext_pgs->flags |= MBUF_PEXT_FLAG_ANON;
+	m->m_ext_pgs.flags |= MBUF_PEXT_FLAG_ANON;
 	npgs = howmany(len, PAGE_SIZE);
 	for (i = 0; i < npgs; i++) {
 		do {
@@ -1585,16 +1585,16 @@ mb_alloc_ext_plus_pages(int len, int how, bool pkthdr, m_ext_free_t ext_free)
 			    VM_ALLOC_NOOBJ | VM_ALLOC_NODUMP | VM_ALLOC_WIRED);
 			if (pg == NULL) {
 				if (how == M_NOWAIT) {
-					m->m_ext.ext_pgs->npgs = i;
+					m->m_ext_pgs.npgs = i;
 					m_free(m);
 					return (NULL);
 				}
 				vm_wait(NULL);
 			}
 		} while (pg == NULL);
-		m->m_ext.ext_pgs->pa[i] = VM_PAGE_TO_PHYS(pg);
+		m->m_epg_pa[i] = VM_PAGE_TO_PHYS(pg);
 	}
-	m->m_ext.ext_pgs->npgs = npgs;
+	m->m_ext_pgs.npgs = npgs;
 	return (m);
 }
 
@@ -1604,7 +1604,7 @@ mb_alloc_ext_plus_pages(int len, int how, bool pkthdr, m_ext_free_t ext_free)
  * mlen is the maximum number of bytes put into each ext_page mbuf.
  */
 struct mbuf *
-mb_copym_ext_pgs(struct mbuf *mp, int len, int mlen, int how, bool pkthdr,
+mb_copym_ext_pgs(struct mbuf *mp, int len, int mlen, int how,
     m_ext_free_t ext_free, struct mbuf **mlast)
 {
 	struct mbuf *m, *mout = NULL;
@@ -1617,20 +1617,18 @@ mb_copym_ext_pgs(struct mbuf *mp, int len, int mlen, int how, bool pkthdr,
 	pglen = mblen = 0;
 	do {
 		if (pglen == 0) {
-			if (m == NULL || ++i == m->m_ext.ext_pgs->npgs) {
+			if (m == NULL || ++i == m->m_ext_pgs.npgs) {
 				mbufsiz = min(mlen, len);
 				if (m == NULL) {
 					m = mout = mb_alloc_ext_plus_pages(
-					    mbufsiz, how, pkthdr, ext_free);
+					    mbufsiz, how, ext_free);
 					if (m == NULL)
 						return (m);
-					if (pkthdr)
-						m->m_pkthdr.len = len;
 				} else {
-					m->m_ext.ext_pgs->last_pg_len =
+					m->m_ext_pgs.last_pg_len =
 					    PAGE_SIZE;
 					m->m_next = mb_alloc_ext_plus_pages(
-					    mbufsiz, how, false, ext_free);
+					    mbufsiz, how, ext_free);
 					m = m->m_next;
 					if (m == NULL) {
 						m_freem(mout);
@@ -1640,7 +1638,7 @@ mb_copym_ext_pgs(struct mbuf *mp, int len, int mlen, int how, bool pkthdr,
 				i = 0;
 			}
 			pgpos = (char *)(void *)
-			    PHYS_TO_DMAP(m->m_ext.ext_pgs->pa[i]);
+			    PHYS_TO_DMAP(m->m_epg_pa[i]);
 			pglen = PAGE_SIZE;
 		}
 		while (mblen == 0) {
@@ -1663,7 +1661,7 @@ mb_copym_ext_pgs(struct mbuf *mp, int len, int mlen, int how, bool pkthdr,
 		len -= xfer;
 		m->m_len += xfer;
 	} while (len > 0);
-	m->m_ext.ext_pgs->last_pg_len = PAGE_SIZE - pglen;
+	m->m_ext_pgs.last_pg_len = PAGE_SIZE - pglen;
 	if (mlast != NULL)
 		*mlast = m;
 	return (mout);
@@ -1704,7 +1702,7 @@ mb_splitatpos_ext(struct mbuf *m0, int len, int how)
 	KASSERT((mp->m_flags & (M_EXT | M_NOMAP)) ==
 	    (M_EXT | M_NOMAP),
 	    ("mb_splitatpos_ext: m0 not ext_pgs"));
-	pgs = mp->m_ext.ext_pgs;
+	pgs = &mp->m_ext_pgs;
 	KASSERT((pgs->flags & MBUF_PEXT_FLAG_ANON) != 0,
 	    ("mb_splitatpos_ext: not anonymous pages"));
 	pgno = 0;
@@ -1724,10 +1722,10 @@ mb_splitatpos_ext(struct mbuf *m0, int len, int how)
 		panic("mb_splitatpos_ext");
 	mp->m_len = len;
 
-	m = mb_alloc_ext_pgs(how, false, mb_free_mext_pgs);
+	m = mb_alloc_ext_pgs(how, mb_free_mext_pgs);
 	if (m == NULL)
 		return (NULL);
-	pgs0 = m->m_ext.ext_pgs;
+	pgs0 = &m->m_ext_pgs;
 	pgs0->flags |= MBUF_PEXT_FLAG_ANON;
 
 	/*
@@ -1748,11 +1746,11 @@ mb_splitatpos_ext(struct mbuf *m0, int len, int how)
 				vm_wait(NULL);
 			}
 		} while (pg == NULL);
-		pgs0->pa[0] = VM_PAGE_TO_PHYS(pg);
+		m->m_epg_pa[0] = VM_PAGE_TO_PHYS(pg);
 		pgs0->npgs++;
 		trim = plen - left;
-		cp = (char *)(void *)PHYS_TO_DMAP(pgs->pa[pgno]);
-		cp0 = (char *)(void *)PHYS_TO_DMAP(pgs0->pa[0]);
+		cp = (char *)(void *)PHYS_TO_DMAP(mp->m_epg_pa[pgno]);
+		cp0 = (char *)(void *)PHYS_TO_DMAP(m->m_epg_pa[0]);
 		if (pgno == 0)
 			cp += pgs->first_pg_off;
 		cp += left;
@@ -1770,7 +1768,7 @@ mb_splitatpos_ext(struct mbuf *m0, int len, int how)
 
 	/* Move the pages beyond pgno to the new mbuf. */
 	for (i = pgno + 1, j = pgs0->npgs; i < pgs->npgs; i++, j++) {
-		pgs0->pa[j] = pgs->pa[i];
+		m->m_epg_pa[j] = mp->m_epg_pa[i];
 		/* Never moves page 0. */
 		m->m_len += mbuf_ext_pg_len(pgs, i, 0);
 	}

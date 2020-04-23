@@ -912,13 +912,12 @@ _rpc_copym_into_ext_pgs(struct mbuf *mp, int maxextsiz)
 	 */
 	m2->m_next = NULL;
 	mhead = mb_copym_ext_pgs(mp, tlen, maxextsiz, M_WAITOK,
-	    true, mb_free_mext_pgs, &m2);
+	    mb_free_mext_pgs, &m2);
 
 	/*
 	 * Link the ext_pgs list onto the newly copied
 	 * list and free up the non-ext_pgs mbuf(s).
 	 */
-	mhead->m_pkthdr.len = mp->m_pkthdr.len;
 	m2->m_next = m;
 	m_freem(mp);
 
@@ -949,8 +948,7 @@ _rpc_copym_into_ext_pgs(struct mbuf *mp, int maxextsiz)
 			else
 				m2 = m;
 		} else {
-			MBUF_EXT_PGS_ASSERT_SANITY(
-			    m2->m_ext.ext_pgs);
+			MBUF_EXT_PGS_ASSERT_SANITY(&m2->m_ext_pgs);
 			m3 = m2;
 			tlen += m2->m_len;
 			m2 = m2->m_next;

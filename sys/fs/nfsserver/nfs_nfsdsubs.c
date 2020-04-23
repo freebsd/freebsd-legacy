@@ -1320,7 +1320,7 @@ nfsrv_adj(struct mbuf *mp, int len, int nul)
 
 	/* Adjust the last mbuf. */
 	if ((m->m_flags & M_NOMAP) != 0) {
-		pgs = m->m_ext.ext_pgs;
+		pgs = &m->m_ext_pgs;
 		pgno = pgs->npgs - 1;
 		off = (pgno == 0) ? pgs->first_pg_off : 0;
 		plen = mbuf_ext_pg_len(pgs, pgno, off);
@@ -1329,7 +1329,7 @@ nfsrv_adj(struct mbuf *mp, int len, int nul)
 			trim = m->m_len - lastlen;
 			while (trim >= plen) {
 				/* Free page. */
-				pg = PHYS_TO_VM_PAGE(pgs->pa[pgno]);
+				pg = PHYS_TO_VM_PAGE(m->m_epg_pa[pgno]);
 				vm_page_unwire_noq(pg);
 				vm_page_free(pg);
 				trim -= plen;
@@ -1342,7 +1342,7 @@ nfsrv_adj(struct mbuf *mp, int len, int nul)
 			pgs->last_pg_len = plen;
 			m->m_len = lastlen;
 		}
-		cp = (char *)(void *)PHYS_TO_DMAP(pgs->pa[pgno]);
+		cp = (char *)(void *)PHYS_TO_DMAP(m->m_epg_pa[pgno]);
 		cp += off + plen - nul;
 	} else {
 		m->m_len = lastlen;
@@ -1921,21 +1921,22 @@ nfsrv_parsename(struct nfsrv_descript *nd, char *bufp, u_long *hashp,
 			while (rem == 0) {
 				if ((nd->nd_md->m_flags & M_NOMAP) != 0 &&
 				    nd->nd_dextpg <
-				    nd->nd_md->m_ext.ext_pgs->npgs - 1) {
-					pgs = nd->nd_md->m_ext.ext_pgs;
+				    nd->nd_md->m_ext_pgs.npgs - 1) {
+					pgs = &nd->nd_md->m_ext_pgs;
 					pg = PHYS_TO_VM_PAGE(
-					    pgs->pa[nd->nd_dextpg]);
+					    nd->nd_md->m_epg_pa[nd->nd_dextpg]);
 					vm_page_unwire_noq(pg);
 					vm_page_free(pg);
 					for (i = nd->nd_bextpg;
 					    i < pgs->npgs - 1; i++)
-						pgs->pa[i] = pgs->pa[i + 1];
+						nd->nd_md->m_epg_pa[i] =
+						    nd->nd_md->m_epg_pa[i + 1];
 					pgs->npgs--;
 					if (nd->nd_dextpg == 0)
 						pgs->first_pg_off = 0;
 					fromcp = nd->nd_dpos = (char *)(void *)
 					    PHYS_TO_DMAP(
-					    pgs->pa[nd->nd_dextpg]);
+					    nd->nd_md->m_epg_pa[nd->nd_dextpg]);
 					rem = nd->nd_dextpgsiz =
 					    mbuf_ext_pg_len(pgs, nd->nd_dextpg,
 					    0);

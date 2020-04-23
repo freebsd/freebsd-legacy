@@ -863,10 +863,10 @@ nfsrv_createiovec_extpgs(int len, int maxextsiz, struct mbuf **mpp,
 	i = 0;
 	while (left > 0) {
 		siz = min(left, maxextsiz);
-		m = mb_alloc_ext_plus_pages(siz, M_WAITOK, false,
+		m = mb_alloc_ext_plus_pages(siz, M_WAITOK,
 		    mb_free_mext_pgs);
 		left -= siz;
-		i += m->m_ext.ext_pgs->npgs;
+		i += m->m_ext_pgs.npgs;
 		if (m3 != NULL)
 			m2->m_next = m;
 		else
@@ -878,13 +878,13 @@ nfsrv_createiovec_extpgs(int len, int maxextsiz, struct mbuf **mpp,
 	left = len;
 	i = 0;
 	pgno = 0;
-	pgs = m->m_ext.ext_pgs;
+	pgs = &m->m_ext_pgs;
 	while (left > 0) {
 		if (m == NULL)
 			panic("nfsvno_createiovec_extpgs iov");
 		siz = min(PAGE_SIZE, left);
 		if (siz > 0) {
-			iv->iov_base = (void *)PHYS_TO_DMAP(pgs->pa[pgno]);
+			iv->iov_base = (void *)PHYS_TO_DMAP(m->m_epg_pa[pgno]);
 			iv->iov_len = siz;
 			m->m_len += siz;
 			if (pgno == pgs->npgs - 1)
@@ -898,7 +898,7 @@ nfsrv_createiovec_extpgs(int len, int maxextsiz, struct mbuf **mpp,
 			m = m->m_next;
 			if (m == NULL)
 				panic("nfsvno_createiovec_extpgs iov");
-			pgs = m->m_ext.ext_pgs;
+			pgs = &m->m_ext_pgs;
 			pgno = 0;
 		}
 	}
@@ -1053,7 +1053,7 @@ nfsrv_createiovecw_extpgs(int retlen, struct mbuf *m, char *cp, int dextpg,
 	cnt = 0;
 	len = retlen;
 	mp = m;
-	pgs = mp->m_ext.ext_pgs;
+	pgs = &mp->m_ext_pgs;
 	i = dextpgsiz;
 	pgno = dextpg;
 	while (len > 0) {
@@ -1067,7 +1067,7 @@ nfsrv_createiovecw_extpgs(int retlen, struct mbuf *m, char *cp, int dextpg,
 				if (mp == NULL)
 					return (EBADRPC);
 				pgno = 0;
-				pgs = mp->m_ext.ext_pgs;
+				pgs = &mp->m_ext_pgs;
 			} else
 				pgno++;
 			if (pgno == 0)
@@ -1084,7 +1084,7 @@ nfsrv_createiovecw_extpgs(int retlen, struct mbuf *m, char *cp, int dextpg,
 	    M_WAITOK);
 	*iovcntp = cnt;
 	len = retlen;
-	pgs = mp->m_ext.ext_pgs;
+	pgs = &mp->m_ext_pgs;
 	i = dextpgsiz;
 	pgno = dextpg;
 	while (len > 0) {
@@ -1101,11 +1101,11 @@ nfsrv_createiovecw_extpgs(int retlen, struct mbuf *m, char *cp, int dextpg,
 				if (mp == NULL)
 					return (EBADRPC);
 				pgno = 0;
-				pgs = mp->m_ext.ext_pgs;
+				pgs = &mp->m_ext_pgs;
 			} else
 				pgno++;
 			cp = (char *)(void *)
-			    PHYS_TO_DMAP(pgs->pa[pgno]);
+			    PHYS_TO_DMAP(mp->m_epg_pa[pgno]);
 			if (pgno == 0) {
 				cp += pgs->first_pg_off;
 				i = mbuf_ext_pg_len(pgs, 0,

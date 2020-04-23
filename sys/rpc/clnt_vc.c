@@ -540,7 +540,7 @@ if (cr->cr_mrep != NULL) {
 txxxx = m_length(cr->cr_mrep, NULL);
 if (txxxx > 0) {
 m = mb_copym_ext_pgs(cr->cr_mrep, txxxx, 16384, M_WAITOK,
-    false, mb_free_mext_pgs, &m2);
+    mb_free_mext_pgs, &m2);
 m2 = cr->cr_mrep;
 cr->cr_mrep = m;
 m_freem(m2);

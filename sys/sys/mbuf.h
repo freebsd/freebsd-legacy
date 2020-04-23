@@ -694,8 +694,8 @@ void		 mb_dupcl(struct mbuf *, struct mbuf *);
 void		 mb_free_ext(struct mbuf *);
 void		 mb_free_mext_pgs(struct mbuf *);
 struct mbuf	*mb_alloc_ext_pgs(int, m_ext_free_t);
-struct mbuf	*mb_alloc_ext_plus_pages(int, int, bool, m_ext_free_t);
-struct mbuf	*mb_copym_ext_pgs(struct mbuf *, int, int, int, bool,
+struct mbuf	*mb_alloc_ext_plus_pages(int, int, m_ext_free_t);
+struct mbuf	*mb_copym_ext_pgs(struct mbuf *, int, int, int,
 		    m_ext_free_t, struct mbuf **);
 struct mbuf	*mb_splitatpos_ext(struct mbuf *, int, int);
 int		 mb_unmapped_compress(struct mbuf *m);

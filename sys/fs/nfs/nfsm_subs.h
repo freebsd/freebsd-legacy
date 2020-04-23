@@ -81,16 +81,16 @@ nfsm_build(struct nfsrv_descript *nd, int siz)
 	} else if ((nd->nd_flag & ND_NOMAP) != 0) {
 		if (siz > nd->nd_bextpgsiz) {
 			mb2 = mb_alloc_ext_plus_pages(PAGE_SIZE, M_WAITOK,
-			    false, mb_free_mext_pgs);
+			    mb_free_mext_pgs);
 			nd->nd_bpos = (char *)(void *)
-			    PHYS_TO_DMAP(mb2->m_ext.ext_pgs->pa[0]);
+			    PHYS_TO_DMAP(mb2->m_epg_pa[0]);
 			nd->nd_bextpg = 0;
 			nd->nd_bextpgsiz = PAGE_SIZE - siz;
 			nd->nd_mb->m_next = mb2;
 			nd->nd_mb = mb2;
 		} else
 			nd->nd_bextpgsiz -= siz;
-		nd->nd_mb->m_ext.ext_pgs->last_pg_len += siz;
+		nd->nd_mb->m_ext_pgs.last_pg_len += siz;
 	}
 	retp = (void *)(nd->nd_bpos);
 	nd->nd_mb->m_len += siz;

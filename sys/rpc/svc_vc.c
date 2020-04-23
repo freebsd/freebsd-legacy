@@ -608,7 +608,7 @@ svc_vc_process_pending(SVCXPRT *xprt)
 		txxxx = m_length(m3, NULL);
 		if (txxxx > 0) {
 			m1 = mb_copym_ext_pgs(m3, txxxx, 16384, M_WAITOK,
-			    false, mb_free_mext_pgs, &m2);
+			    mb_free_mext_pgs, &m2);
 			if (m4 != NULL) {
 				m4->m_next = m1;
 				m_freem(m3);
@@ -882,7 +882,7 @@ if (m != NULL) {
 txxxx = m_length(m, NULL);
 if (txxxx > 0) {
 m1 = mb_copym_ext_pgs(m, txxxx, 16384, M_WAITOK,
-    false, mb_free_mext_pgs, &m2);
+    mb_free_mext_pgs, &m2);
 m2 = m;
 m = m1;
 m_freem(m2);

@@ -91,7 +91,7 @@ nfsm_uiombuf(struct nfsrv_descript *nd, struct uio *uiop, int siz)
 					mp = nfsm_add_ext_pgs(mp,
 					    nd->nd_maxextsiz, &nd->nd_bextpg);
 					mcp = (char *)(void *)PHYS_TO_DMAP(
-					  mp->m_ext.ext_pgs->pa[nd->nd_bextpg]);
+					  mp->m_epg_pa[nd->nd_bextpg]);
 					nd->nd_bextpgsiz = PAGE_SIZE;
 				} else {
 					if (clflg)
@@ -116,7 +116,7 @@ nfsm_uiombuf(struct nfsrv_descript *nd, struct uio *uiop, int siz)
 			mcp += xfer;
 			if ((nd->nd_flag & ND_NOMAP) != 0) {
 				nd->nd_bextpgsiz -= xfer;
-				mp->m_ext.ext_pgs->last_pg_len += xfer;
+				mp->m_ext_pgs.last_pg_len += xfer;
 			}
 			uiop->uio_offset += xfer;
 			uiop->uio_resid -= xfer;
@@ -139,7 +139,7 @@ nfsm_uiombuf(struct nfsrv_descript *nd, struct uio *uiop, int siz)
 			mp = nfsm_add_ext_pgs(mp, nd->nd_maxextsiz,
 			    &nd->nd_bextpg);
 			mcp = (char *)(void *)
-			    PHYS_TO_DMAP(mp->m_ext.ext_pgs->pa[nd->nd_bextpg]);
+			    PHYS_TO_DMAP(mp->m_epg_pa[nd->nd_bextpg]);
 			nd->nd_bextpgsiz = PAGE_SIZE;
 		}
 		for (left = 0; left < rem; left++)
@@ -148,7 +148,7 @@ nfsm_uiombuf(struct nfsrv_descript *nd, struct uio *uiop, int siz)
 		nd->nd_bpos = mcp;
 		if ((nd->nd_flag & ND_NOMAP) != 0) {
 			nd->nd_bextpgsiz -= rem;
-			mp->m_ext.ext_pgs->last_pg_len += rem;
+			mp->m_ext_pgs.last_pg_len += rem;
 		}
 	} else
 		nd->nd_bpos = mcp;
@@ -186,9 +186,9 @@ nfsm_uiombuflist(bool doextpgs, int maxextsiz, struct uio *uiop, int siz,
 	rem = NFSM_RNDUP(siz) - siz;
 	if (doextpgs) {
 		mp = mb_alloc_ext_plus_pages(PAGE_SIZE, M_WAITOK,
-		    false, mb_free_mext_pgs);
+		    mb_free_mext_pgs);
 		mcp = (char *)(void *)
-		    PHYS_TO_DMAP(mp->m_ext.ext_pgs->pa[0]);
+		    PHYS_TO_DMAP(mp->m_epg_pa[0]);
 		bextpgsiz = PAGE_SIZE;
 		bextpg = 0;
 	} else {
@@ -216,7 +216,7 @@ nfsm_uiombuflist(bool doextpgs, int maxextsiz, struct uio *uiop, int siz,
 					mp = nfsm_add_ext_pgs(mp, maxextsiz,
 					    &bextpg);
 					mcp = (char *)(void *)PHYS_TO_DMAP(
-					    mp->m_ext.ext_pgs->pa[bextpg]);
+					    mp->m_epg_pa[bextpg]);
 					mlen = bextpgsiz = PAGE_SIZE;
 				} else {
 					if (clflg)
@@ -241,7 +241,7 @@ nfsm_uiombuflist(bool doextpgs, int maxextsiz, struct uio *uiop, int siz,
 			mcp += xfer;
 			if (doextpgs) {
 				bextpgsiz -= xfer;
-				mp->m_ext.ext_pgs->last_pg_len += xfer;
+				mp->m_ext_pgs.last_pg_len += xfer;
 			}
 			uiop->uio_offset += xfer;
 			uiop->uio_resid -= xfer;
@@ -256,7 +256,7 @@ nfsm_uiombuflist(bool doextpgs, int maxextsiz, struct uio *uiop, int siz,
 		*mcp++ = '\0';
 		mp->m_len++;
 		if (doextpgs)
-			mp->m_ext.ext_pgs->last_pg_len++;
+			mp->m_ext_pgs.last_pg_len++;
 	}
 	if (cpp != NULL)
 		*cpp = mcp;
