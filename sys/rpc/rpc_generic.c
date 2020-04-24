@@ -954,9 +954,6 @@ _rpc_copym_into_ext_pgs(struct mbuf *mp, int maxextsiz)
 			m2 = m2->m_next;
 		}
 	}
-	KASSERT(tlen == mhead->m_pkthdr.len,
-	    ("_rpc_copym_into_ext_pgs: tlen=%d pkthdrlen=%d",
-	    tlen, mhead->m_pkthdr.len));
 	return (mhead);
 }
 
