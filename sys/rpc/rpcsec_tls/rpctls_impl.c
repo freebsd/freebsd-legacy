@@ -93,14 +93,16 @@ static enum clnt_stat	rpctls_server(struct socket *so,
 			    uint32_t *flags, uint64_t *sslp,
 			    uid_t *uid, int *ngrps, gid_t **gids);
 
-static void
-rpctls_init(void *dummy)
+int
+rpctls_init(void)
 {
 	int error;
 
 	error = syscall_helper_register(rpctls_syscalls, SY_THR_STATIC_KLD);
-	if (error != 0)
+	if (error != 0) {
 		printf("rpctls_init: cannot register syscall\n");
+		return (error);
+	}
 	mtx_init(&rpctls_connect_lock, "rpctls_connect_lock", NULL,
 	    MTX_DEF);
 	mtx_init(&rpctls_server_lock, "rpctls_server_lock", NULL,
@@ -108,8 +110,8 @@ rpctls_init(void *dummy)
 	rpctls_null_verf.oa_flavor = AUTH_NULL;
 	rpctls_null_verf.oa_base = RPCTLS_START_STRING;
 	rpctls_null_verf.oa_length = strlen(RPCTLS_START_STRING);
+	return (0);
 }
-SYSINIT(rpctls_init, SI_SUB_KMEM, SI_ORDER_ANY, rpctls_init, NULL);
 
 int
 sys_gssd_syscall(struct thread *td, struct gssd_syscall_args *uap)

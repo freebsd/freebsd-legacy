@@ -62,6 +62,7 @@ __FBSDID("$FreeBSD$");
 #include <rpc/rpc.h>
 #include <rpc/nettype.h>
 #include <rpc/rpcsec_gss.h>
+#include <rpc/rpcsec_tls.h>
 
 #include <rpc/rpc_com.h>
 #include <rpc/krpc.h>
@@ -963,8 +964,22 @@ _rpc_copym_into_ext_pgs(struct mbuf *mp, int maxextsiz)
 static int
 krpc_modevent(module_t mod, int type, void *data)
 {
+	int error = 0;
 
-	return (0);
+	switch (type) {
+	case MOD_LOAD:
+		error = rpctls_init();
+		break;
+	case MOD_UNLOAD:
+		/*
+		 * Cannot be unloaded, since the rpctlssd or rpctlscd daemons
+		 * might be performing a rpctls syscall.
+		 */
+		/* FALLTHROUGH */
+	default:
+		error = EOPNOTSUPP;
+	}
+	return (error);
 }
 static moduledata_t krpc_mod = {
 	"krpc",
