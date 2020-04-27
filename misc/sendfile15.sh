@@ -39,6 +39,7 @@
 
 # "panic: vm_page_free_prep 0xfffff817e0efac10 PG_ZERO 87 ...":
 # https://people.freebsd.org/~pho/stress/log/sendfile15-2.txt
+# Note that r334783 seems to alleviate the problem.
 
 . ../default.cfg
 [ `id -u` -ne 0 ] && echo "Must be root!" && exit 1
