@@ -35,7 +35,7 @@
 
 [ `sysctl -n vm.swap_total` -eq 0 ] && exit 0
 min=5	# percent swap usage
-(cd ../testcases/swap; ./swap -t 10m -i 40 -l 100 -h > /dev/null) &
+(cd ../testcases/swap; ./swap -t 10m -i 100 -l 100 -h > /dev/null) &
 mx=0
 while pgrep -q swap; do
 	n=`swapinfo | tail -1 | sed 's/.* //; s/%//'`
