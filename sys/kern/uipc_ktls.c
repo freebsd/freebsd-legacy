@@ -58,8 +58,11 @@ __FBSDID("$FreeBSD$");
 #include <net/if_var.h>
 #ifdef RSS
 #include <net/netisr.h>
+#include <net/nhop.h>
 #include <net/rss_config.h>
 #endif
+#include <net/route.h>
+#include <net/route/nhop.h>
 #if defined(INET) || defined(INET6)
 #include <netinet/in.h>
 #include <netinet/in_pcb.h>
@@ -699,7 +702,7 @@ ktls_cleanup(struct ktls_session *tls)
 
 #ifdef TCP_OFFLOAD
 static int
-ktls_try_toe(struct socket *so, struct ktls_session *tls)
+ktls_try_toe(struct socket *so, struct ktls_session *tls, int direction)
 {
 	struct inpcb *inp;
 	struct tcpcb *tp;
@@ -725,7 +728,7 @@ ktls_try_toe(struct socket *so, struct ktls_session *tls)
 		return (EOPNOTSUPP);
 	}
 
-	error = tcp_offload_alloc_tls_session(tp, tls);
+	error = tcp_offload_alloc_tls_session(tp, tls, direction);
 	INP_WUNLOCK(inp);
 	if (error == 0) {
 		tls->mode = TCP_TLS_MODE_TOE;
@@ -754,7 +757,7 @@ ktls_alloc_snd_tag(struct inpcb *inp, struct ktls_session *tls, bool force,
 {
 	union if_snd_tag_alloc_params params;
 	struct ifnet *ifp;
-	struct rtentry *rt;
+	struct nhop_object *nh;
 	struct tcpcb *tp;
 	int error;
 
@@ -792,12 +795,12 @@ ktls_alloc_snd_tag(struct inpcb *inp, struct ktls_session *tls, bool force,
 	 * enabled after a connection has completed key negotiation in
 	 * userland, the cached route will be present in practice.
 	 */
-	rt = inp->inp_route.ro_rt;
-	if (rt == NULL || rt->rt_ifp == NULL) {
+	nh = inp->inp_route.ro_nh;
+	if (nh == NULL) {
 		INP_RUNLOCK(inp);
 		return (ENXIO);
 	}
-	ifp = rt->rt_ifp;
+	ifp = nh->nh_ifp;
 	if_ref(ifp);
 
 	params.hdr.type = IF_SND_TAG_TYPE_TLS;
@@ -898,6 +901,60 @@ ktls_try_sw(struct socket *so, struct ktls_session *tls)
 }
 
 int
+ktls_enable_rx(struct socket *so, struct tls_enable *en)
+{
+	struct ktls_session *tls;
+	int error;
+
+	if (!ktls_offload_enable)
+		return (ENOTSUP);
+
+	counter_u64_add(ktls_offload_enable_calls, 1);
+
+	/*
+	 * This should always be true since only the TCP socket option
+	 * invokes this function.
+	 */
+	if (so->so_proto->pr_protocol != IPPROTO_TCP)
+		return (EINVAL);
+
+	/*
+	 * XXX: Don't overwrite existing sessions.  We should permit
+	 * this to support rekeying in the future.
+	 */
+	if (so->so_rcv.sb_tls_info != NULL)
+		return (EALREADY);
+
+	if (en->cipher_algorithm == CRYPTO_AES_CBC && !ktls_cbc_enable)
+		return (ENOTSUP);
+
+	error = ktls_create_session(so, en, &tls);
+	if (error)
+		return (error);
+
+	/* TLS RX offload is only supported on TOE currently. */
+#ifdef TCP_OFFLOAD
+	error = ktls_try_toe(so, tls, KTLS_RX);
+#else
+	error = EOPNOTSUPP;
+#endif
+
+	if (error) {
+		ktls_cleanup(tls);
+		return (error);
+	}
+
+	/* Mark the socket as using TLS offload. */
+	SOCKBUF_LOCK(&so->so_rcv);
+	so->so_rcv.sb_tls_info = tls;
+	SOCKBUF_UNLOCK(&so->so_rcv);
+
+	counter_u64_add(ktls_offload_total, 1);
+
+	return (0);
+}
+
+int
 ktls_enable_tx(struct socket *so, struct tls_enable *en)
 {
 	struct ktls_session *tls;
@@ -935,7 +992,7 @@ ktls_enable_tx(struct socket *so, struct tls_enable *en)
 
 	/* Prefer TOE -> ifnet TLS -> software TLS. */
 #ifdef TCP_OFFLOAD
-	error = ktls_try_toe(so, tls);
+	error = ktls_try_toe(so, tls, KTLS_TX);
 	if (error)
 #endif
 		error = ktls_try_ifnet(so, tls, false);
@@ -954,6 +1011,7 @@ ktls_enable_tx(struct socket *so, struct tls_enable *en)
 	}
 
 	SOCKBUF_LOCK(&so->so_snd);
+	so->so_snd.sb_tls_seqno = be64dec(en->rec_seq);
 	so->so_snd.sb_tls_info = tls;
 	if (tls->mode != TCP_TLS_MODE_SW)
 		so->so_snd.sb_flags |= SB_TLS_IFNET;
@@ -963,6 +1021,25 @@ ktls_enable_tx(struct socket *so, struct tls_enable *en)
 	counter_u64_add(ktls_offload_total, 1);
 
 	return (0);
+}
+
+int
+ktls_get_rx_mode(struct socket *so)
+{
+	struct ktls_session *tls;
+	struct inpcb *inp;
+	int mode;
+
+	inp = so->so_pcb;
+	INP_WLOCK_ASSERT(inp);
+	SOCKBUF_LOCK(&so->so_rcv);
+	tls = so->so_rcv.sb_tls_info;
+	if (tls == NULL)
+		mode = TCP_TLS_MODE_NONE;
+	else
+		mode = tls->mode;
+	SOCKBUF_UNLOCK(&so->so_rcv);
+	return (mode);
 }
 
 int

@@ -30,6 +30,7 @@
 __FBSDID("$FreeBSD$");
 
 #include "opt_inet.h"
+#include "opt_inet6.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -76,12 +77,19 @@ tcp_offload_connect(struct socket *so, struct sockaddr *nam)
 
 	NET_EPOCH_ENTER(et);
 	nh = NULL;
+#ifdef INET
 	if (nam->sa_family == AF_INET)
 		nh = fib4_lookup(0, ((struct sockaddr_in *)nam)->sin_addr,
 		    NHR_NONE, 0, 0);
-	else if (nam->sa_family == AF_INET6)
+#endif
+#if defined(INET) && defined(INET6)
+	else
+#endif
+#ifdef INET6
+	if (nam->sa_family == AF_INET6)
 		nh = fib6_lookup(0, &((struct sockaddr_in6 *)nam)->sin6_addr,
 		    NHR_NONE, 0, 0);
+#endif
 	if (nh == NULL) {
 		NET_EPOCH_EXIT(et);
 		return (EHOSTUNREACH);
@@ -190,14 +198,15 @@ tcp_offload_tcp_info(struct tcpcb *tp, struct tcp_info *ti)
 }
 
 int
-tcp_offload_alloc_tls_session(struct tcpcb *tp, struct ktls_session *tls)
+tcp_offload_alloc_tls_session(struct tcpcb *tp, struct ktls_session *tls,
+    int direction)
 {
 	struct toedev *tod = tp->tod;
 
 	KASSERT(tod != NULL, ("%s: tp->tod is NULL, tp %p", __func__, tp));
 	INP_WLOCK_ASSERT(tp->t_inpcb);
 
-	return (tod->tod_alloc_tls_session(tod, tp, tls));
+	return (tod->tod_alloc_tls_session(tod, tp, tls, direction));
 }
 
 void
