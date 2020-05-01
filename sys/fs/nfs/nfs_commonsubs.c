@@ -656,12 +656,8 @@ nfsm_mbufuio(struct nfsrv_descript *nd, struct uio *uiop, int siz)
 			left = siz;
 		uiosiz = left;
 		while (left > 0) {
-			if ((nd->nd_md->m_flags & M_NOMAP) != 0)
-				xfer = nfsm_copyfrommbuf_extpgs(nd, uiocp,
-				    uiop->uio_segflg, left);
-			else
-				xfer = nfsm_copyfrommbuf(nd, uiocp,
-				    uiop->uio_segflg, left);
+			xfer = nfsm_copyfrommbuf(nd, uiocp, uiop->uio_segflg,
+			    left);
 			left -= xfer;
 			uiocp += xfer;
 			uiop->uio_offset += xfer;
@@ -771,12 +767,7 @@ nfsm_dissct(struct nfsrv_descript *nd, int siz, int how)
 			if (nd->nd_md == NULL)
 				return (NULL);
 			nfsm_set(nd, 0, false);
-			if ((nd->nd_md->m_flags & M_NOMAP) != 0)
-				xfer = nfsm_copyfrommbuf_extpgs(nd, p,
-				    UIO_SYSSPACE, siz2);
-			else
-				xfer = nfsm_copyfrommbuf(nd, p,
-				    UIO_SYSSPACE, siz2);
+			xfer = nfsm_copyfrommbuf(nd, p, UIO_SYSSPACE, siz2);
 			p += xfer;
 			siz2 -= xfer;
 			if (siz2 > 0)
@@ -2479,12 +2470,7 @@ nfsrv_mtostr(struct nfsrv_descript *nd, char *str, int siz)
 
 	rem = NFSM_RNDUP(siz) - siz;
 	while (siz > 0) {
-		if ((nd->nd_md->m_flags & M_NOMAP) != 0)
-			xfer = nfsm_copyfrommbuf_extpgs(nd, str,
-			    UIO_SYSSPACE, siz);
-		else
-			xfer = nfsm_copyfrommbuf(nd, str,
-			    UIO_SYSSPACE, siz);
+		xfer = nfsm_copyfrommbuf(nd, str, UIO_SYSSPACE, siz);
 		str += xfer;
 		siz -= xfer;
 		if (siz > 0 && !nfsm_shiftnext(nd, &xfer)) {
@@ -4972,6 +4958,10 @@ nfsm_copyfrommbuf(struct nfsrv_descript *nd, char *cp, enum uio_seg segflg,
 	int xfer;
 
 	m = nd->nd_md;
+	if ((m->m_flags & M_NOMAP) != 0) {
+		xfer = nfsm_copyfrommbuf_extpgs(nd, cp, segflg, len);
+		return (xfer);
+	}
 	xfer = mtod(m, char *) + m->m_len - nd->nd_dpos;
 	xfer = min(xfer, len);
 	if (xfer > 0) {
