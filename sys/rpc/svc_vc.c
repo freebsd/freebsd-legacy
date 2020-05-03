@@ -596,6 +596,7 @@ svc_vc_process_pending(SVCXPRT *xprt)
 	struct socket *so = xprt->xp_socket;
 	struct mbuf *m;
 
+#ifdef notnow
 { struct mbuf *m1, *m2, *m3, *m4;
 	int txxxx;
 	m3 = cd->mpending;
@@ -620,6 +621,7 @@ svc_vc_process_pending(SVCXPRT *xprt)
 		}
 	}
 }
+#endif
 	/*
 	 * If cd->resid is non-zero, we have part of the
 	 * record already, otherwise we are expecting a record
@@ -876,6 +878,7 @@ svc_vc_backchannel_recv(SVCXPRT *xprt, struct rpc_msg *msg,
 	sx_xunlock(&xprt->xp_lock);
 
 printf("recv backch m=%p\n", m);
+#ifdef notnow
 { struct mbuf *m1, *m2;
 int txxxx;
 if (m != NULL) {
@@ -887,6 +890,7 @@ m2 = m;
 m = m1;
 m_freem(m2);
 } } }
+#endif
 	xdrmbuf_create(&xdrs, m, XDR_DECODE);
 	if (! xdr_callmsg(&xdrs, msg)) {
 printf("recv backch callmsg failed\n");
