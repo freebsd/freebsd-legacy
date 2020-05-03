@@ -23,9 +23,7 @@ SUBDIR=	\
 	accf_http \
 	acl_nfs4 \
 	acl_posix1e \
-	${_acpi} \
 	ae \
-	${_aesni} \
 	age \
 	${_agp} \
 	ahci \
@@ -67,7 +65,6 @@ SUBDIR=	\
 	bhnd \
 	${_bxe} \
 	${_bios} \
-	${_blake2} \
 	bnxt \
 	bridgestp \
 	bwi \
@@ -318,7 +315,6 @@ SUBDIR=	\
 	${_sbni} \
 	scc \
 	sdhci \
-	${_sdhci_acpi} \
 	sdhci_pci \
 	sdio \
 	sem \
@@ -619,10 +615,8 @@ _wi=		wi
 
 _aac=		aac
 _aacraid=	aacraid
-_acpi=		acpi
 .if ${MK_CRYPT} != "no" || defined(ALL_MODULES)
 .if ${COMPILER_TYPE} != "gcc" || ${COMPILER_VERSION} > 40201
-_aesni=		aesni
 .endif
 .endif
 _amd_ecc_inject=amd_ecc_inject
@@ -632,7 +626,6 @@ _amdtemp=	amdtemp
 _arcmsr=	arcmsr
 _asmc=		asmc
 .if ${MK_CRYPT} != "no" || defined(ALL_MODULES)
-_blake2=	blake2
 .endif
 _bytgpio=	bytgpio
 _chvgpio=	chvgpio
@@ -679,7 +672,6 @@ _rdrand_rng=	rdrand_rng
 .endif
 _pchtherm = pchtherm
 _s3=		s3
-_sdhci_acpi=	sdhci_acpi
 _superio=	superio
 _tpm=		tpm
 _twa=		twa
