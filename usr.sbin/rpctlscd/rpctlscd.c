@@ -579,10 +579,18 @@ rpctls_connect(SSL_CTX *ctx, int s)
 			    NULL, 0);
 			cp2 = X509_NAME_oneline(X509_get_subject_name(cert),
 			    NULL, 0);
-			syslog(LOG_INFO | LOG_DAEMON, "rpctls_connect: client"
-			    " IP %s issuerName=%s subjectName=%s verify "
-			    "failed %s\n", hostnam, cp, cp2,
-			    X509_verify_cert_error_string(ret));
+			if (rpctls_debug_level == 0)
+				syslog(LOG_INFO | LOG_DAEMON,
+				    "rpctls_connect: client IP %s "
+				    "issuerName=%s subjectName=%s verify "
+				    "failed %s\n", hostnam, cp, cp2,
+				    X509_verify_cert_error_string(ret));
+			else
+				fprintf(stderr,
+				    "rpctls_connect: client IP %s "
+				    "issuerName=%s subjectName=%s verify "
+				    "failed %s\n", hostnam, cp, cp2,
+				    X509_verify_cert_error_string(ret));
 		}
 		SSL_free(ssl);
 		return (NULL);
@@ -595,12 +603,14 @@ rpctls_connect(SSL_CTX *ctx, int s)
 		ret = BIO_get_ktls_recv(SSL_get_rbio(ssl));
 		rpctlscd_verbose_out("rpctls_connect: BIO_get_ktls_recv=%d\n", ret);
 	}
-#ifdef notnow
 	if (ret == 0) {
+		if (rpctls_debug_level == 0)
+			syslog(LOG_ERR, "ktls not working\n");
+		else
+			fprintf(stderr, "ktls not working\n");
 		SSL_free(ssl);
 		return (NULL);
 	}
-#endif
 
 	return (ssl);
 }

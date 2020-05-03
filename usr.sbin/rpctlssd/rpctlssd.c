@@ -672,12 +672,17 @@ rpctlssd_verbose_out("%s\n", cp2);
 		ret = BIO_get_ktls_recv(SSL_get_rbio(ssl));
 		rpctlssd_verbose_out("rpctls_server: BIO_get_ktls_recv=%d\n", ret);
 	}
-#ifdef notnow
 	if (ret == 0) {
-		SSL_free(ssl);
-		return (NULL);
+		if (rpctls_debug_level == 0)
+			syslog(LOG_ERR, "ktls not working\n");
+		else
+			fprintf(stderr, "ktls not working\n");
+		/*
+		 * The handshake has completed, so all that can be
+		 * done is disable the connection.
+		 */
+		*flags |= RPCTLS_FLAGS_DISABLED;
 	}
-#endif
 
 	return (ssl);
 }
