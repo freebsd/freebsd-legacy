@@ -57,9 +57,6 @@ extern u_long sb_max_adj;
 extern int nfs_numnfscbd;
 extern int nfscl_debuglevel;
 extern bool nfs_use_ext_pgs;
-#ifdef KERN_TLS
-extern u_int ktls_maxlen;
-#endif
 
 /*
  * NFS client system calls for handling callbacks.
@@ -73,6 +70,9 @@ nfscb_program(struct svc_req *rqst, SVCXPRT *xprt)
 {
 	struct nfsrv_descript nd;
 	int cacherep, credflavor;
+#ifdef KERN_TLS
+	u_int maxlen;
+#endif
 
 printf("cbprogram proc=%d\n", rqst->rq_proc);
 	memset(&nd, 0, sizeof(nd));
@@ -121,9 +121,10 @@ printf("cbreq nd_md=%p offs=%d\n", nd.nd_md, rqst->rq_xprt->xp_mbufoffs);
 			nd.nd_flag |= ND_NOMAP;
 			nd.nd_maxextsiz = 16384;
 #ifdef KERN_TLS
-			if ((xprt->xp_tls & RPCTLS_FLAGS_HANDSHAKE) != 0)
+			if ((xprt->xp_tls & RPCTLS_FLAGS_HANDSHAKE) != 0 &&
+			    rpctls_getinfo(&maxlen))
 				nd.nd_maxextsiz = min(TLS_MAX_MSG_SIZE_V10_2,
-				    ktls_maxlen);
+				    maxlen);
 #endif
 		}
 		cacherep = nfs_cbproc(&nd, rqst->rq_xid);

@@ -51,6 +51,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/extattr.h>
 
 #include <rpc/krpc.h>
+#include <rpc/rpcsec_tls.h>
 
 #include <security/mac/mac_framework.h>
 
@@ -87,9 +88,6 @@ extern volatile int nfsrv_devidcnt;
 extern int nfscl_debuglevel;
 extern struct nfsdevicehead nfsrv_devidhead;
 extern struct nfsstatsv1 nfsstatsv1;
-#ifdef KERN_TLS
-extern u_int ktls_maxlen;
-#endif
 
 SYSCTL_DECL(_vfs_nfs);
 SYSCTL_INT(_vfs_nfs, OID_AUTO, enable_uidtostring, CTLFLAG_RW,
@@ -340,6 +338,9 @@ nfscl_reqstart(struct nfsrv_descript *nd, int procnum, struct nfsmount *nmp,
 	u_int32_t *tl;
 	int opcnt;
 	nfsattrbit_t attrbits;
+#ifdef KERN_TLS
+	u_int maxlen;
+#endif
 
 	/*
 	 * First, fill in some of the fields of nd.
@@ -371,8 +372,9 @@ nfscl_reqstart(struct nfsrv_descript *nd, int procnum, struct nfsmount *nmp,
 	if (use_ext && PMAP_HAS_DMAP != 0) {
 		nd->nd_flag |= ND_NOMAP;
 #ifdef KERN_TLS
-		nd->nd_maxextsiz = min(TLS_MAX_MSG_SIZE_V10_2,
-		    ktls_maxlen);
+		if (rpctls_getinfo(&maxlen))
+			nd->nd_maxextsiz = min(TLS_MAX_MSG_SIZE_V10_2,
+			    maxlen);
 #endif
 	}
 

@@ -89,9 +89,6 @@ __FBSDID("$FreeBSD$");
 #include <rpc/krpc.h>
 #include <rpc/rpcsec_tls.h>
 
-#ifdef KERN_TLS
-extern u_int ktls_maxlen;
-#endif
 
 struct cmessage {
         struct cmsghdr cmsg;
@@ -213,6 +210,9 @@ clnt_bck_call(
 	struct ct_request *cr;
 	int error, maxextsiz;
 	uint32_t junk;
+#ifdef KERN_TLS
+	u_int maxlen;
+#endif
 
 	cr = malloc(sizeof(struct ct_request), M_RPC, M_WAITOK);
 
@@ -313,7 +313,8 @@ call_again:
 		 */
 		maxextsiz = TLS_MAX_MSG_SIZE_V10_2;
 #ifdef KERN_TLS
-		maxextsiz = min(maxextsiz, ktls_maxlen);
+		if (rpctls_getinfo(&maxlen))
+			maxextsiz = min(maxextsiz, maxlen);
 #endif
 		mreq = _rpc_copym_into_ext_pgs(mreq, maxextsiz);
 	}

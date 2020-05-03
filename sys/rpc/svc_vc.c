@@ -76,9 +76,6 @@ __FBSDID("$FreeBSD$");
 
 #include <security/mac/mac_framework.h>
 
-#ifdef KERN_TLS
-extern u_int ktls_maxlen;
-#endif
 
 static bool_t svc_vc_rendezvous_recv(SVCXPRT *, struct rpc_msg *,
     struct sockaddr **, struct mbuf **);
@@ -916,6 +913,9 @@ svc_vc_reply(SVCXPRT *xprt, struct rpc_msg *msg,
 	struct mbuf *mrep;
 	bool_t stat = TRUE;
 	int error, len, maxextsiz;
+#ifdef KERN_TLS
+	u_int maxlen;
+#endif
 
 	/*
 	 * Leave space for record mark.
@@ -954,7 +954,8 @@ svc_vc_reply(SVCXPRT *xprt, struct rpc_msg *msg,
 			 */
 			maxextsiz = TLS_MAX_MSG_SIZE_V10_2;
 #ifdef KERN_TLS
-			maxextsiz = min(maxextsiz, ktls_maxlen);
+			if (rpctls_getinfo(&maxlen))
+				maxextsiz = min(maxextsiz, maxlen);
 #endif
 			mrep = _rpc_copym_into_ext_pgs(mrep, maxextsiz);
 		}
@@ -989,6 +990,9 @@ svc_vc_backchannel_reply(SVCXPRT *xprt, struct rpc_msg *msg,
 	struct mbuf *mrep;
 	bool_t stat = TRUE;
 	int error, maxextsiz;
+#ifdef KERN_TLS
+	u_int maxlen;
+#endif
 
 	/*
 	 * Leave space for record mark.
@@ -1027,7 +1031,8 @@ svc_vc_backchannel_reply(SVCXPRT *xprt, struct rpc_msg *msg,
 			 */
 			maxextsiz = TLS_MAX_MSG_SIZE_V10_2;
 #ifdef KERN_TLS
-			maxextsiz = min(maxextsiz, ktls_maxlen);
+			if (rpctls_getinfo(&maxlen))
+				maxextsiz = min(maxextsiz, maxlen);
 #endif
 			mrep = _rpc_copym_into_ext_pgs(mrep, maxextsiz);
 		}

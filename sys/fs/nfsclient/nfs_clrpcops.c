@@ -53,6 +53,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/extattr.h>
 #include <sys/sysctl.h>
 #include <sys/taskqueue.h>
+#include <rpc/rpcsec_tls.h>
 
 SYSCTL_DECL(_vfs_nfs);
 
@@ -78,9 +79,6 @@ extern int nfs_pnfsiothreads;
 extern u_long sb_max_adj;
 extern int nfs_maxcopyrange;
 extern bool nfs_use_ext_pgs;
-#ifdef KERN_TLS
-extern u_int ktls_maxlen;
-#endif
 NFSCLSTATEMUTEX;
 int nfstest_outofseq = 0;
 int nfscl_assumeposixlocks = 1;
@@ -5782,6 +5780,9 @@ nfscl_doiods(vnode_t vp, struct uio *uiop, int *iomode, int *must_commit,
 	ssize_t resid = 0;
 	int maxextsiz;
 	bool doextpgs;
+#ifdef KERN_TLS
+	u_int maxlen;
+#endif
 
 	if (!NFSHASPNFS(nmp) || nfscl_enablecallb == 0 || nfs_numnfscbd == 0 ||
 	    (np->n_flag & NNOLAYOUT) != 0)
@@ -5884,9 +5885,10 @@ nfscl_doiods(vnode_t vp, struct uio *uiop, int *iomode, int *must_commit,
 							doextpgs = true;
 							maxextsiz = 16384;
 #ifdef KERN_TLS
-							maxextsiz = min(
-							    TLS_MAX_MSG_SIZE_V10_2,
-							    ktls_maxlen);
+							if (rpctls_getinfo(&maxlen))
+								maxextsiz = min(
+								    TLS_MAX_MSG_SIZE_V10_2,
+								    maxlen);
 #endif
 						}
 						m = nfsm_uiombuflist(doextpgs,

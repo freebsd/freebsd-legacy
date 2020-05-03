@@ -41,6 +41,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/kernel.h>
 #include <sys/lock.h>
 #include <sys/malloc.h>
+#include <sys/mbuf.h>
 #include <sys/mutex.h>
 #include <sys/priv.h>
 #include <sys/proc.h>
@@ -124,6 +125,9 @@ sys_gssd_syscall(struct thread *td, struct gssd_syscall_args *uap)
 	int fd = -1, error, retry_count = 5;
 	CLIENT *cl, *oldcl;
 	bool ssd;
+#ifdef KERN_TLS
+	u_int maxlen;
+#endif
         
 printf("in gssd syscall\n");
 	error = priv_check(td, PRIV_NFS_DAEMON);
@@ -223,7 +227,8 @@ printf("cl=%p oldcl=%p\n", cl, oldcl);
 printf("In connect\n");
 		error = EINVAL;
 #ifdef KERN_TLS
-		if (PMAP_HAS_DMAP != 0)
+		if (PMAP_HAS_DMAP != 0 && mb_use_ext_pgs &&
+		    rpctls_getinfo(&maxlen))
 			error = 0;
 #endif
 		if (error == 0)
@@ -242,7 +247,8 @@ printf("returning=%d\n", fd);
 printf("In srvconnect\n");
 		error = EINVAL;
 #ifdef KERN_TLS
-		if (PMAP_HAS_DMAP != 0)
+		if (PMAP_HAS_DMAP != 0 && mb_use_ext_pgs &&
+		    rpctls_getinfo(&maxlen))
 			error = 0;
 #endif
 		if (error == 0)
@@ -574,5 +580,30 @@ printf("got uid=%d ngrps=%d gidp=%p\n", uid, ngrps, gidp);
 printf("authtls: aft handshake stat=%d\n", stat);
 
 	return (RPCSEC_GSS_NODISPATCH);
+}
+
+/*
+ * Get kern.ipc.tls.enable and kern.ipc.tls.maxlen.
+ */
+bool
+rpctls_getinfo(u_int *maxlenp)
+{
+	u_int maxlen;
+	bool enable;
+	int error;
+	size_t siz;
+
+	siz = sizeof(enable);
+	error = kernel_sysctlbyname(curthread, "kern.ipc.tls.enable",
+	    &enable, &siz, NULL, 0, NULL, 0);
+	if (error != 0)
+		return (false);
+	siz = sizeof(maxlen);
+	error = kernel_sysctlbyname(curthread, "kern.ipc.tls.maxlen",
+	    &maxlen, &siz, NULL, 0, NULL, 0);
+	if (error != 0)
+		return (false);
+	*maxlenp = maxlen;
+	return (enable);
 }
 

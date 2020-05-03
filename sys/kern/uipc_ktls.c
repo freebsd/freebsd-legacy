@@ -109,7 +109,7 @@ SYSCTL_INT(_kern_ipc_tls, OID_AUTO, bind_threads, CTLFLAG_RDTUN,
     &ktls_bind_threads, 0,
     "Bind crypto threads to cores or domains at boot");
 
-u_int ktls_maxlen = 16384;
+static u_int ktls_maxlen = 16384;
 SYSCTL_UINT(_kern_ipc_tls, OID_AUTO, maxlen, CTLFLAG_RWTUN,
     &ktls_maxlen, 0, "Maximum TLS record size");
 

@@ -54,6 +54,9 @@ enum clnt_stat	rpctls_srv_disconnect(uint64_t sec, uint64_t usec,
 /* Initialization function for rpcsec_tls. */
 int		rpctls_init(void);
 
+/* Get TLS information function. */
+bool		rpctls_getinfo(u_int *maxlen);
+
 /* String for AUTH_TLS reply verifier. */
 #define	RPCTLS_START_STRING	"STARTTLS"
 

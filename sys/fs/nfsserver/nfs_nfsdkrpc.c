@@ -111,9 +111,6 @@ extern time_t nfsdev_time;
 extern int nfsrv_writerpc[NFS_NPROCS];
 extern volatile int nfsrv_devidcnt;
 extern struct nfsv4_opflag nfsv4_opflag[NFSV42_NOPS];
-#ifdef KERN_TLS
-extern u_int ktls_maxlen;
-#endif
 
 /*
  * NFS server system calls
@@ -125,6 +122,9 @@ nfssvc_program(struct svc_req *rqst, SVCXPRT *xprt)
 	struct nfsrv_descript nd;
 	struct nfsrvcache *rp = NULL;
 	int cacherep, credflavor;
+#ifdef KERN_TLS
+	u_int maxlen;
+#endif
 
 	memset(&nd, 0, sizeof(nd));
 	if (rqst->rq_vers == NFS_VER2) {
@@ -282,9 +282,10 @@ nfssvc_program(struct svc_req *rqst, SVCXPRT *xprt)
 		}
 
 #ifdef KERN_TLS
-		if ((xprt->xp_tls & RPCTLS_FLAGS_HANDSHAKE) != 0)
+		if ((xprt->xp_tls & RPCTLS_FLAGS_HANDSHAKE) != 0 &&
+		    rpctls_getinfo(&maxlen))
 			nd.nd_maxextsiz = min(TLS_MAX_MSG_SIZE_V10_2,
-			    ktls_maxlen);
+			    maxlen);
 #endif
 		cacherep = nfs_proc(&nd, rqst->rq_xid, xprt, &rp);
 		NFSLOCKV4ROOTMUTEX();
