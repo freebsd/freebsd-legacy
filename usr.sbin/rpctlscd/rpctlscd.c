@@ -55,6 +55,7 @@ __FBSDID("$FreeBSD$");
 #include <rpc/rpc_com.h>
 #include <rpc/rpcsec_tls.h>
 
+#include <openssl/opensslconf.h>
 #include <openssl/bio.h>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
@@ -72,7 +73,7 @@ __FBSDID("$FreeBSD$");
 #define	_PATH_RPCTLSCDPID	"/var/run/rpctlscd.pid"
 #endif
 #ifndef	_PREFERRED_CIPHERS
-#define	_PREFERRED_CIPHERS	"SHA384:SHA256:!CAMELLIA"
+#define	_PREFERRED_CIPHERS	"AES128-GCM-SHA256"
 #endif
 
 static struct pidfh	*rpctls_pfh = NULL;
@@ -382,7 +383,6 @@ rpctlscd_disconnect_1_svc(struct rpctlscd_disconnect_arg *argp,
 		rpctlscd_verbose_out("rpctlscd_disconnect: fd=%d closed\n",
 		    slp->s);
 		LIST_REMOVE(slp, next);
-		SSL_shutdown(slp->ssl);
 		SSL_free(slp->ssl);
 		/*
 		 * For RPC-over-TLS, this upcall is expected
@@ -560,7 +560,6 @@ rpctls_connect(SSL_CTX *ctx, int s)
 	if (cert == NULL) {
 		rpctlscd_verbose_out("rpctls_connect: get peer"
 		    " certificate failed\n");
-		SSL_shutdown(ssl);
 		SSL_free(ssl);
 		return (NULL);
 	}
@@ -585,17 +584,24 @@ rpctls_connect(SSL_CTX *ctx, int s)
 			    "failed %s\n", hostnam, cp, cp2,
 			    X509_verify_cert_error_string(ret));
 		}
-		SSL_shutdown(ssl);
 		SSL_free(ssl);
 		return (NULL);
 	}
 
-#ifdef notnow
+	/* Check to see if ktls is enabled on the connection. */
 	ret = BIO_get_ktls_send(SSL_get_wbio(ssl));
-	fprintf(stderr, "ktls_send=%d\n", ret);
-	ret = BIO_get_ktls_recv(SSL_get_rbio(ssl));
-	fprintf(stderr, "ktls_recv=%d\n", ret);
+	rpctlscd_verbose_out("rpctls_connect: BIO_get_ktls_send=%d\n", ret);
+	if (ret != 0) {
+		ret = BIO_get_ktls_recv(SSL_get_rbio(ssl));
+		rpctlscd_verbose_out("rpctls_connect: BIO_get_ktls_recv=%d\n", ret);
+	}
+#ifdef notnow
+	if (ret == 0) {
+		SSL_free(ssl);
+		return (NULL);
+	}
 #endif
+
 	return (ssl);
 }
 

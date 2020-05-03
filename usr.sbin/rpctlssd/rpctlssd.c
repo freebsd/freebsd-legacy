@@ -56,6 +56,7 @@ __FBSDID("$FreeBSD$");
 #include <rpc/rpc_com.h>
 #include <rpc/rpcsec_tls.h>
 
+#include <openssl/opensslconf.h>
 #include <openssl/bio.h>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
@@ -74,7 +75,7 @@ __FBSDID("$FreeBSD$");
 #define	_PATH_RPCTLSSDPID	"/var/run/rpctlssd.pid"
 #endif
 #ifndef	_PREFERRED_CIPHERS
-#define	_PREFERRED_CIPHERS	"SHA384:SHA256:!CAMELLIA"
+#define	_PREFERRED_CIPHERS	"AES128-GCM-SHA256"
 #endif
 
 static struct pidfh	*rpctls_pfh = NULL;
@@ -663,6 +664,21 @@ rpctlssd_verbose_out("%s\n", cp2);
 			rpctlssd_verbose_out("rpctls_server: "
 			    "No peer certificate\n");
 	}
+
+	/* Check to see that ktls is working for the connection. */
+	ret = BIO_get_ktls_send(SSL_get_wbio(ssl));
+	rpctlssd_verbose_out("rpctls_server: BIO_get_ktls_send=%d\n", ret);
+	if (ret != 0) {
+		ret = BIO_get_ktls_recv(SSL_get_rbio(ssl));
+		rpctlssd_verbose_out("rpctls_server: BIO_get_ktls_recv=%d\n", ret);
+	}
+#ifdef notnow
+	if (ret == 0) {
+		SSL_free(ssl);
+		return (NULL);
+	}
+#endif
+
 	return (ssl);
 }
 

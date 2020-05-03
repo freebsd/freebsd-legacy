@@ -8,7 +8,10 @@ SRCS=	rpctlscd.c rpctlscd.h rpctlscd_svc.c rpctlscd_xdr.c
 
 CFLAGS+= -I.
 
-LIBADD=	ssl crypto
+CFLAGS+= -I/usr/ktls/include
+LDFLAGS+= -L/usr/ktls/lib
+
+LIBADD=	ssl crypto util
 
 CLEANFILES= rpctlscd_svc.c rpctlscd_xdr.c rpctlscd.h
 
