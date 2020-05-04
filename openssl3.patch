@@ -1,18 +1,22 @@
 --- conf.h.sav	2020-05-02 08:36:38.880690000 -0700
-+++ conf.h	2020-05-02 08:37:15.173793000 -0700
-@@ -34,6 +34,7 @@ typedef struct {
++++ conf.h	2020-04-03 13:13:12.140750000 -0700
+@@ -33,9 +33,6 @@ typedef struct {
+     char *value;
  } CONF_VALUE;
  
- DEFINE_OR_DECLARE_STACK_OF(CONF_VALUE)
-+typedef struct conf_module_st CONF_MODULE;
- DEFINE_OR_DECLARE_STACK_OF(CONF_MODULE)
- 
+-DEFINE_OR_DECLARE_STACK_OF(CONF_VALUE)
+-DEFINE_OR_DECLARE_STACK_OF(CONF_MODULE)
+-
  DEFINE_LHASH_OF(CONF_VALUE);
-@@ -58,7 +59,6 @@ struct conf_method_st {
- /* Module definitions */
+ 
+ struct conf_st;
+@@ -59,6 +56,9 @@ struct conf_method_st {
  
  typedef struct conf_imodule_st CONF_IMODULE;
--typedef struct conf_module_st CONF_MODULE;
+ typedef struct conf_module_st CONF_MODULE;
++
++DEFINE_OR_DECLARE_STACK_OF(CONF_VALUE)
++DEFINE_OR_DECLARE_STACK_OF(CONF_MODULE)
  
  STACK_OF(CONF_IMODULE);
  
