@@ -1865,6 +1865,7 @@ ktls_decrypt(struct socket *so)
 	sorwakeup_locked(so);
 
 deref:
+	free(iov, M_KTLS);
 	SOCKBUF_UNLOCK_ASSERT(sb);
 
 	CURVNET_SET(so->so_vnet);
