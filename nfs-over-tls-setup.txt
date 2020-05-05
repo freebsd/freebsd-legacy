@@ -1,0 +1,348 @@
+The first part of this document covers how to set up a test environment.
+This will keep changing as things get merged into FreeBSD's head.
+Note that, for now, the NFS over TLS uses TLS1.2 and not TLS1.3.
+This will change once the kernel tls knows how to do 1.3.
+
+Setup for testing. For now, setting up test machine(s) is a bit
+awkward, but hopefully this lists all the steps.
+- Install a recent FreeBSD current system on amd64 system(s).
+  There are many ways to do this, but downloading and installing a
+  snapshot is probably the easiest.
+  Go anonymous ftp onto ftp.freebsd.org
+  cd pub/FreeBSD/snapshots/ISO-IMAGES/13.0
+  - You want to get an install image with "amd64" in it (thats 64bit x86).
+    The higher the 6digit number, the newer the snapshot.
+    An iso with "disc1" in the name is a full install image that can be
+    burned onto a DVD. (I haven't done other types of installs, but there
+    are several others.)
+  - Burn the iso onto a DVD (or whatever).
+  - Install it on a 64bit x86 system. When it asks, include installation
+    of src.
+
+(For here on, you might as well login as root.)
+Now, you will need a subversion client on some machine. If you do not
+already have one, log into the newly installed FreeBSD system and
+# pkg install subversion
+- It will probably ask you to install "pkg" first and then it should work.
+
+If you don't yet have /usr/src, you can use "svn" to get it:
+# cd /usr/src
+# svn checkout http://svn.freebsd.org/base/head .
+
+Use "svn" to download the modified sources into /usr/nfs-over-tls.
+# cd /usr
+# mkdir nfs-over-tls
+# cd nfs-over-tls
+# svn checkout http://svn.freebsd.org/base/projects/nfs-over-tls .
+
+Now, you can build/install the modified kernel. Here's the "cheater" way
+I do it.
+# cd /usr/src
+# mv sys sys.old
+# ln -s /usr/nfs-over-tls/sys sys
+# cd /usr/src/sys/amd64/conf
+# config MYTEST
+# cd ../compile/MYTEST
+# make LD=ld.lld SRCTOP=/usr/src cleandepend
+# make LD=ld.lld SRCTOP=/usr/src depend
+# make LD=ld.lld SRCTOP=/usr/src
+# make LD=ld.lld KERNEL=nkernel install
+- This puts the new kernel in /boot/nkernel. It can be booted by selecting
+  '3' at the boot menu and then typing "boot nkernel".
+
+Fix the include files. Here's my "cheat" way of doing this.
+# cd /usr/include
+# mv sys sys.old
+# ln -s /usr/nfs-over-tls/sys/sys sys
+# mv fs fs.old
+# ln -s /usr/nfs-over-tls/sys/fs fs
+# mv netinet netinet.old
+# ln -s /usr/nfs-over-tls/sys/netinet netinet
+# cd rpc
+# cp /usr/nfs-over-tls/sys/rpc/rpcsec_tls.h .
+- This should be enough to allow userspace building.
+
+Now, you need jhb@'s patched openssl3 source tree, so you can build it.
+- If you don't already have one, get a github account.
+  (If you don't have git anywhere, I think "pkg install git" will get it
+   installed.)
+  - You will need perl5.
+# pkg install perl
+# cd /usr
+# mkdir openssl
+# cd openssl
+# git clone https://github.com/bsdjhb/openssl.git
+# cd openssl (or not, I can't remember if you end up with another openssl dir?)
+# git checkout ktls_rx
+# mkdir obj
+# cd obj
+# ../config --prefix=/usr/ktls --openssldir=/usr/ktls enable-ktls
+# make
+# make install
+- This installs the patched openssl3 under /usr/ktls. I only use this
+  stuff for linking the daemons and use the regular openssl1.1.1 otherwise.
+
+Now, you need to patch the include files in /usr/ktls/include/openssl.
+(clang doesn't like the DEFINE_OR_DECLARE_STACK_OF(XX) before the typedef for XX.)
+# cd /usr/ktls/include/openssl
+# patch -p0 < /usr/nfs-over-tls/openssl3.patch
+
+And now you should be able to build/install the utilities.
+(You'll get warnings about SSL_CTX_load_verify_locations() deprecated.
+ Thats ok for now.)
+# cd /usr/nfs-over-tls/usr.sbin/rpctlssd
+# make SRCTOP=/usr/nfs-over-tls
+# cp rpctlssd /usr/sbin
+# cp rpctlssd.8.gz /usr/share/man/man8
+# cd ../rpctlscd
+# make SRCTOP=/usr/nfs-over-tls
+# cp rpctlscd /usr/sbin
+# cp rpctlscd.8.gz /usr/share/man/man8
+# cd ..
+# ln -s /usr/src/usr.sbin/mount mount
+# cd mountd
+# make SRCTOP=/usr/nfs-over-tls
+# cp mountd /usr/sbin
+# cp exports.5.gz /usr/share/man/man5
+
+Almost done. Here's a few more things you need to do:
+# cd /etc
+- edit sysctl.conf and add these two lines
+kern.ipc.tls.enable=1
+kern.ipc.mb_use_ext_pgs=1
+- edit rc.conf and add this line (if you already have a line for ldconfig_paths,
+   add /usr/ktls/lib to the line)
+ldconfig_paths="/usr/lib/compat /usr/local/lib /usr/local/lib/compat/pkg /usr/ktls/lib"
+Then reboot the system with nkernel.
+
+Every time you boot and are going to be doing testing, login as root and type
+# kldload ktls_ocf
+You should now be finally ready to configure and run a TLS mount.
+(If you have problems or I forgot any steps, feel free to email me
+ at rmacklem@uoguelph.ca.)
+
+First, a bit of background. NFS-over-TLS uses the KERNEL_TLS and
+will only work on architectures that support a direct map, such
+as amd64 (not i386).
+Then daemons must be running on the NFS server(s) and NFS client(s)
+for NFS-over-TLS to work. rpctlssd(8) for the server(s) and rpctlscd(8)
+for the client(s).
+Then you will have to create x509 certificate for at least the NFS
+server(s) and, optionally, some or all of the NFS clients.
+
+There are many ways to create signed certificates for TLS, but here
+is the simple method I've used for a site local CA, using only the
+openssl command that is in FreeBSD.
+I am far from an expert in this area, so there are almost certainly
+better ways to do this. (Some have mentioned easyrsa in the openVPN
+software package, but I haven't tried it.)
+
+I have only applied this one simple patch to /etc/ssl/openssl.cnf:
+--- openssl.cnf.sav	2020-03-31 07:41:12.545812000 -0700
++++ openssl.cnf	2020-04-01 10:55:31.682616000 -0700
+@@ -66,7 +66,7 @@ name_opt 	= ca_default		# Subject Name options
+ cert_opt 	= ca_default		# Certificate field options
+ 
+ # Extension copying option: use with caution.
+-# copy_extensions = copy
++copy_extensions = copy
+ 
+ # Extensions to add to a CRL. Note: Netscape communicator chokes on V2 CRLs
+ # so this is commented out by default to leave a V1 CRL.
+
+You will probably want to make additional changes to /etc/ssl/openssl.cnf.
+
+First, I create a simple subtree of files under a top level directory
+(I use /root) with the following commands:
+# mkdir demoCA
+# cd demoCA
+# cat /dev/null > index.txt
+# echo 01 > serial
+# echo 01 > crlnumber
+# mkdir private
+# chmod 700 private
+# mkdir newcerts
+
+Now, I use the following commands to create certifcates and a
+Certificate Revocation List (CRL).
+(In the directory above "demoCA".)
+1 - Create the Certificate Authority (CA) root key.
+# openssl genrsa -out demoCA/private/cakey.pem
+
+2 - Create a CA root certificate.
+# openssl req -new -x509 -key demoCA/private/cakey.pem -out demoCA/cacert.pem
+--> There will be several questions to answer. As far as I know, you can
+    put just about anything in these fields.
+
+Now, you should be ready to create/sign certificates for the NFS server/client(s).
+3 - Create a key for the certificate.
+# openssl genrsa -out key.pem
+(If this certificate is for a client laptop, you might want to use the "-aes256"
+ option, so the key.pem file is encrypted using a passphrase.
+ This implies that the passphrase will need to be entered when the
+ rpctlscd(8) daemon is started on the client, but that the key cannot
+ be used without the passphrase, if it is compromised.)
+
+4 - Create a Certificate Signing Request (CSR).
+# openssl req -new -key key.pem -addext "subjectAltName=<name_val>" -out req.pem
+--> Similar to #2, you will need to answer the questions.
+    The CN must be something different than used for #2.
+    Typically it would be the FQDN of the machine, if it has one.
+    The other fields can be the same as #2 and some (maybe all?)
+    must be the same.
+    <name_val> is the messy part. The subjectAltName should have all
+    the FQDN name(s) for the machine, if it has any.
+    These are specified via DNS:<FQDN> and are separated by ','s if
+    there are multiple entries.
+    If you are using the "-u" option on the server and this
+    certificate is for a client where you wish all RPCs to be done
+    as a specific "user" on the NFS server, you also need to put an
+    entry in <name_val> of the form otherName:1.X;UTF8:<user@dns_domain>.
+
+Here are a few examples:
+For a server with a FQDN of nfsv4-server.uoguelph.ca:
+# openssl req -new -key key.pem -addext "subjectAltName=DNS:nfsv4-server.uoguelph.ca" -out req.pem
+
+For a server with two network interfaces, where one reverse DNS resolves
+to nfsv4-server.uoguelph.ca and the other to nfsv4-server2.uoguelph.ca
+# openssl req -new -key key.pem -addext "subjectAltName=DNS:nfsv4-server.uoguelph.ca,DNS:nfsv4-server2.uoguelph.ca" -out req.pem
+
+For a client where you wish all RPCs to be done as the user rmacklem
+on the above server:
+# openssl req -new -key key.pem -addext "subjectAltName=otherName:1.2.3.4.6.9;UTF8:rmacklem@uoguelph.ca" -out req.pem
+
+For a client similar to the above, but has a FQDN of nfsv4-client.uoguelph.ca:
+# openssl req -new -key key.pem -addext "subjectAltName=DNS:nfsv4-client.uoguelph.ca,othername:1.2.3.4.6.9;UTF8:rmacklem@uoguelph.ca" -out req.pem
+
+If you want to look at the CSR:
+# openssl req -in req.pem -noout -text
+
+5 - Sign the CSR with the CA.
+# openssl ca -in req.pem -out cert.pem
+(A copy of cert.pem will be kept in demoCA/newcerts with the
+ name <serial#>.pem.)
+
+You can now copy key.pem and cert.pem to the directory
+/etc/rpctlssd on the server(s) or /etc/rpctlscd on the client(s).
+
+If you want to look at any certificate, you can use the command...
+# openssl x509 -in cert.pem -noout -text
+
+For a minimal setup where you do not want certificates in the client(s),
+all you need to do is #3-5 for each of the NFS servers.
+If you want certificates for clients, just repeat #3-5 for each of them.
+
+If you have created certificates for any of your NFS client(s), you
+probably want to create a Certificate Revocation List (CRL) as well.
+The initial file will not have any revocations in it, but can be
+provided to either/both of the rpctlssd(8) and rpctlscd(8) daemons,
+then it can be reloaded by posting a SIGHUP to the daemon(s) when
+updated.  This avoids restarting the daemon(s), which is not a good
+thing to do while there are NFS-over-TLS mount(s) to the NFS server.
+
+6 - Create a new/empty CRL.
+# openssl ca -gencrl -out demoCA/crl.pem
+
+You can look at this CRL with the command...
+# openssl crl -in crl.pem -noout -text
+
+If you need to revoke a certifcate at some time.
+# openssl ca -revoke <cert.pem>      where <cert.pem> is the
+                                     certificate being revoked
+Then do #6 again and copy it to the NFS server(s) and NFS client(s)
+that are using it. (More on where it is used further down it this doc.)
+
+Now, when will you want certificates for some/all of the client(s)?
+
+One case might be laptops. They do not have fixed IP addresses/DNS names,
+so exports(5) cannot be applied to them easily.  You might find that the
+client having a certificate signed by your CA is sufficient assurance
+of its identity to allow it to do an NFS mount from any IP address.
+For this case, you can also set the otherName field of the
+subjectAltName to "user@dns_domain" so that all RPCs will be
+performed on the server as "user", if you specify the "-u"
+command line option for the rpctlssd(8) daemon on the NFS server.
+(If you do not want this feature simply do not set the otherName
+ field of subjectAltName or do not set "-u" on the rpctlssd(8) daemon.)
+
+Another case might be where you do not trust the client to use the
+correct IP address when mounting the NFS server, although the client
+has a well known fixed IP address/DNS name.
+For this case, you can also set the DNS field of subjectAltName to
+the FQDN of the client and enable the server to check this via
+the "-h" option.
+The FQDN in the client's certificate may have a wildcard "*" in
+it, depending on what command line options are specified for
+the server's rpctlssd.
+
+For client(s) where you find controlling mount access via the
+client's IP address using the exports(5) file is sufficient
+and you are not using the "-u" command line option on the
+server's rpctlssd, the client does not need to have a certificate.
+You can still allow/require the client to use TLS so that
+the RPC traffic is encrypted on the wire.
+
+Once you have key(s) and certificate(s) in the /etc/rpctlssd directory
+on the NFS server(s) and in the /etc/rpctlscd directory on
+the NFS client(s), you need to set the appropriate command
+line option(s) for the daemons.
+
+The man pages for rpctlscd(8) and rpctlssd(8) cover the command line
+options, but here are a few examples.
+
+For an NFS server:
+- An NFS server where no clients have certificates.
+# rpctlssd
+
+- An NFS server where some/all clients have certificates and you wish
+  to verify them against your site local CA created above.
+# rpctlssd -m -l /root/demoCA/cacert.pem -r /root/demoCA/crl.pem
+
+- An NFS server where all clients have certificates and
+  FQDN names that are in the certificates (in either the subjectAltName DNS
+  field or subjectName CN field) and you want to check the client's IP
+  address reverse DNS maps to the FQDN. The FQDN in the client's
+  certificate cannot have a wildcard "*" in it.
+# rpctlssd -m -h -l /root/demoCA/cacert.pem -r /root/demoCA/crl.pem
+
+- Similar to the above, but the FQDN in the client's
+  certificate may have a wildcard "*" in it, which will only match a
+  single component of the client's reverse DNS name.
+  For example, an FQDN set to "*.uoguelph.ca" will match "laptop21.uoguelph.ca",
+  but not "laptop3.cis.uoguelph.ca".
+# rpctlssd -m -h -w -l /root/demoCA/cacert.pem -r /root/demoCA/crl.pem
+
+- Similar to the above, except that a wildcard "*" in the FQDN can match
+  multiple fields. For example, if the FQDN is set to "*.uoguelph.ca",
+  it would match "laptop3.cis.uoguelph.ca" as well as "laptop21.uoguelph.ca".
+# rpctlssd -m -h -W -l /root/demoCA/cacert.pem -r /root/demoCA/crl.pem
+
+- An NFS server where some client(s) have certificates with the otherName field
+  of the subjectAltName set to "user@dns_domain" and you want those clients
+  to use the <uid, gid_list> for "user" in the password database for
+  all RPCs on the connection, ignoring the credentials in the RPC header.
+# rpctlssd -m -u -l /root/demoCA/cacert.pem -r /root/demoCA/crl.pem
+
+For an NFS client:
+- An NFS client without a certificate.
+# rpctlscd
+
+- An NFS client with a certificate and key in /etc/rpctlscd on the client
+  created by the site local CA above that the server can use for verification.
+# rpctlscd -m
+
+- An NFS client which wants to verify the NFS server's certificate.
+  (This requires that the cacert.pem and crl.pem
+  be copied onto the client from the CA site.)
+  The FQDN in the server's certificate must match the reverse DNS name for
+  the server's IP address and there cannot be a wildcard in the FQDN.
+# rpctlscd -l <path of cacert.pem> -r <path of crl.pem>
+
+- An NFS client that has a certificate and key in /etc/rpctlscd and
+  also wishes to verify the NFS server's certificate as above.
+# rpctlscd -m -l <path of cacert.pem> -r <path of crl.pem>
+
+If you use either the "-m" and/or "-v" options, you probably want to
+modify your /etc/syslog.conf so that "LOG_INFO | LOG_DAEMON" goes somewhere.
+For "-m" it will log failed certificate verifications there and for "-v"
+it will log a lot of other stuff, as well.
