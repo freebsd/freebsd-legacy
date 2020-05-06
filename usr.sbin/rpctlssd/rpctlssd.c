@@ -431,7 +431,6 @@ rpctlssd_disconnect_1_svc(struct rpctlssd_disconnect_arg *argp,
 		rpctlssd_verbose_out("rpctlssd_disconnect fd=%d closed\n",
 		    slp->s);
 		LIST_REMOVE(slp, next);
-		SSL_shutdown(slp->ssl);
 		SSL_free(slp->ssl);
 		/*
 		 * For RPC-over-TLS, this upcall is expected
