@@ -40,15 +40,8 @@ I do it.
 # cd /usr/src
 # mv sys sys.old
 # ln -s /usr/nfs-over-tls/sys sys
-# cd /usr/src/sys/amd64/conf
-# config MYTEST
-# cd ../compile/MYTEST
-# make LD=ld.lld SRCTOP=/usr/src cleandepend
-# make LD=ld.lld SRCTOP=/usr/src depend
-# make LD=ld.lld SRCTOP=/usr/src
-# make LD=ld.lld KERNEL=nkernel install
-- This puts the new kernel in /boot/nkernel. It can be booted by selecting
-  '3' at the boot menu and then typing "boot nkernel".
+# make buildkernel
+# make installkernel
 
 Fix the include files. Here's my "cheat" way of doing this.
 # cd /usr/include
