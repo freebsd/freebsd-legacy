@@ -894,6 +894,8 @@ clnt_vc_destroy(CLIENT *cl)
 			soclose(so);
 		}
 	}
+	m_freem(ct->ct_record);
+	m_freem(ct->ct_raw);
 	mem_free(ct, sizeof(struct ct_data));
 	if (cl->cl_netid && cl->cl_netid[0])
 		mem_free(cl->cl_netid, strlen(cl->cl_netid) +1);
@@ -925,6 +927,8 @@ clnt_vc_soupcall(struct socket *so, void *arg, int waitflag)
 	SVCXPRT *xprt;
 	struct cf_conn *cd;
 	u_int rawlen;
+	struct cmsghdr *cmsg;
+	struct tls_get_record tgr;
 
 	CTASSERT(sizeof(xid_plus_direction) == 2 * sizeof(uint32_t));
 
@@ -944,7 +948,9 @@ clnt_vc_soupcall(struct socket *so, void *arg, int waitflag)
 	 * soreceive() is called.
 	 */
 	if (ct->ct_upcallrefs > 0)
+{ printf("soup another\n");
 		return (SU_OK);
+}
 	ct->ct_upcallrefs++;
 
 	/*
@@ -954,10 +960,10 @@ clnt_vc_soupcall(struct socket *so, void *arg, int waitflag)
 	for (;;) {
 		uio.uio_resid = 1000000000;
 		uio.uio_td = curthread;
-		m = NULL;
+		m2 = m = NULL;
 		rcvflag = MSG_DONTWAIT | MSG_SOCALLBCK;
 		SOCKBUF_UNLOCK(&so->so_rcv);
-		error = soreceive(so, NULL, &uio, &m, NULL, &rcvflag);
+		error = soreceive(so, NULL, &uio, &m, &m2, &rcvflag);
 		SOCKBUF_LOCK(&so->so_rcv);
 
 		if (error == EWOULDBLOCK) {
@@ -980,6 +986,7 @@ clnt_vc_soupcall(struct socket *so, void *arg, int waitflag)
 			error = ECONNRESET;
 		}
 		if (error != 0) {
+		wakeup_all:
 			mtx_lock(&ct->ct_lock);
 			ct->ct_error.re_status = RPC_CANTRECV;
 			ct->ct_error.re_errno = error;
@@ -989,6 +996,30 @@ clnt_vc_soupcall(struct socket *so, void *arg, int waitflag)
 			}
 			mtx_unlock(&ct->ct_lock);
 			goto out;
+		}
+
+		/* Process any record header(s). */
+		if (m2 != NULL) {
+if (m2->m_next != NULL) printf("EEK! list of controls\n");
+			cmsg = mtod(m2, struct cmsghdr *);
+			if (cmsg->cmsg_type == TLS_GET_RECORD &&
+			    cmsg->cmsg_len == CMSG_LEN(sizeof(tgr))) {
+				memcpy(&tgr, CMSG_DATA(cmsg), sizeof(tgr));
+				/*
+				 * For now, just toss non-application
+				 * data records.
+				 * In the future, there may need to be
+				 * an upcall done to the daemon, but
+				 * it cannot be done here.
+				 */
+				if (tgr.tls_type != TLS_RLTYPE_APP) {
+printf("Got weird type=%d\n", tgr.tls_type);
+					m_freem(m);
+					m_free(m2);
+					continue;
+				}
+			}
+			m_free(m2);
 		}
 
 		if (ct->ct_raw != NULL)
@@ -1013,8 +1044,22 @@ clnt_vc_soupcall(struct socket *so, void *arg, int waitflag)
 			ct->ct_record = NULL;
 			ct->ct_record_resid = header & 0x7fffffff;
 			ct->ct_record_eor = ((header & 0x80000000) != 0);
-if (ct->ct_record_resid < 20 || ct->ct_record_resid > 70000 || !ct->ct_record_eor)
-printf("EEK!! recres=%zd eor=%d\n", ct->ct_record_resid, ct->ct_record_eor);
+			if (ct->ct_record_resid < 20 ||
+			    ct->ct_record_resid > 150000 ||
+			    !ct->ct_record_eor) {
+				printf("clnt_vc_soupcall: bogus record "
+				    "mark recres=%zd eor=%d\n",
+				    ct->ct_record_resid, ct->ct_record_eor);
+				/*
+				 * Connection is messed up. All we can
+				 * do now is shut it down and let
+				 * clnt_reconnect_XXX establish a new
+				 * connection.
+				 * This should never happen, but??
+				 */
+				error = ECONNRESET;
+				goto wakeup_all;
+			}
 			m_adj(ct->ct_raw, sizeof(uint32_t));
 			rawlen -= sizeof(uint32_t);
 		} else {
@@ -1036,8 +1081,22 @@ printf("EEK!! recres=%zd eor=%d\n", ct->ct_record_resid, ct->ct_record_eor);
 			} else {
 				m = m_split(ct->ct_raw, ct->ct_record_resid,
 				    M_NOWAIT);
-				if (m == NULL)
-					break;
+				if (m == NULL) {
+printf("soup m_split returned NULL\n");
+					/*
+					 * What to do now?
+					 * The system is out of mbufs.
+					 * I think it best to close this
+					 * connection and allow
+					 * clnt_reconnect_XXX() to try
+					 * and establish a new one.
+					 * If we just return and there are
+					 * no more data received, the
+					 * connection will be hung.
+					 */
+					error = ECONNRESET;
+					goto wakeup_all;
+				}
 				if (ct->ct_record != NULL)
 					m_last(ct->ct_record)->m_next =
 					    ct->ct_raw;
@@ -1076,9 +1135,11 @@ printf("EEK!! recres=%zd eor=%d\n", ct->ct_record_resid, ct->ct_record_eor);
 				    ntohl(xid_plus_direction[1]);
 				/* Check message direction. */
 				if (xid_plus_direction[1] == CALL) {
+printf("Got backchannel callback\n");
 					/* This is a backchannel request. */
 					mtx_lock(&ct->ct_lock);
 					xprt = ct->ct_backchannelxprt;
+printf("backxprt=%p\n", xprt);
 					if (xprt == NULL) {
 						mtx_unlock(&ct->ct_lock);
 						/* Just throw it away. */
