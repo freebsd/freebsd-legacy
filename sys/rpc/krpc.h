@@ -107,6 +107,7 @@ struct ct_data {
 	uint64_t	ct_sslusec;
 	uint64_t	ct_sslrefno;
 	bool_t		ct_dontrcv;	/* TRUE to block receiving */
+	struct mbuf	*ct_raw;	/* Raw mbufs recv'd */
 };
 
 struct cf_conn {  /* kept in xprt->xp_p1 for actual connection */
