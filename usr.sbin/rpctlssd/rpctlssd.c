@@ -153,6 +153,12 @@ main(int argc, char **argv)
 		warn("cannot open or create pidfile");
 	}
 
+	if (modfind("ktls_ocf") < 0) {
+		/* Not present in kernel, try loading it */
+		if (kldload("ktls_ocf") < 0 || modfind("ktls_ocf") < 0)
+			errx(1, "Cannot load ktls_ocf");
+	}
+
 	/* Get the time when this daemon is started. */
 	gettimeofday(&tm, &tz);
 	rpctls_ssl_sec = tm.tv_sec;
