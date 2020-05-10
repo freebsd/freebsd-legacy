@@ -1059,8 +1059,8 @@ nfsrvd_write(struct nfsrv_descript *nd, __unused int isdgram,
 	 * which is to return ok so long as there are no permission problems.
 	 */
 	if (retlen > 0) {
-		nd->nd_repstat = nfsvno_write(vp, off, retlen, &stable, nd,
-		    p);
+		nd->nd_repstat = nfsvno_write(vp, off, retlen, &stable,
+		    nd->nd_md, nd->nd_dpos, nd->nd_cred, p);
 		error = nfsm_advance(nd, NFSM_RNDUP(retlen), -1);
 		if (error)
 			goto nfsmout;

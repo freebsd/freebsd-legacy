@@ -123,14 +123,14 @@ static void nfsrv_pnfsremovesetup(struct vnode *, NFSPROC_T *, struct vnode **,
 static void nfsrv_pnfsremove(struct vnode **, int, char *, fhandle_t *,
     NFSPROC_T *);
 static int nfsrv_proxyds(struct vnode *, off_t, int, struct ucred *,
-    struct thread *, int, struct mbuf **, struct nfsrv_descript *,
+    struct thread *, int, struct mbuf **, char *,
     struct mbuf **, struct nfsvattr *, struct acl *, off_t *, int, bool *);
 static int nfsrv_setextattr(struct vnode *, struct nfsvattr *, NFSPROC_T *);
 static int nfsrv_readdsrpc(fhandle_t *, off_t, int, struct ucred *,
     NFSPROC_T *, struct nfsmount *, struct mbuf **, struct mbuf **);
 static int nfsrv_writedsrpc(fhandle_t *, off_t, int, struct ucred *,
     NFSPROC_T *, struct vnode *, struct nfsmount **, int, struct mbuf **,
-    struct nfsrv_descript *, int *);
+    char *, int *);
 static int nfsrv_allocatedsrpc(fhandle_t *, off_t, off_t, struct ucred *,
     NFSPROC_T *, struct vnode *, struct nfsmount **, int, int *);
 static int nfsrv_setacldsrpc(fhandle_t *, struct ucred *, NFSPROC_T *,
@@ -1122,7 +1122,7 @@ nfsrv_createiovecw_extpgs(int retlen, struct mbuf *m, char *cp, int dextpg,
  */
 int
 nfsvno_write(struct vnode *vp, off_t off, int retlen, int *stable,
-    struct nfsrv_descript *nd, struct thread *p)
+    struct mbuf *mp, char *cp, struct ucred *cred, struct thread *p)
 {
 	struct iovec *iv;
 	int cnt, ioflags, error;
@@ -1133,25 +1133,19 @@ nfsvno_write(struct vnode *vp, off_t off, int retlen, int *stable,
 	 * Attempt to write to a DS file. A return of ENOENT implies
 	 * there is no DS file to write.
 	 */
-	error = nfsrv_proxyds(vp, off, retlen, nd->nd_cred, p,
-	    NFSPROC_WRITEDS, &nd->nd_md, nd, NULL, NULL, NULL,
-	    NULL, 0, NULL);
+	error = nfsrv_proxyds(vp, off, retlen, cred, p, NFSPROC_WRITEDS,
+	    &mp, cp, NULL, NULL, NULL, NULL, 0, NULL);
 	if (error != ENOENT) {
 		*stable = NFSWRITE_FILESYNC;
 		return (error);
 	}
 
+
 	if (*stable == NFSWRITE_UNSTABLE)
 		ioflags = IO_NODELOCKED;
 	else
 		ioflags = (IO_SYNC | IO_NODELOCKED);
-	if ((nd->nd_md->m_flags & M_NOMAP) != 0)
-		error = nfsrv_createiovecw_extpgs(retlen, nd->nd_md,
-		    nd->nd_dpos, nd->nd_dextpg, nd->nd_dextpgsiz,
-		    &iv, &cnt);
-	else
-		error = nfsrv_createiovecw(retlen, nd->nd_md,
-		    nd->nd_dpos, &iv, &cnt);
+	error = nfsrv_createiovecw(retlen, mp, cp, &iv, &cnt);
 	if (error != 0)
 		return (error);
 	uiop->uio_iov = iv;
@@ -1165,7 +1159,7 @@ nfsvno_write(struct vnode *vp, off_t off, int retlen, int *stable,
 	ioflags |= nh->nh_seqcount << IO_SEQSHIFT;
 	/* XXX KDM make this more systematic? */
 	nfsstatsv1.srvbytes[NFSV4OP_WRITE] += uiop->uio_resid;
-	error = VOP_WRITE(vp, uiop, ioflags, nd->nd_cred);
+	error = VOP_WRITE(vp, uiop, ioflags, cred);
 	if (error == 0)
 		nh->nh_nextoff = uiop->uio_offset;
 	free(iv, M_TEMP);
@@ -4670,7 +4664,7 @@ nfsrv_dssetacl(struct vnode *vp, struct acl *aclp, struct ucred *cred,
 
 static int
 nfsrv_proxyds(struct vnode *vp, off_t off, int cnt, struct ucred *cred,
-    struct thread *p, int ioproc, struct mbuf **mpp, struct nfsrv_descript *nd,
+    struct thread *p, int ioproc, struct mbuf **mpp, char *cp,
     struct mbuf **mpp2, struct nfsvattr *nap, struct acl *aclp,
     off_t *offp, int content, bool *eofp)
 {
@@ -4802,7 +4796,7 @@ tryagain:
 			}
 		} else if (ioproc == NFSPROC_WRITEDS)
 			error = nfsrv_writedsrpc(fh, off, cnt, cred, p, vp,
-			    &nmp[0], mirrorcnt, mpp, nd, &failpos);
+			    &nmp[0], mirrorcnt, mpp, cp, &failpos);
 		else if (ioproc == NFSPROC_SETATTR)
 			error = nfsrv_setattrdsrpc(fh, cred, p, vp, &nmp[0],
 			    mirrorcnt, nap, &failpos);
@@ -5180,54 +5174,37 @@ nfsrv_readdsrpc(fhandle_t *fhp, off_t off, int len, struct ucred *cred,
 			}
 	
 			/*
-			 * Now, get rid of mbuf data that preceeds the
-			 * current position.  For a regular mbuf, adjust
-			 * m_data, m_len and then find the end of the read
-			 * data and trim off any mbuf(s) after that.
-			 * For an ext_pgs mbuf, split it and free the first
-			 * and third mbuf chains.
+			 * Now, adjust first mbuf so that any XDR before the
+			 * read data is skipped over.
+			 */
+			trimlen = nd->nd_dpos - mtod(m, char *);
+			if (trimlen > 0) {
+				m->m_len -= trimlen;
+				NFSM_DATAP(m, trimlen);
+			}
+	
+			/*
+			 * Truncate the mbuf chain at retlen bytes of data,
+			 * plus XDR padding that brings the length up to a
+			 * multiple of 4.
 			 */
 			tlen = NFSM_RNDUP(retlen);
-			if ((m->m_flags & M_NOMAP) != 0) {
-				trimlen = nfsm_extpgs_calc_offs(m,
-				    nd->nd_dextpg, nd->nd_dextpgsiz);
-				nd->nd_mrep = mb_splitatpos_ext(m, trimlen,
-				    M_WAITOK);
-				m_freem(m);
-				m = mb_splitatpos_ext(nd->nd_mrep, tlen,
-				    M_WAITOK);
-				m_freem(m);
-				m = m_last(nd->nd_mrep);
-			} else {
-				trimlen = nd->nd_dpos - mtod(m, char *);
-				if (trimlen > 0) {
-					m->m_len -= trimlen;
-					m->m_data += trimlen;
+			do {
+				if (m->m_len >= tlen) {
+					m->m_len = tlen;
+					tlen = 0;
+					m2 = m->m_next;
+					m->m_next = NULL;
+					m_freem(m2);
+					break;
 				}
-	
-				/*
-				 * Truncate the mbuf chain at retlen bytes of
-				 * data, plus XDR padding that brings the
-				 * length up to a multiple of 4.
-				 */
-				do {
-					if (m->m_len >= tlen) {
-						m->m_len = tlen;
-						tlen = 0;
-						m2 = m->m_next;
-						m->m_next = NULL;
-						m_freem(m2);
-						break;
-					}
-					tlen -= m->m_len;
-					m = m->m_next;
-				} while (m != NULL);
-				if (tlen > 0) {
-					printf("nfsrv_readdsrpc: busted mbuf "
-					    "list\n");
-					error = ENOENT;
-					goto nfsmout;
-				}
+				tlen -= m->m_len;
+				m = m->m_next;
+			} while (m != NULL);
+			if (tlen > 0) {
+				printf("nfsrv_readdsrpc: busted mbuf list\n");
+				error = ENOENT;
+				goto nfsmout;
 			}
 			*mpp = nd->nd_mrep;
 			*mpendp = m;
@@ -5391,13 +5368,12 @@ start_writedsdorpc(void *arg, int pending)
 static int
 nfsrv_writedsrpc(fhandle_t *fhp, off_t off, int len, struct ucred *cred,
     NFSPROC_T *p, struct vnode *vp, struct nfsmount **nmpp, int mirrorcnt,
-    struct mbuf **mpp, struct nfsrv_descript *nd, int *failposp)
+    struct mbuf **mpp, char *cp, int *failposp)
 {
 	struct nfsrvwritedsdorpc *drpc, *tdrpc = NULL;
 	struct nfsvattr na;
-	struct mbuf *m, *m1, *m2;
+	struct mbuf *m;
 	int error, i, offs, ret, timo;
-	bool gotnomap;
 
 	NFSD_DEBUG(4, "in nfsrv_writedsrpc\n");
 	KASSERT(*mpp != NULL, ("nfsrv_writedsrpc: NULL mbuf chain"));
@@ -5406,25 +5382,9 @@ nfsrv_writedsrpc(fhandle_t *fhp, off_t off, int len, struct ucred *cred,
 		tdrpc = drpc = malloc(sizeof(*drpc) * (mirrorcnt - 1), M_TEMP,
 		    M_WAITOK);
 
-	NFSD_DEBUG(4, "nfsrv_writedsrpc: mcopy len=%d\n", len);
-
-	/*
-	 * For M_NOMAP mbufs, the mbuf chain needs to be split into 3 chains
-	 * so that m_copym() can be done with offs == 0 and M_COPYALL.
-	 * *mpp - Everything that preceeds the data to be written.
-	 * m1 - The data to be written.
-	 * m2 - Everything that follows the data to be written.
-	 */
-	m1 = *mpp;
-	gotnomap = false;
-	if ((m1->m_flags & M_NOMAP) != 0) {
-		gotnomap = true;
-		offs = nfsm_extpgs_calc_offs(nd->nd_md, nd->nd_dextpg,
-		    nd->nd_dextpgsiz);
-		m1 = mb_splitatpos_ext(m1, offs, M_WAITOK);
-		m2 = mb_splitatpos_ext(m1, NFSM_RNDUP(len), M_WAITOK);
-	} else
-		offs = nd->nd_dpos - mtod(m1, char *);
+	/* Calculate offset in mbuf chain that data starts. */
+	offs = cp - mtod(*mpp, char *);
+	NFSD_DEBUG(4, "nfsrv_writedsrpc: mcopy offs=%d len=%d\n", offs, len);
 
 	/*
 	 * Do the write RPC for every DS, using a separate kernel process
@@ -5441,11 +5401,7 @@ nfsrv_writedsrpc(fhandle_t *fhp, off_t off, int len, struct ucred *cred,
 		tdrpc->p = p;
 		tdrpc->inprog = 0;
 		tdrpc->err = 0;
-		if (gotnomap)
-			tdrpc->m = m_copym(m1, 0, M_COPYALL, M_WAITOK);
-		else
-			tdrpc->m = m_copym(m1, offs, NFSM_RNDUP(len),
-			    M_WAITOK);
+		tdrpc->m = m_copym(*mpp, offs, NFSM_RNDUP(len), M_WAITOK);
 		ret = EIO;
 		if (nfs_pnfsiothreads != 0) {
 			ret = nfs_pnfsio(start_writedsdorpc, tdrpc);
@@ -5463,10 +5419,7 @@ nfsrv_writedsrpc(fhandle_t *fhp, off_t off, int len, struct ucred *cred,
 		nmpp++;
 		fhp++;
 	}
-	if (gotnomap)
-		m = m_copym(m1, 0, M_COPYALL, M_WAITOK);
-	else
-		m = m_copym(m1, offs, NFSM_RNDUP(len), M_WAITOK);
+	m = m_copym(*mpp, offs, NFSM_RNDUP(len), M_WAITOK);
 	ret = nfsrv_writedsdorpc(*nmpp, fhp, off, len, &na, m, cred, p);
 	if (nfsds_failerr(ret) && *failposp == -1 && mirrorcnt > 1)
 		*failposp = mirrorcnt - 1;
@@ -5487,14 +5440,6 @@ nfsrv_writedsrpc(fhandle_t *fhp, off_t off, int len, struct ucred *cred,
 			*failposp = i;
 		else if (error == 0 && tdrpc->err != 0)
 			error = tdrpc->err;
-	}
-
-	/* For gotnomap, chain the lists back to-gether. */
-	if (gotnomap) {
-		m_last(*mpp)->m_next = m1;
-		m_last(m1)->m_next = m2;
-		nd->nd_md = m1;
-		nfsm_set(nd, 0, false);
 	}
 	free(drpc, M_TEMP);
 	return (error);

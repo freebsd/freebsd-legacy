@@ -1870,9 +1870,8 @@ APPLESTATIC int
 nfsrv_parsename(struct nfsrv_descript *nd, char *bufp, u_long *hashp,
     NFSPATHLEN_T *outlenp)
 {
-	struct mbuf_ext_pgs *pgs;
-	vm_page_t pg;
 	char *fromcp, *tocp, val = '\0';
+	struct mbuf *md;
 	int i;
 	int rem, len, error = 0, pubtype = 0, outlen = 0, percent = 0;
 	char digit;
@@ -1887,196 +1886,177 @@ nfsrv_parsename(struct nfsrv_descript *nd, char *bufp, u_long *hashp,
 	 * Otherwise, get the component name.
 	 */
 	if ((nd->nd_flag & ND_NFSV4) && nd->nd_procnum == NFSV4OP_LOOKUPP) {
-		*tocp++ = '.';
-		hash += ((u_char)'.');
-		*tocp++ = '.';
-		hash += ((u_char)'.');
-		outlen = 2;
+	    *tocp++ = '.';
+	    hash += ((u_char)'.');
+	    *tocp++ = '.';
+	    hash += ((u_char)'.');
+	    outlen = 2;
 	} else {
-		/*
-		 * First, get the name length.
-		 */
-		NFSM_DISSECT(tl, u_int32_t *, NFSX_UNSIGNED);
-		len = fxdr_unsigned(int, *tl);
-		if (len > NFS_MAXNAMLEN) {
-			nd->nd_repstat = NFSERR_NAMETOL;
-			error = 0;
-			goto nfsmout;
-		} else if (len <= 0) {
-			nd->nd_repstat = NFSERR_INVAL;
+	    /*
+	     * First, get the name length.
+	     */
+	    NFSM_DISSECT(tl, u_int32_t *, NFSX_UNSIGNED);
+	    len = fxdr_unsigned(int, *tl);
+	    if (len > NFS_MAXNAMLEN) {
+		nd->nd_repstat = NFSERR_NAMETOL;
+		error = 0;
+		goto nfsmout;
+	    } else if (len <= 0) {
+		nd->nd_repstat = NFSERR_INVAL;
+		error = 0;
+		goto nfsmout;
+	    }
+
+	    /*
+	     * Now, copy the component name into the buffer.
+	     */
+	    fromcp = nd->nd_dpos;
+	    md = nd->nd_md;
+	    rem = mtod(md, caddr_t) + md->m_len - fromcp;
+	    for (i = 0; i < len; i++) {
+		while (rem == 0) {
+			md = md->m_next;
+			if (md == NULL) {
+				error = EBADRPC;
+				goto nfsmout;
+			}
+			fromcp = mtod(md, caddr_t);
+			rem = md->m_len;
+		}
+		if (*fromcp == '\0') {
+			nd->nd_repstat = EACCES;
 			error = 0;
 			goto nfsmout;
 		}
-
 		/*
-		 * Now, copy the component name into the buffer.
+		 * For lookups on the public filehandle, do some special
+		 * processing on the name. (The public file handle is the
+		 * root of the public file system for this server.)
 		 */
-		fromcp = nd->nd_dpos;
-		if ((nd->nd_md->m_flags & M_NOMAP) != 0)
-			rem = nd->nd_dextpgsiz;
-		else
-			rem = mtod(nd->nd_md, char *) + nd->nd_md->m_len -
-			    fromcp;
-		for (i = 0; i < len; i++) {
-			while (rem == 0) {
-				if ((nd->nd_md->m_flags & M_NOMAP) != 0 &&
-				    nd->nd_dextpg <
-				    nd->nd_md->m_ext_pgs.npgs - 1) {
-					pgs = &nd->nd_md->m_ext_pgs;
-					pg = PHYS_TO_VM_PAGE(
-					    nd->nd_md->m_epg_pa[nd->nd_dextpg]);
-					vm_page_unwire_noq(pg);
-					vm_page_free(pg);
-					for (i = nd->nd_bextpg;
-					    i < pgs->npgs - 1; i++)
-						nd->nd_md->m_epg_pa[i] =
-						    nd->nd_md->m_epg_pa[i + 1];
-					pgs->npgs--;
-					if (nd->nd_dextpg == 0)
-						pgs->first_pg_off = 0;
-					fromcp = nd->nd_dpos = (char *)(void *)
-					    PHYS_TO_DMAP(
-					    nd->nd_md->m_epg_pa[nd->nd_dextpg]);
-					rem = nd->nd_dextpgsiz =
-					    mbuf_ext_pg_len(pgs, nd->nd_dextpg,
-					    0);
+		if (nd->nd_flag & ND_PUBLOOKUP) {
+			/*
+			 * If the first char is ASCII, it is a canonical
+			 * path, otherwise it is a native path. (RFC2054
+			 * doesn't actually state what it is if the first
+			 * char isn't ASCII or 0x80, so I assume native.)
+			 * pubtype == 1 -> native path
+			 * pubtype == 2 -> canonical path
+			 */
+			if (i == 0) {
+				if (*fromcp & 0x80) {
+					/*
+					 * Since RFC2054 doesn't indicate
+					 * that a native path of just 0x80
+					 * isn't allowed, I'll replace the
+					 * 0x80 with '/' instead of just
+					 * throwing it away.
+					 */
+					*fromcp = '/';
+					pubtype = 1;
 				} else {
-					if (!nfsm_shiftnext(nd, &rem)) {
-						error = EBADRPC;
-						goto nfsmout;
-					}
-					fromcp = nd->nd_dpos;
+					pubtype = 2;
 				}
 			}
-			if (*fromcp == '\0') {
+			/*
+			 * '/' only allowed in a native path
+			 */
+			if (*fromcp == '/' && pubtype != 1) {
 				nd->nd_repstat = EACCES;
 				error = 0;
 				goto nfsmout;
 			}
+
 			/*
-			 * For lookups on the public filehandle, do some special
-			 * processing on the name. (The public file handle is the
-			 * root of the public file system for this server.)
+			 * For the special case of 2 hex digits after a
+			 * '%' in an absolute path, calculate the value.
+			 * percent == 1 -> indicates "get first hex digit"
+			 * percent == 2 -> indicates "get second hex digit"
 			 */
-			if (nd->nd_flag & ND_PUBLOOKUP) {
-				/*
-				 * If the first char is ASCII, it is a canonical
-				 * path, otherwise it is a native path. (RFC2054
-				 * doesn't actually state what it is if the first
-				 * char isn't ASCII or 0x80, so I assume native.)
-				 * pubtype == 1 -> native path
-				 * pubtype == 2 -> canonical path
-				 */
-				if (i == 0) {
-					if (*fromcp & 0x80) {
-						/*
-						 * Since RFC2054 doesn't indicate
-						 * that a native path of just 0x80
-						 * isn't allowed, I'll replace the
-						 * 0x80 with '/' instead of just
-						 * throwing it away.
-						 */
-						*fromcp = '/';
-						pubtype = 1;
-					} else {
-						pubtype = 2;
-					}
-				}
-				/*
-				 * '/' only allowed in a native path
-				 */
-				if (*fromcp == '/' && pubtype != 1) {
+			if (percent > 0) {
+				digit = nfsrv_hexdigit(*fromcp, &error);
+				if (error) {
 					nd->nd_repstat = EACCES;
 					error = 0;
 					goto nfsmout;
 				}
-
-				/*
-				 * For the special case of 2 hex digits after a
-				 * '%' in an absolute path, calculate the value.
-				 * percent == 1 -> indicates "get first hex digit"
-				 * percent == 2 -> indicates "get second hex digit"
-				 */
-				if (percent > 0) {
-					digit = nfsrv_hexdigit(*fromcp, &error);
-					if (error) {
+				if (percent == 1) {
+					val = (digit << 4);
+					percent = 2;
+				} else {
+					val += digit;
+					percent = 0;
+					*tocp++ = val;
+					hash += ((u_char)val);
+					outlen++;
+				}
+			} else {
+				if (*fromcp == '%' && pubtype == 2) {
+					/*
+					 * Must be followed by 2 hex digits
+					 */
+					if ((len - i) < 3) {
 						nd->nd_repstat = EACCES;
 						error = 0;
 						goto nfsmout;
 					}
-					if (percent == 1) {
-						val = (digit << 4);
-						percent = 2;
-					} else {
-						val += digit;
-						percent = 0;
-						*tocp++ = val;
-						hash += ((u_char)val);
-						outlen++;
-					}
+					percent = 1;
 				} else {
-					if (*fromcp == '%' && pubtype == 2) {
-						/*
-						 * Must be followed by 2 hex digits
-						 */
-						if ((len - i) < 3) {
-							nd->nd_repstat = EACCES;
-							error = 0;
-							goto nfsmout;
-						}
-						percent = 1;
-					} else {
-						*tocp++ = *fromcp;
-						hash += ((u_char)*fromcp);
-						outlen++;
-					}
+					*tocp++ = *fromcp;
+					hash += ((u_char)*fromcp);
+					outlen++;
 				}
-			} else {
-				/*
-				 * Normal, non lookup on public, name.
-				 */
-				if (*fromcp == '/') {
-					if (nd->nd_flag & ND_NFSV4)
-						nd->nd_repstat = NFSERR_BADNAME;
-					else
-						nd->nd_repstat = EACCES;
-					error = 0;
-					goto nfsmout;
-				}
-				hash += ((u_char)*fromcp);
-				*tocp++ = *fromcp;
-				outlen++;
 			}
-			fromcp++;
-			rem--;
+		} else {
+			/*
+			 * Normal, non lookup on public, name.
+			 */
+			if (*fromcp == '/') {
+				if (nd->nd_flag & ND_NFSV4)
+					nd->nd_repstat = NFSERR_BADNAME;
+				else
+					nd->nd_repstat = EACCES;
+				error = 0;
+				goto nfsmout;
+			}
+			hash += ((u_char)*fromcp);
+			*tocp++ = *fromcp;
+			outlen++;
 		}
-		nd->nd_dpos = fromcp;
-		i = NFSM_RNDUP(len) - len;
-		if (i > 0) {
+		fromcp++;
+		rem--;
+	    }
+	    nd->nd_md = md;
+	    nd->nd_dpos = fromcp;
+	    i = NFSM_RNDUP(len) - len;
+	    if (i > 0) {
+		if (rem >= i) {
+			nd->nd_dpos += i;
+		} else {
 			error = nfsm_advance(nd, i, rem);
 			if (error)
 				goto nfsmout;
 		}
+	    }
 
-		/*
-		 * For v4, don't allow lookups of '.' or '..' and
-		 * also check for non-utf8 strings.
-		 */
-		if (nd->nd_flag & ND_NFSV4) {
-			if ((outlen == 1 && bufp[0] == '.') ||
-			    (outlen == 2 && bufp[0] == '.' &&
-			     bufp[1] == '.')) {
-				nd->nd_repstat = NFSERR_BADNAME;
-				error = 0;
-				goto nfsmout;
-			}
-			if (enable_checkutf8 == 1 &&
-			    nfsrv_checkutf8((u_int8_t *)bufp, outlen)) {
-				nd->nd_repstat = NFSERR_INVAL;
-				error = 0;
-				goto nfsmout;
-			}
+	    /*
+	     * For v4, don't allow lookups of '.' or '..' and
+	     * also check for non-utf8 strings.
+	     */
+	    if (nd->nd_flag & ND_NFSV4) {
+		if ((outlen == 1 && bufp[0] == '.') ||
+		    (outlen == 2 && bufp[0] == '.' &&
+		     bufp[1] == '.')) {
+		    nd->nd_repstat = NFSERR_BADNAME;
+		    error = 0;
+		    goto nfsmout;
 		}
+		if (enable_checkutf8 == 1 &&
+		    nfsrv_checkutf8((u_int8_t *)bufp, outlen)) {
+		    nd->nd_repstat = NFSERR_INVAL;
+		    error = 0;
+		    goto nfsmout;
+		}
+	    }
 	}
 	*tocp = '\0';
 	*outlenp = (size_t)outlen;

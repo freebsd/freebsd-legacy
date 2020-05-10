@@ -362,8 +362,6 @@ void nfsv4_freeslot(struct nfsclsession *, int);
 struct ucred *nfsrv_getgrpscred(struct ucred *);
 struct nfsdevice *nfsv4_findmirror(struct nfsmount *);
 int nfsm_set(struct nfsrv_descript *, u_int, bool);
-bool nfsm_shiftnext(struct nfsrv_descript *, int *);
-int nfsm_extpgs_calc_offs(struct mbuf *, int, int);
 
 /* nfs_clcomsubs.c */
 void nfsm_uiombuf(struct nfsrv_descript *, struct uio *, int);
@@ -686,8 +684,8 @@ int nfsvno_readlink(vnode_t, struct ucred *, int, NFSPROC_T *, struct mbuf **,
     struct mbuf **, int *);
 int nfsvno_read(vnode_t, off_t, int, struct ucred *, int, NFSPROC_T *,
     struct mbuf **, struct mbuf **);
-int nfsvno_write(vnode_t, off_t, int, int *, struct nfsrv_descript *,
-    NFSPROC_T *);
+int nfsvno_write(vnode_t, off_t, int, int *, struct mbuf *, char *,
+    struct ucred *, NFSPROC_T *);
 int nfsvno_createsub(struct nfsrv_descript *, struct nameidata *,
     vnode_t *, struct nfsvattr *, int *, int32_t *, NFSDEV_T,
     struct nfsexstuff *);

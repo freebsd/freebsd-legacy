@@ -57,11 +57,6 @@
  * Replace most of the macro with an inline function, to minimize
  * the machine code. The inline functions in lower case can be called
  * directly, bypassing the macro.
- * For ND_NOMAP, if there is not enough contiguous space left in
- * the mbuf page, allocate a regular mbuf.  The data in these regular
- * mbufs will need to be copied into pages later, since the data must
- * be filled pages.  This should only happen after a write request or
- * read reply has been filled into the mbuf list.
  */
 static __inline void *
 nfsm_build(struct nfsrv_descript *nd, int siz)
@@ -106,22 +101,12 @@ nfsm_dissect(struct nfsrv_descript *nd, int siz)
 	int tt1; 
 	void *retp;
 
-	if ((nd->nd_md->m_flags & (M_EXT | M_NOMAP)) ==
-	    (M_EXT | M_NOMAP)) {
-		if (nd->nd_dextpgsiz >= siz) {
-			retp = (void *)nd->nd_dpos;
-			nd->nd_dpos += siz;
-			nd->nd_dextpgsiz -= siz;
-		} else
-			retp = nfsm_dissct(nd, siz, M_WAITOK);
-	} else {
-		tt1 = mtod(nd->nd_md, char *) + nd->nd_md->m_len -
-		    nd->nd_dpos; 
-		if (tt1 >= siz) { 
-			retp = (void *)nd->nd_dpos; 
-			nd->nd_dpos += siz; 
-		} else 
-			retp = nfsm_dissct(nd, siz, M_WAITOK); 
+	tt1 = mtod(nd->nd_md, caddr_t) + nd->nd_md->m_len - nd->nd_dpos; 
+	if (tt1 >= siz) { 
+		retp = (void *)nd->nd_dpos; 
+		nd->nd_dpos += siz; 
+	} else { 
+		retp = nfsm_dissct(nd, siz, M_WAITOK); 
 	}
 	return (retp);
 }
@@ -132,22 +117,12 @@ nfsm_dissect_nonblock(struct nfsrv_descript *nd, int siz)
 	int tt1; 
 	void *retp;
 
-	if ((nd->nd_md->m_flags & (M_EXT | M_NOMAP)) ==
-	    (M_EXT | M_NOMAP)) {
-		if (nd->nd_dextpgsiz >= siz) {
-			retp = (void *)nd->nd_dpos;
-			nd->nd_dpos += siz;
-			nd->nd_dextpgsiz -= siz;
-		} else
-			retp = nfsm_dissct(nd, siz, M_NOWAIT);
-	} else {
-		tt1 = mtod(nd->nd_md, char *) + nd->nd_md->m_len -
-		    nd->nd_dpos; 
-		if (tt1 >= siz) { 
-			retp = (void *)nd->nd_dpos; 
-			nd->nd_dpos += siz; 
-		} else 
-			retp = nfsm_dissct(nd, siz, M_NOWAIT); 
+	tt1 = mtod(nd->nd_md, caddr_t) + nd->nd_md->m_len - nd->nd_dpos; 
+	if (tt1 >= siz) { 
+		retp = (void *)nd->nd_dpos; 
+		nd->nd_dpos += siz; 
+	} else { 
+		retp = nfsm_dissct(nd, siz, M_NOWAIT); 
 	}
 	return (retp);
 }
