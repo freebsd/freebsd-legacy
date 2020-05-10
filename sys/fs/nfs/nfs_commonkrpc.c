@@ -895,7 +895,7 @@ tryagain:
 	 */
 	newnfs_realign(&nd->nd_mrep, M_WAITOK);
 	nd->nd_md = nd->nd_mrep;
-	nfsm_set(nd, ext.rc_mbufoffs, false);
+	nd->nd_dpos = mtod(nd->nd_md, char *);
 	nd->nd_repstat = 0;
 	if (nd->nd_procnum != NFSPROC_NULL &&
 	    nd->nd_procnum != NFSV4PROC_CBNULL) {

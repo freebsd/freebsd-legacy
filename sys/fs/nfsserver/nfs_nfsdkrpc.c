@@ -164,7 +164,7 @@ nfssvc_program(struct svc_req *rqst, SVCXPRT *xprt)
 	rqst->rq_args = NULL;
 	newnfs_realign(&nd.nd_mrep, M_WAITOK);
 	nd.nd_md = nd.nd_mrep;
-	nfsm_set(&nd, rqst->rq_xprt->xp_mbufoffs, false);
+	nd.nd_dpos = mtod(nd.nd_md, char *);
 	nd.nd_nam = svc_getrpccaller(rqst);
 	nd.nd_nam2 = rqst->rq_addr;
 	nd.nd_mreq = NULL;

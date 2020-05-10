@@ -95,7 +95,7 @@ printf("cbprogram proc=%d\n", rqst->rq_proc);
 	newnfs_realign(&nd.nd_mrep, M_WAITOK);
 	nd.nd_md = nd.nd_mrep;
 printf("cbreq nd_md=%p offs=%d\n", nd.nd_md, rqst->rq_xprt->xp_mbufoffs);
-	nfsm_set(&nd, rqst->rq_xprt->xp_mbufoffs, false);
+	nd.nd_dpos = mtod(nd.nd_md, char *);
 	nd.nd_nam = svc_getrpccaller(rqst);
 	nd.nd_nam2 = rqst->rq_addr;
 	nd.nd_mreq = NULL;

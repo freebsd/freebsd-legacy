@@ -338,7 +338,7 @@ fha_extract_info(struct svc_req *req, struct fha_info *i)
 	if (error)
 		goto out;
 	nd->nd_md = req->rq_args;
-	nfsm_set(nd, req->rq_xprt->xp_mbufoffs, false);
+	nd->nd_dpos = mtod(nd->nd_md, char *);
 
 	/* Grab the filehandle. */
 	error = fhanew_get_fh(&i->fh, v3, nd);

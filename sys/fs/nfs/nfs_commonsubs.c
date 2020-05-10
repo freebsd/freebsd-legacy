@@ -380,7 +380,7 @@ nfscl_reqstart(struct nfsrv_descript *nd, int procnum, struct nfsmount *nmp,
 		mb = mb_alloc_ext_plus_pages(PAGE_SIZE, M_WAITOK,
 		    mb_free_mext_pgs);
 		nd->nd_mreq = nd->nd_mb = mb;
-		nfsm_set(nd, 0, true);
+		nfsm_set(nd, 0);
 	} else {
 		if (nfs_bigrequest[procnum])
 			NFSMCLGET(mb, M_WAITOK);
@@ -4873,81 +4873,49 @@ nfsv4_findmirror(struct nfsmount *nmp)
  * The build argument is true for build and false for dissect.
  */
 int
-nfsm_set(struct nfsrv_descript *nd, u_int offs, bool build)
+nfsm_set(struct nfsrv_descript *nd, u_int offs)
 {
 	struct mbuf *m;
 	struct mbuf_ext_pgs *pgs;
 	int rlen;
 
-	if (build)
-		m = nd->nd_mb;
-	else
-		m = nd->nd_md;
+	m = nd->nd_mb;
 	if ((m->m_flags & M_NOMAP) != 0) {
-		if (build) {
-			pgs = &m->m_ext_pgs;
-			nd->nd_bextpg = 0;
-			while (offs > 0) {
-				if (nd->nd_bextpg == 0)
-					rlen = mbuf_ext_pg_len(pgs, 0,
-					    pgs->first_pg_off);
-				else
-					rlen = mbuf_ext_pg_len(pgs,
-					    nd->nd_bextpg, 0);
-				if (offs <= rlen)
-					break;
-				offs -= rlen;
-				nd->nd_bextpg++;
-				if (nd->nd_bextpg == pgs->npgs) {
-					printf("nfsm_set: build offs "
-					    "out of range\n");
-					nd->nd_bextpg--;
-					break;
-				}
-			}
-			nd->nd_bpos = (char *)(void *)
-			    PHYS_TO_DMAP(m->m_epg_pa[nd->nd_bextpg]);
+		pgs = &m->m_ext_pgs;
+		nd->nd_bextpg = 0;
+		while (offs > 0) {
 			if (nd->nd_bextpg == 0)
-				nd->nd_bpos += pgs->first_pg_off;
-			if (offs > 0) {
-				nd->nd_bpos += offs;
-				rlen = nd->nd_bextpgsiz = rlen - offs;
-			} else if (nd->nd_bextpg == 0)
-				rlen = nd->nd_bextpgsiz = PAGE_SIZE -
-				    pgs->first_pg_off;
+				rlen = mbuf_ext_pg_len(pgs, 0,
+				    pgs->first_pg_off);
 			else
-				rlen = nd->nd_bextpgsiz = PAGE_SIZE;
-		} else {
-			pgs = &m->m_ext_pgs;
-			nd->nd_dextpg = 0;
-			do {
-				nd->nd_dpos = (char *)(void *)
-				    PHYS_TO_DMAP(m->m_epg_pa[nd->nd_dextpg]);
-				if (nd->nd_dextpg == 0) {
-					nd->nd_dpos += pgs->first_pg_off;
-					rlen = nd->nd_dextpgsiz =
-					    mbuf_ext_pg_len(pgs, 0,
-					    pgs->first_pg_off);
-				} else
-					rlen = nd->nd_dextpgsiz =
-					    mbuf_ext_pg_len(pgs,
-					    nd->nd_dextpg, 0);
-				if (offs > rlen) {
-					nd->nd_dextpg++;
-					offs -= rlen;
-				} else if (offs > 0) {
-					nd->nd_dpos += offs;
-					nd->nd_dextpgsiz -= offs;
-					offs = 0;
-				}
-			} while (offs > 0);
+				rlen = mbuf_ext_pg_len(pgs,
+				    nd->nd_bextpg, 0);
+			if (offs <= rlen)
+				break;
+			offs -= rlen;
+			nd->nd_bextpg++;
+			if (nd->nd_bextpg == pgs->npgs) {
+				printf("nfsm_set: build offs "
+				    "out of range\n");
+				nd->nd_bextpg--;
+				break;
+			}
 		}
-	} else if (build) {
+		nd->nd_bpos = (char *)(void *)
+		    PHYS_TO_DMAP(m->m_epg_pa[nd->nd_bextpg]);
+		if (nd->nd_bextpg == 0)
+			nd->nd_bpos += pgs->first_pg_off;
+		if (offs > 0) {
+			nd->nd_bpos += offs;
+			rlen = nd->nd_bextpgsiz = rlen - offs;
+		} else if (nd->nd_bextpg == 0)
+			rlen = nd->nd_bextpgsiz = PAGE_SIZE -
+			    pgs->first_pg_off;
+		else
+			rlen = nd->nd_bextpgsiz = PAGE_SIZE;
+	} else {
 		nd->nd_bpos = mtod(m, char *) + offs;
 		rlen = m->m_len - offs;
-	} else {
-		nd->nd_dpos = mtod(m, char *);
-		rlen = m->m_len;
 	}
 	return (rlen);
 }
