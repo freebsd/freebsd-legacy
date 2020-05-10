@@ -1665,6 +1665,7 @@ m_segments(struct mbuf *m, int skip)
 	return (count);
 }
 
+#define KTLS_SMALLIOVEC		2
 static void
 ktls_decrypt(struct socket *so)
 {
@@ -1672,7 +1673,7 @@ ktls_decrypt(struct socket *so)
 	struct ktls_session *tls;
 	struct sockbuf *sb;
 	struct tls_record_layer *hdr;
-	struct iovec *iov;
+	struct iovec *iov, iv[KTLS_SMALLIOVEC];
 	struct tls_get_record tgr;
 	struct mbuf *control, *data, *m;
 	uint64_t seqno;
@@ -1687,8 +1688,8 @@ ktls_decrypt(struct socket *so)
 	tls = sb->sb_tls_info;
 	MPASS(tls != NULL);
 
-	iov = NULL;
-	iov_cap = 0;
+	iov = iv;
+	iov_cap = KTLS_SMALLIOVEC;
 	for (;;) {
 		/* Is there enough queued for a TLS header? */
 		if (sb->sb_tlscc < tls->params.tls_hlen)
@@ -1746,7 +1747,8 @@ ktls_decrypt(struct socket *so)
 		 */
 		iov_count = m_segments(data, tls->params.tls_hlen);
 		if (iov_count > iov_cap) {
-			free(iov, M_KTLS);
+			if (iov_cap > KTLS_SMALLIOVEC)
+				free(iov, M_KTLS);
 			iov = malloc(sizeof(*iov) * iov_count, M_KTLS,
 			    M_WAITOK);
 			iov_cap = iov_count;
@@ -1865,7 +1867,8 @@ ktls_decrypt(struct socket *so)
 	sorwakeup_locked(so);
 
 deref:
-	free(iov, M_KTLS);
+	if (iov_cap > KTLS_SMALLIOVEC)
+		free(iov, M_KTLS);
 	SOCKBUF_UNLOCK_ASSERT(sb);
 
 	CURVNET_SET(so->so_vnet);
