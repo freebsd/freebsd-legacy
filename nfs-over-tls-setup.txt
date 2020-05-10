@@ -106,10 +106,8 @@ kern.ipc.mb_use_ext_pgs=1
 - edit rc.conf and add this line (if you already have a line for ldconfig_paths,
    add /usr/ktls/lib to the line)
 ldconfig_paths="/usr/lib/compat /usr/local/lib /usr/local/lib/compat/pkg /usr/ktls/lib"
-Then reboot the system with nkernel.
+Then reboot the system.
 
-Every time you boot and are going to be doing testing, login as root and type
-# kldload ktls_ocf
 You should now be finally ready to configure and run a TLS mount.
 (If you have problems or I forgot any steps, feel free to email me
  at rmacklem@uoguelph.ca.)
