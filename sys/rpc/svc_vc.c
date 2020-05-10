@@ -698,11 +698,13 @@ svc_vc_recv(SVCXPRT *xprt, struct rpc_msg *msg,
 {
 	struct cf_conn *cd = (struct cf_conn *) xprt->xp_p1;
 	struct uio uio;
-	struct mbuf *m;
+	struct mbuf *m, *ctrl;
 	struct socket* so = xprt->xp_socket;
 	XDR xdrs;
 	int error, rcvflag;
 	uint32_t xid_plus_direction[3], junk;
+	struct cmsghdr *cmsg;
+	struct tls_get_record tgr;
 
 	/*
 	 * Serialise access to the socket and our own record parsing
@@ -782,6 +784,7 @@ svc_vc_recv(SVCXPRT *xprt, struct rpc_msg *msg,
 		 * If receiving is disabled so that a TLS handshake can be
 		 * done by the rpctlssd daemon, return FALSE here.
 		 */
+tryagain:
 		if (xprt->xp_dontrcv) {
 			sx_xunlock(&xprt->xp_lock);
 			return (FALSE);
@@ -797,9 +800,9 @@ svc_vc_recv(SVCXPRT *xprt, struct rpc_msg *msg,
 		 */
 		uio.uio_resid = 1000000000;
 		uio.uio_td = curthread;
-		m = NULL;
+		ctrl = m = NULL;
 		rcvflag = MSG_DONTWAIT;
-		error = soreceive(so, NULL, &uio, &m, NULL, &rcvflag);
+		error = soreceive(so, NULL, &uio, &m, &ctrl, &rcvflag);
 
 		if (error == EWOULDBLOCK) {
 			/*
@@ -838,6 +841,29 @@ svc_vc_recv(SVCXPRT *xprt, struct rpc_msg *msg,
 			cd->strm_stat = XPRT_DIED;
 			sx_xunlock(&xprt->xp_lock);
 			return (FALSE);
+		}
+
+		/* Process any record header(s). */
+		if (ctrl != NULL) {
+if (ctrl->m_next != NULL) printf("EEK! svc list of controls\n");
+			cmsg = mtod(ctrl, struct cmsghdr *);
+			if (cmsg->cmsg_type == TLS_GET_RECORD &&
+			    cmsg->cmsg_len == CMSG_LEN(sizeof(tgr))) {
+				memcpy(&tgr, CMSG_DATA(cmsg), sizeof(tgr));
+				/*
+				 * For now, just toss non-application
+				 * data records.
+				 * In the future, there may need to be
+				 * an upcall done to the daemon.
+				 */
+				if (tgr.tls_type != TLS_RLTYPE_APP) {
+printf("Got weird type=%d\n", tgr.tls_type);
+					m_freem(m);
+					m_free(ctrl);
+					goto tryagain;
+				}
+			}
+			m_free(ctrl);
 		}
 
 		if (cd->mpending)
