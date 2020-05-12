@@ -114,8 +114,6 @@ static int nfsrv_createiovec_extpgs(int, int, struct mbuf **,
     struct mbuf **, struct iovec **);
 static int nfsrv_createiovecw(int, struct mbuf *, char *, struct iovec **,
     int *);
-static int nfsrv_createiovecw_extpgs(int, struct mbuf *, char *, int,
-    int, struct iovec **, int *);
 static void nfsrv_pnfscreate(struct vnode *, struct vattr *, struct ucred *,
     NFSPROC_T *);
 static void nfsrv_pnfsremovesetup(struct vnode *, NFSPROC_T *, struct vnode **,
@@ -1026,92 +1024,6 @@ nfsrv_createiovecw(int retlen, struct mbuf *m, char *cp, struct iovec **ivpp,
 		if (mp) {
 			i = mp->m_len;
 			cp = mtod(mp, caddr_t);
-		}
-	}
-	return (0);
-}
-
-/*
- * Create the iovec for the mbuf chain passed in as an argument.
- * The "cp" argument is where the data starts within the first mbuf in
- * the chain. It returns the iovec and the iovcnt.
- * Same as above, but for ext_pgs mbufs.
- */
-static int
-nfsrv_createiovecw_extpgs(int retlen, struct mbuf *m, char *cp, int dextpg,
-    int dextpgsiz, struct iovec **ivpp, int *iovcntp)
-{
-	struct mbuf *mp;
-	struct mbuf_ext_pgs *pgs;
-	struct iovec *ivp;
-	int cnt, i, len, pgno;
-
-	/*
-	 * Loop through the mbuf chain, counting how many pages are
-	 * part of this write oepration, so the iovec size is known.
-	 */
-	cnt = 0;
-	len = retlen;
-	mp = m;
-	pgs = &mp->m_ext_pgs;
-	i = dextpgsiz;
-	pgno = dextpg;
-	while (len > 0) {
-		if (i > 0) {
-			len -= i;
-			cnt++;
-		}
-		if (len > 0) {
-			if (pgno == pgs->npgs - 1) {
-				mp = mp->m_next;
-				if (mp == NULL)
-					return (EBADRPC);
-				pgno = 0;
-				pgs = &mp->m_ext_pgs;
-			} else
-				pgno++;
-			if (pgno == 0)
-				i = mbuf_ext_pg_len(pgs, 0,
-				    pgs->first_pg_off);
-			else
-				i = mbuf_ext_pg_len(pgs, pgno, 0);
-		}
-	}
-
-	/* Now, create the iovec. */
-	mp = m;
-	*ivpp = ivp = malloc(cnt * sizeof (struct iovec), M_TEMP,
-	    M_WAITOK);
-	*iovcntp = cnt;
-	len = retlen;
-	pgs = &mp->m_ext_pgs;
-	i = dextpgsiz;
-	pgno = dextpg;
-	while (len > 0) {
-		if (i > 0) {
-			i = min(i, len);
-			ivp->iov_base = cp;
-			ivp->iov_len = i;
-			ivp++;
-			len -= i;
-		}
-		if (len > 0) {
-			if (pgno == pgs->npgs - 1) {
-				mp = mp->m_next;
-				if (mp == NULL)
-					return (EBADRPC);
-				pgno = 0;
-				pgs = &mp->m_ext_pgs;
-			} else
-				pgno++;
-			cp = (char *)(void *)
-			    PHYS_TO_DMAP(mp->m_epg_pa[pgno]);
-			if (pgno == 0) {
-				cp += pgs->first_pg_off;
-				i = mbuf_ext_pg_len(pgs, 0,
-				    pgs->first_pg_off);
-			} else
-				i = mbuf_ext_pg_len(pgs, pgno, 0);
 		}
 	}
 	return (0);
@@ -6435,8 +6347,7 @@ out:
  */
 int
 nfsvno_setxattr(struct vnode *vp, char *name, int len, struct mbuf *m,
-    char *cp, int dextpg, int dextpgsiz, struct ucred *cred,
-    struct thread *p)
+    char *cp, struct ucred *cred, struct thread *p)
 {
 	struct iovec *iv;
 	struct uio uio, *uiop = &uio;
@@ -6455,11 +6366,7 @@ nfsvno_setxattr(struct vnode *vp, char *name, int len, struct mbuf *m,
 	uiop->uio_td = p;
 	uiop->uio_offset = 0;
 	uiop->uio_resid = len;
-	if ((m->m_flags & M_NOMAP) != 0)
-		error = nfsrv_createiovecw_extpgs(len, m, cp, dextpg,
-		    dextpgsiz, &iv, &cnt);
-	else
-		error = nfsrv_createiovecw(len, m, cp, &iv, &cnt);
+	error = nfsrv_createiovecw(len, m, cp, &iv, &cnt);
 	uiop->uio_iov = iv;
 	uiop->uio_iovcnt = cnt;
 	if (error == 0) {

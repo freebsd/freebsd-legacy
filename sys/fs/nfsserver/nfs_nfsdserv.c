@@ -5708,8 +5708,7 @@ nfsrvd_setxattr(struct nfsrv_descript *nd, __unused int isdgram,
 	nd->nd_repstat = nfsvno_getattr(vp, &ova, nd, p, 1, &attrbits);
 	if (nd->nd_repstat == 0) {
 		nd->nd_repstat = nfsvno_setxattr(vp, name, len, nd->nd_md,
-		    nd->nd_dpos, nd->nd_dextpg, nd->nd_dextpgsiz, nd->nd_cred,
-		    p);
+		    nd->nd_dpos, nd->nd_cred, p);
 		if (nd->nd_repstat == ENXIO)
 			nd->nd_repstat = NFSERR_XATTR2BIG;
 	}

@@ -750,7 +750,7 @@ int nfsvno_allocate(struct vnode *, off_t, off_t, struct ucred *, NFSPROC_T *);
 int nfsvno_getxattr(struct vnode *, char *, uint32_t, struct ucred *,
     uint64_t, int, struct thread *, struct mbuf **, struct mbuf **, int *);
 int nfsvno_setxattr(struct vnode *, char *, int, struct mbuf *, char *,
-    int, int, struct ucred *, struct thread *);
+    struct ucred *, struct thread *);
 int nfsvno_rmxattr(struct nfsrv_descript *, struct vnode *, char *,
     struct ucred *, struct thread *);
 int nfsvno_listxattr(struct vnode *, uint64_t, struct ucred *, struct thread *,

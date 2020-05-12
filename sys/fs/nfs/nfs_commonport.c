@@ -183,34 +183,8 @@ newnfs_realign(struct mbuf **pm, int how)
 {
 	struct mbuf *m, *n;
 	int off, space;
-	bool copyit;
 
 	++nfs_realign_test;
-
-	/*
-	 * For ext_pgs mbufs, just copy the entire chain if there is an
-	 * alignment problem.
-	 */
-	copyit = false;
-	m = *pm;
-	while ((m->m_flags & M_NOMAP) != 0) {
-		if ((m->m_len & 0x3) != 0 ||
-		    (m->m_ext_pgs.first_pg_off & 0x3) != 0) {
-			copyit = true;
-			break;
-		}
-		m = m->m_next;
-		if (m == NULL)
-			return (0);
-	}
-	if (copyit) {
-		m = mb_unmapped_to_ext(*pm);
-		if (m == NULL)
-			return (ENOMEM);
-		*pm = m;
-		return (0);
-	}
-
 	while ((m = *pm) != NULL) {
 		if ((m->m_len & 0x3) || (mtod(m, intptr_t) & 0x3)) {
 			/*
