@@ -163,6 +163,7 @@ static int nfscl_dofflayoutio(vnode_t, struct uio *, int *, int *, int *,
     nfsv4stateid_t *, int, struct nfscldevinfo *, struct nfscllayout *,
     struct nfsclflayout *, uint64_t, uint64_t, int, int, struct mbuf *,
     struct nfsclwritedsdorpc *, struct ucred *, NFSPROC_T *);
+static struct mbuf *nfsm_copym(struct mbuf *, int, int);
 static int nfsrpc_readds(vnode_t, struct uio *, nfsv4stateid_t *, int *,
     struct nfsclds *, uint64_t, int, struct nfsfh *, int, int, int,
     struct ucred *, NFSPROC_T *);
@@ -6000,6 +6001,38 @@ nfscl_doiods(vnode_t vp, struct uio *uiop, int *iomode, int *must_commit,
 }
 
 /*
+ * Make a copy of the mbuf chain and add an mbuf for null padding, as required.
+ */
+static struct mbuf *
+nfsm_copym(struct mbuf *m, int off, int xfer)
+{
+	struct mbuf *m2, *m3, *m4;
+	uint32_t *tl;
+	int rem;
+
+	m2 = m_copym(m, off, xfer, M_WAITOK);
+	rem = NFSM_RNDUP(xfer) - xfer;
+	if (rem > 0) {
+		/*
+		 * The zero padding to a multiple of 4 bytes is required by
+		 * the XDR. So that the mbufs copied by reference aren't
+		 * modified, add an mbuf with the zero'd bytes to the list.
+		 * rem will be a maximum of 3, so one zero'd uint32_t is
+		 * sufficient.
+		 */
+		m3 = m2;
+		while (m3->m_next != NULL)
+			m3 = m3->m_next;
+		NFSMGET(m4);
+		tl = mtod(m4, uint32_t *);
+		*tl = 0;
+		m4->m_len = rem;
+		m3->m_next = m4;
+	}
+	return (m2);
+}
+
+/*
  * Find a file layout that will handle the first bytes of the requested
  * range and return the information from it needed to the I/O operation.
  */
@@ -6250,18 +6283,7 @@ nfscl_dofflayoutio(vnode_t vp, struct uio *uiop, int *iomode, int *must_commit,
 					NFSUNLOCKCLSTATE();
 				}
 			} else {
-				/*
-				 * Split off the first xfer bytes of the mbuf
-				 * chain.
-				 */
-				m = mp;
-				if (xfer < len) {
-					if ((m->m_flags & M_NOMAP) != 0)
-						mp = mb_splitatpos_ext(m, xfer,
-						    M_WAITOK);
-					else
-						mp = m_split(m, xfer, M_WAITOK);
-				}
+				m = nfsm_copym(mp, rel_off, xfer);
 				NFSCL_DEBUG(4, "mcopy reloff=%d xfer=%jd\n",
 				    rel_off, (uintmax_t)xfer);
 				/*
@@ -6280,8 +6302,6 @@ nfscl_dofflayoutio(vnode_t vp, struct uio *uiop, int *iomode, int *must_commit,
 					    xfer, fhp, m, dp->nfsdi_vers,
 					    dp->nfsdi_minorvers, tcred, p);
 				NFSCL_DEBUG(4, "nfsio_writedsmir=%d\n", error);
-				if (xfer == len)
-					mp = NULL;
 				if (error != 0 && error != EACCES && error !=
 				    ESTALE) {
 					NFSCL_DEBUG(4,
@@ -6300,7 +6320,6 @@ nfscl_dofflayoutio(vnode_t vp, struct uio *uiop, int *iomode, int *must_commit,
 		if ((dp->nfsdi_flags & NFSDI_TIGHTCOUPLED) == 0)
 			NFSFREECRED(tcred);
 	}
-	m_freem(mp);		/* In case errors occurred. */
 	NFSCL_DEBUG(4, "eo nfscl_dofflayoutio=%d\n", error);
 	return (error);
 }
