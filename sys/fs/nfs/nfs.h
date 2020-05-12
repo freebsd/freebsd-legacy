@@ -645,8 +645,6 @@ struct nfsrv_descript {
 	NFSSOCKADDR_T		nd_nam;		/* and socket addr */
 	NFSSOCKADDR_T		nd_nam2;	/* return socket addr */
 	caddr_t			nd_dpos;	/* Current dissect pos */
-	int			nd_dextpg;	/* Current ext_pgs page */
-	int			nd_dextpgsiz;	/* Bytes left in page */
 	caddr_t			nd_bpos;	/* Current build pos */
 	int			nd_bextpg;	/* Current ext_pgs page */
 	int			nd_bextpgsiz;	/* Bytes left in page */
