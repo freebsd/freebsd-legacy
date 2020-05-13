@@ -89,7 +89,6 @@ __FBSDID("$FreeBSD$");
 #include <rpc/krpc.h>
 #include <rpc/rpcsec_tls.h>
 
-
 struct cmessage {
         struct cmsghdr cmsg;
         struct cmsgcred cmcred;
@@ -209,7 +208,6 @@ clnt_bck_call(
 	struct mbuf *mreq = NULL, *results;
 	struct ct_request *cr;
 	int error, maxextsiz;
-	uint32_t junk;
 #ifdef KERN_TLS
 	u_int maxlen;
 #endif
@@ -425,9 +423,7 @@ got_reply:
 		ext->rc_feedback(FEEDBACK_OK, proc, ext->rc_feedback_arg);
 
 	xdrmbuf_create(&xdrs, cr->cr_mrep, XDR_DECODE);
-	ok = xdr_uint32_t(&xdrs, &junk);
-	if (ok)
-		ok = xdr_replymsg(&xdrs, &reply_msg);
+	ok = xdr_replymsg(&xdrs, &reply_msg);
 	cr->cr_mrep = NULL;
 
 	if (ok) {
@@ -446,14 +442,6 @@ got_reply:
 			} else {
 				KASSERT(results,
 				    ("auth validated but no result"));
-				if (ext) {
-					if ((results->m_flags & M_NOMAP) !=
-					    0)
-						ext->rc_mbufoffs =
-						    xdrs.x_handy;
-					else
-						ext->rc_mbufoffs = 0;
-				}
 				*resultsp = results;
 			}
 		}		/* end successful completion */

@@ -76,7 +76,6 @@ __FBSDID("$FreeBSD$");
 
 #include <security/mac/mac_framework.h>
 
-
 static bool_t svc_vc_rendezvous_recv(SVCXPRT *, struct rpc_msg *,
     struct sockaddr **, struct mbuf **);
 static enum xprt_stat svc_vc_rendezvous_stat(SVCXPRT *);
@@ -593,32 +592,6 @@ svc_vc_process_pending(SVCXPRT *xprt)
 	struct socket *so = xprt->xp_socket;
 	struct mbuf *m;
 
-#ifdef notnow
-{ struct mbuf *m1, *m2, *m3, *m4;
-	int txxxx;
-	m3 = cd->mpending;
-	m4 = NULL;
-	while (m3 != NULL && (m3->m_flags & M_NOMAP) != 0) {
-		m4 = m3;
-		m3 = m3->m_next;
-	}
-	if (m3 != NULL) {
-		txxxx = m_length(m3, NULL);
-		if (txxxx > 0) {
-			m1 = mb_copym_ext_pgs(m3, txxxx, 16384, M_WAITOK,
-			    mb_free_mext_pgs, &m2);
-			if (m4 != NULL) {
-				m4->m_next = m1;
-				m_freem(m3);
-			} else {
-				m2 = cd->mpending;
-				cd->mpending = m1;
-				m_freem(m2);
-			}
-		}
-	}
-}
-#endif
 	/*
 	 * If cd->resid is non-zero, we have part of the
 	 * record already, otherwise we are expecting a record
@@ -648,7 +621,7 @@ svc_vc_process_pending(SVCXPRT *xprt)
 		header = ntohl(header);
 		cd->eor = (header & 0x80000000) != 0;
 		cd->resid = header & 0x7fffffff;
-		cd->resid += sizeof(uint32_t);
+		m_adj(cd->mpending, sizeof(uint32_t));
 	}
 
 	/*
@@ -661,14 +634,10 @@ svc_vc_process_pending(SVCXPRT *xprt)
 	while (cd->mpending && cd->resid) {
 		m = cd->mpending;
 		if (cd->mpending->m_next
-		    || cd->mpending->m_len > cd->resid) {
-			if ((cd->mpending->m_flags & M_NOMAP) != 0)
-				cd->mpending = mb_splitatpos_ext(
-				    cd->mpending, cd->resid, M_WAITOK);
-			else
-				cd->mpending = m_split(cd->mpending,
-				    cd->resid, M_WAITOK);
-		} else
+		    || cd->mpending->m_len > cd->resid)
+			cd->mpending = m_split(cd->mpending,
+			    cd->resid, M_WAITOK);
+		else
 			cd->mpending = NULL;
 		if (cd->mreq)
 			m_last(cd->mreq)->m_next = m;
@@ -702,7 +671,7 @@ svc_vc_recv(SVCXPRT *xprt, struct rpc_msg *msg,
 	struct socket* so = xprt->xp_socket;
 	XDR xdrs;
 	int error, rcvflag;
-	uint32_t xid_plus_direction[3], junk;
+	uint32_t xid_plus_direction[2];
 	struct cmsghdr *cmsg;
 	struct tls_get_record tgr;
 
@@ -735,15 +704,15 @@ svc_vc_recv(SVCXPRT *xprt, struct rpc_msg *msg,
 				m_copydata(cd->mreq, 0,
 				    sizeof(xid_plus_direction),
 				    (char *)xid_plus_direction);
+				xid_plus_direction[0] =
+				    ntohl(xid_plus_direction[0]);
 				xid_plus_direction[1] =
 				    ntohl(xid_plus_direction[1]);
-				xid_plus_direction[2] =
-				    ntohl(xid_plus_direction[2]);
 				/* Check message direction. */
-				if (xid_plus_direction[2] == REPLY) {
+				if (xid_plus_direction[1] == REPLY) {
 					clnt_bck_svccall(xprt->xp_p2,
 					    cd->mreq,
-					    xid_plus_direction[1]);
+					    xid_plus_direction[0]);
 					cd->mreq = NULL;
 					continue;
 				}
@@ -763,18 +732,13 @@ svc_vc_recv(SVCXPRT *xprt, struct rpc_msg *msg,
 
 			sx_xunlock(&xprt->xp_lock);
 
-			if (! xdr_uint32_t(&xdrs, &junk) ||
-			    ! xdr_callmsg(&xdrs, msg)) {
+			if (! xdr_callmsg(&xdrs, msg)) {
 				XDR_DESTROY(&xdrs);
 				return (FALSE);
 			}
 
 			*addrp = NULL;
 			*mp = xdrmbuf_getall(&xdrs);
-			if (((*mp)->m_flags & M_NOMAP) != 0)
-				xprt->xp_mbufoffs = xdrs.x_handy;
-			else
-				xprt->xp_mbufoffs = 0;
 			XDR_DESTROY(&xdrs);
 
 			return (TRUE);
@@ -901,19 +865,6 @@ svc_vc_backchannel_recv(SVCXPRT *xprt, struct rpc_msg *msg,
 	sx_xunlock(&xprt->xp_lock);
 
 printf("recv backch m=%p\n", m);
-#ifdef notnow
-{ struct mbuf *m1, *m2;
-int txxxx;
-if (m != NULL) {
-txxxx = m_length(m, NULL);
-if (txxxx > 0) {
-m1 = mb_copym_ext_pgs(m, txxxx, 16384, M_WAITOK,
-    mb_free_mext_pgs, &m2);
-m2 = m;
-m = m1;
-m_freem(m2);
-} } }
-#endif
 	xdrmbuf_create(&xdrs, m, XDR_DECODE);
 	if (! xdr_callmsg(&xdrs, msg)) {
 printf("recv backch callmsg failed\n");
@@ -922,11 +873,6 @@ printf("recv backch callmsg failed\n");
 	}
 	*addrp = NULL;
 	*mp = xdrmbuf_getall(&xdrs);
-	if (((*mp)->m_flags & M_NOMAP) != 0)
-		xprt->xp_mbufoffs = xdrs.x_handy;
-	else
-		xprt->xp_mbufoffs = 0;
-printf("backch offs=%d\n", xprt->xp_mbufoffs);
 	XDR_DESTROY(&xdrs);
 	return (TRUE);
 }

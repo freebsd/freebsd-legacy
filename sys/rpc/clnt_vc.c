@@ -86,7 +86,6 @@ __FBSDID("$FreeBSD$");
 #include <rpc/krpc.h>
 #include <rpc/rpcsec_tls.h>
 
-
 struct cmessage {
         struct cmsghdr cmsg;
         struct cmsgcred cmcred;
@@ -535,19 +534,6 @@ got_reply:
 	if (ext && ext->rc_feedback)
 		ext->rc_feedback(FEEDBACK_OK, proc, ext->rc_feedback_arg);
 
-#ifdef notnow
-{ struct mbuf *m, *m2;
-int txxxx;
-if (cr->cr_mrep != NULL) {
-txxxx = m_length(cr->cr_mrep, NULL);
-if (txxxx > 0) {
-m = mb_copym_ext_pgs(cr->cr_mrep, txxxx, 16384, M_WAITOK,
-    mb_free_mext_pgs, &m2);
-m2 = cr->cr_mrep;
-cr->cr_mrep = m;
-m_freem(m2);
-} } }
-#endif
 	xdrmbuf_create(&xdrs, cr->cr_mrep, XDR_DECODE);
 	ok = xdr_replymsg(&xdrs, &reply_msg);
 	cr->cr_mrep = NULL;
@@ -569,14 +555,6 @@ m_freem(m2);
 			} else {
 				KASSERT(results,
 				    ("auth validated but no result"));
-				if (ext) {
-					if ((results->m_flags & M_NOMAP) !=
-					    0)
-						ext->rc_mbufoffs =
-						    xdrs.x_handy;
-					else
-						ext->rc_mbufoffs = 0;
-				}
 				*resultsp = results;
 			}
 		}		/* end successful completion */
@@ -932,7 +910,11 @@ clnt_vc_soupcall(struct socket *so, void *arg, int waitflag)
 
 	CTASSERT(sizeof(xid_plus_direction) == 2 * sizeof(uint32_t));
 
-	/* RPC-over-TLS needs to block reception during handshake upcall. */
+	/*
+	 * RPC-over-TLS needs to block reception during
+	 * upcalls since the upcall will be doing I/O on
+	 * the socket via openssl library calls.
+	 */
 	mtx_lock(&ct->ct_lock);
 	if (ct->ct_dontrcv) {
 		mtx_unlock(&ct->ct_lock);
@@ -942,15 +924,13 @@ clnt_vc_soupcall(struct socket *so, void *arg, int waitflag)
 
 	/*
 	 * If another thread is already here, it must be in
-	 * soreceive(), so just return.
+	 * soreceive(), so just return to avoid races with it.
 	 * ct_upcallrefs is protected by the SOCKBUF_LOCK(),
 	 * which is held in this function, except when
 	 * soreceive() is called.
 	 */
 	if (ct->ct_upcallrefs > 0)
-{ printf("soup another\n");
 		return (SU_OK);
-}
 	ct->ct_upcallrefs++;
 
 	/*
@@ -987,6 +967,7 @@ clnt_vc_soupcall(struct socket *so, void *arg, int waitflag)
 		}
 		if (error != 0) {
 		wakeup_all:
+printf("wakeup_all err=%d\n", error);
 			mtx_lock(&ct->ct_lock);
 			ct->ct_error.re_status = RPC_CANTRECV;
 			ct->ct_error.re_errno = error;

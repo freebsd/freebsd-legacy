@@ -120,7 +120,6 @@ struct rpc_callextra {
 	void		*rc_feedback_arg; /* argument for callback */
 	struct rpc_timers *rc_timers;	  /* optional RTT timers */
 	struct rpc_err	rc_err;		/* detailed call status */
-	u_int		rc_mbufoffs;	/* Offset in resultsp mbuf */
 };
 #endif
 

@@ -122,10 +122,9 @@ xdrmbuf_getall(XDR *xdrs)
 		xdrs->x_private = NULL;
 	}
 
-	if (m) {
-		if ((m->m_flags & M_NOMAP) == 0)
-			m_adj(m, xdrs->x_handy);
-	} else
+	if (m)
+		m_adj(m, xdrs->x_handy);
+	else
 		m = m_get(M_WAITOK, MT_DATA);
 	return (m);
 }
@@ -195,10 +194,7 @@ xdrmbuf_getbytes(XDR *xdrs, char *addr, u_int len)
 		sz = m->m_len - xdrs->x_handy;
 		if (sz > len)
 			sz = len;
-		if ((m->m_flags & M_NOMAP) != 0)
-			m_copydata(m, xdrs->x_handy, sz, addr);
-		else
-			bcopy(mtod(m, const char *) + xdrs->x_handy, addr, sz);
+		bcopy(mtod(m, const char *) + xdrs->x_handy, addr, sz);
 
 		addr += sz;
 		xdrs->x_handy += sz;
@@ -290,8 +286,6 @@ xdrmbuf_inline(XDR *xdrs, u_int len)
 	char *p;
 
 	if (!m)
-		return (0);
-	if ((m->m_flags & M_NOMAP) != 0)
 		return (0);
 	if (xdrs->x_op == XDR_ENCODE) {
 		available = M_TRAILINGSPACE(m) + (m->m_len - xdrs->x_handy);
