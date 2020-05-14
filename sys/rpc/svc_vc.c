@@ -674,6 +674,7 @@ svc_vc_recv(SVCXPRT *xprt, struct rpc_msg *msg,
 	uint32_t xid_plus_direction[2];
 	struct cmsghdr *cmsg;
 	struct tls_get_record tgr;
+	enum clnt_stat ret;
 
 	/*
 	 * Serialise access to the socket and our own record parsing
@@ -748,6 +749,9 @@ svc_vc_recv(SVCXPRT *xprt, struct rpc_msg *msg,
 		 * If receiving is disabled so that a TLS handshake can be
 		 * done by the rpctlssd daemon, return FALSE here.
 		 */
+		rcvflag = MSG_DONTWAIT;
+		if ((xprt->xp_tls & RPCTLS_FLAGS_HANDSHAKE) != 0)
+			rcvflag |= MSG_TLSAPPDATA;
 tryagain:
 		if (xprt->xp_dontrcv) {
 			sx_xunlock(&xprt->xp_lock);
@@ -765,7 +769,6 @@ tryagain:
 		uio.uio_resid = 1000000000;
 		uio.uio_td = curthread;
 		ctrl = m = NULL;
-		rcvflag = MSG_DONTWAIT;
 		error = soreceive(so, NULL, &uio, &m, &ctrl, &rcvflag);
 
 		if (error == EWOULDBLOCK) {
@@ -781,6 +784,36 @@ tryagain:
 				xprt_inactive_self(xprt);
 			SOCKBUF_UNLOCK(&so->so_rcv);
 			sx_xunlock(&xprt->xp_lock);
+			return (FALSE);
+		}
+
+		/*
+		 * A return of ENXIO indicates that there is a
+		 * non-application data record at the head of the
+		 * socket's receive queue, for TLS connections.
+		 * This record needs to be handled in userland
+		 * via an SSL_read() call, so do an upcall to the daemon.
+		 */
+		if ((xprt->xp_tls & RPCTLS_FLAGS_HANDSHAKE) != 0 &&
+		    error == ENXIO) {
+			/* Disable reception. */
+			xprt->xp_dontrcv = TRUE;
+			sx_xunlock(&xprt->xp_lock);
+printf("Call rpctls_srv_handlerecord\n");
+			ret = rpctls_srv_handlerecord(xprt->xp_sslsec,
+			    xprt->xp_sslusec, xprt->xp_sslrefno);
+			sx_xlock(&xprt->xp_lock);
+			xprt->xp_dontrcv = FALSE;
+			if (ret != RPC_SUCCESS) {
+				/*
+				 * All we can do is soreceive() it and
+				 * then toss it.
+				 */
+				rcvflag = MSG_DONTWAIT;
+				goto tryagain;
+			}
+			sx_xunlock(&xprt->xp_lock);
+			xprt_active(xprt);   /* Harmless if already active. */
 			return (FALSE);
 		}
 
@@ -815,15 +848,16 @@ if (ctrl->m_next != NULL) printf("EEK! svc list of controls\n");
 			    cmsg->cmsg_len == CMSG_LEN(sizeof(tgr))) {
 				memcpy(&tgr, CMSG_DATA(cmsg), sizeof(tgr));
 				/*
-				 * For now, just toss non-application
-				 * data records.
-				 * In the future, there may need to be
-				 * an upcall done to the daemon.
+				 * This should have been handled by
+				 * the rpctls_svc_handlerecord()
+				 * upcall.  If not, all we can do is
+				 * toss it away.
 				 */
 				if (tgr.tls_type != TLS_RLTYPE_APP) {
 printf("Got weird type=%d\n", tgr.tls_type);
 					m_freem(m);
 					m_free(ctrl);
+					rcvflag = MSG_DONTWAIT | MSG_TLSAPPDATA;
 					goto tryagain;
 				}
 			}

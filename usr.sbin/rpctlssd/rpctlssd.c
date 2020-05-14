@@ -419,6 +419,49 @@ rpctlssd_verbose_out("rpctlsd_connect_svc s=%d\n", s);
 }
 
 bool_t
+rpctlssd_handlerecord_1_svc(struct rpctlssd_handlerecord_arg *argp,
+    void *result, struct svc_req *rqstp)
+{
+	struct ssl_entry *slp;
+	int ret;
+	char junk;
+
+	slp = NULL;
+	if (argp->sec == rpctls_ssl_sec && argp->usec ==
+	    rpctls_ssl_usec) {
+		LIST_FOREACH(slp, &rpctls_ssllist, next) {
+			if (slp->refno == argp->ssl)
+				break;
+		}
+	}
+
+	if (slp != NULL) {
+		rpctlssd_verbose_out("rpctlssd_handlerecord fd=%d\n",
+		    slp->s);
+		/*
+		 * An SSL_read() of 0 bytes should fail, but it should
+		 * handle the non-application data record before doing so.
+		 */
+		ret = SSL_read(slp->ssl, &junk, 0);
+		if (ret <= 0) {
+			/* Check to see if this was a close alert. */
+			ret = SSL_get_shutdown(slp->ssl);
+rpctlssd_verbose_out("get_shutdown=%d\n", ret);
+			if ((ret & (SSL_SENT_SHUTDOWN |
+			    SSL_RECEIVED_SHUTDOWN)) == SSL_RECEIVED_SHUTDOWN)
+				SSL_shutdown(slp->ssl);
+		} else {
+			if (rpctls_debug_level == 0)
+				syslog(LOG_ERR, "SSL_read returned %d", ret);
+			else
+				fprintf(stderr, "SSL_read returned %d\n", ret);
+		}
+	} else
+		return (FALSE);
+	return (TRUE);
+}
+
+bool_t
 rpctlssd_disconnect_1_svc(struct rpctlssd_disconnect_arg *argp,
     void *result, struct svc_req *rqstp)
 {
@@ -442,6 +485,7 @@ rpctlssd_disconnect_1_svc(struct rpctlssd_disconnect_arg *argp,
 		 * For RPC-over-TLS, this upcall is expected
 		 * to close off the socket.
 		 */
+		shutdown(slp->s, SHUT_WR);
 		close(slp->s);
 		free(slp);
 	} else
@@ -679,7 +723,7 @@ rpctlssd_verbose_out("%s\n", cp2);
 	}
 	if (ret == 0) {
 		if (rpctls_debug_level == 0)
-			syslog(LOG_ERR, "ktls not working\n");
+			syslog(LOG_ERR, "ktls not working");
 		else
 			fprintf(stderr, "ktls not working\n");
 		/*

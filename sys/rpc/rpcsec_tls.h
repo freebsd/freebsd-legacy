@@ -47,6 +47,10 @@
 /* Functions that perform upcalls to the rpctlsd daemon. */
 enum clnt_stat	rpctls_connect(CLIENT *newclient, struct socket *so,
 		    uint64_t *sslp);
+enum clnt_stat	rpctls_cl_handlerecord(uint64_t sec, uint64_t usec,
+		    uint64_t ssl);
+enum clnt_stat	rpctls_srv_handlerecord(uint64_t sec, uint64_t usec,
+		    uint64_t ssl);
 enum clnt_stat	rpctls_cl_disconnect(uint64_t sec, uint64_t usec, uint64_t ssl);
 enum clnt_stat	rpctls_srv_disconnect(uint64_t sec, uint64_t usec,
 		    uint64_t ssl);

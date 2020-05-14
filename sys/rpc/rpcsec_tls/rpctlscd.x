@@ -35,6 +35,12 @@ struct rpctlscd_connect_res {
 	uint64_t ssl;
 };
 
+struct rpctlscd_handlerecord_arg {
+	uint64_t sec;
+	uint64_t usec;
+	uint64_t ssl;
+};
+
 struct rpctlscd_disconnect_arg {
 	uint64_t sec;
 	uint64_t usec;
@@ -48,6 +54,8 @@ program RPCTLSCD {
 		rpctlscd_connect_res
 		RPCTLSCD_CONNECT(void) = 1;
 
-		void RPCTLSCD_DISCONNECT(rpctlscd_disconnect_arg) = 2;
+		void RPCTLSCD_HANDLERECORD(rpctlscd_handlerecord_arg) = 2;
+
+		void RPCTLSCD_DISCONNECT(rpctlscd_disconnect_arg) = 3;
 	} = 1;
 } = 0x40677374;

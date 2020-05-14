@@ -385,6 +385,53 @@ printf("aft wakeup\n");
 	return (stat);
 }
 
+/* Do an upcall to handle an non-application data record using TLS. */
+enum clnt_stat
+rpctls_cl_handlerecord(uint64_t sec, uint64_t usec, uint64_t ssl)
+{
+	struct rpctlscd_handlerecord_arg arg;
+	enum clnt_stat stat;
+	CLIENT *cl;
+
+printf("In rpctls_cl_handlerecord\n");
+	cl = rpctls_connect_client();
+printf("handlerecord_client=%p\n", cl);
+	if (cl == NULL)
+		return (RPC_FAILED);
+
+	/* Do the handlerecord upcall. */
+	arg.sec = sec;
+	arg.usec = usec;
+	arg.ssl = ssl;
+	stat = rpctlscd_handlerecord_1(&arg, NULL, cl);
+printf("aft handlerecord upcall=%d\n", stat);
+	CLNT_RELEASE(cl);
+	return (stat);
+}
+
+enum clnt_stat
+rpctls_srv_handlerecord(uint64_t sec, uint64_t usec, uint64_t ssl)
+{
+	struct rpctlssd_handlerecord_arg arg;
+	enum clnt_stat stat;
+	CLIENT *cl;
+
+printf("In rpctls_srv_handlerecord\n");
+	cl = rpctls_server_client();
+printf("srv handlerecord_client=%p\n", cl);
+	if (cl == NULL)
+		return (RPC_FAILED);
+
+	/* Do the handlerecord upcall. */
+	arg.sec = sec;
+	arg.usec = usec;
+	arg.ssl = ssl;
+	stat = rpctlssd_handlerecord_1(&arg, NULL, cl);
+printf("aft srv handlerecord upcall=%d\n", stat);
+	CLNT_RELEASE(cl);
+	return (stat);
+}
+
 /* Do an upcall to shut down a socket using TLS. */
 enum clnt_stat
 rpctls_cl_disconnect(uint64_t sec, uint64_t usec, uint64_t ssl)

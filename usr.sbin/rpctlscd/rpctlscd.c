@@ -371,10 +371,47 @@ rpctlscd_verbose_out("rpctlsd_connect s=%d\n", s);
 }
 
 bool_t
+rpctlscd_handlerecord_1_svc(struct rpctlscd_handlerecord_arg *argp,
+    void *result, struct svc_req *rqstp)
+{
+	struct ssl_entry *slp;
+	int ret;
+	char junk;
+
+	slp = NULL;
+	if (argp->sec == rpctls_ssl_sec && argp->usec ==
+	    rpctls_ssl_usec) {
+		LIST_FOREACH(slp, &rpctls_ssllist, next) {
+			if (slp->refno == argp->ssl)
+				break;
+		}
+	}
+
+	if (slp != NULL) {
+		rpctlscd_verbose_out("rpctlscd_handlerecord fd=%d\n",
+		    slp->s);
+		/*
+		 * An SSL_read() of 0 bytes should fail, but it should
+		 * handle the non-application data record before doing so.
+		 */
+		ret = SSL_read(slp->ssl, &junk, 0);
+		if (ret > 0) {
+			if (rpctls_debug_level == 0)
+				syslog(LOG_ERR, "SSL_read returned %d", ret);
+			else
+				fprintf(stderr, "SSL_read returned %d\n", ret);
+		}
+	} else
+		return (FALSE);
+	return (TRUE);
+}
+
+bool_t
 rpctlscd_disconnect_1_svc(struct rpctlscd_disconnect_arg *argp,
     void *result, struct svc_req *rqstp)
 {
 	struct ssl_entry *slp;
+	int ret;
 
 	slp = NULL;
 	if (argp->sec == rpctls_ssl_sec && argp->usec ==
@@ -389,6 +426,13 @@ rpctlscd_disconnect_1_svc(struct rpctlscd_disconnect_arg *argp,
 		rpctlscd_verbose_out("rpctlscd_disconnect: fd=%d closed\n",
 		    slp->s);
 		LIST_REMOVE(slp, next);
+		SSL_shutdown(slp->ssl);
+		/* Check to see if the peer has sent a close alert. */
+		ret = SSL_get_shutdown(slp->ssl);
+rpctlscd_verbose_out("get_shutdown=%d\n", ret);
+		if ((ret & (SSL_SENT_SHUTDOWN | SSL_RECEIVED_SHUTDOWN)) ==
+		    SSL_SENT_SHUTDOWN)
+			SSL_shutdown(slp->ssl);
 		SSL_free(slp->ssl);
 		/*
 		 * For RPC-over-TLS, this upcall is expected
