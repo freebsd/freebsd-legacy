@@ -4872,7 +4872,7 @@ nfsv4_findmirror(struct nfsmount *nmp)
  * Fill in the fields of "struct nfsrv_descript" for a new ext_pgs mbuf.
  * The build argument is true for build and false for dissect.
  */
-int
+void
 nfsm_set(struct nfsrv_descript *nd, u_int offs)
 {
 	struct mbuf *m;
@@ -4907,17 +4907,14 @@ nfsm_set(struct nfsrv_descript *nd, u_int offs)
 			nd->nd_bpos += pgs->first_pg_off;
 		if (offs > 0) {
 			nd->nd_bpos += offs;
-			rlen = nd->nd_bextpgsiz = rlen - offs;
+			nd->nd_bextpgsiz = rlen - offs;
 		} else if (nd->nd_bextpg == 0)
-			rlen = nd->nd_bextpgsiz = PAGE_SIZE -
+			nd->nd_bextpgsiz = PAGE_SIZE -
 			    pgs->first_pg_off;
 		else
-			rlen = nd->nd_bextpgsiz = PAGE_SIZE;
-	} else {
+			nd->nd_bextpgsiz = PAGE_SIZE;
+	} else
 		nd->nd_bpos = mtod(m, char *) + offs;
-		rlen = m->m_len - offs;
-	}
-	return (rlen);
 }
 
 /*
