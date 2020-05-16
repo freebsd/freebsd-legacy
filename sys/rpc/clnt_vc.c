@@ -101,6 +101,7 @@ static void clnt_vc_close(CLIENT *);
 static void clnt_vc_destroy(CLIENT *);
 static bool_t time_not_ok(struct timeval *);
 static int clnt_vc_soupcall(struct socket *so, void *arg, int waitflag);
+static void clnt_vc_dotlsupcall(struct ct_data *ct);
 
 static struct clnt_ops clnt_vc_ops = {
 	.cl_call =	clnt_vc_call,
@@ -158,6 +159,7 @@ clnt_vc_create(
 	ct->ct_closing = FALSE;
 	ct->ct_closed = FALSE;
 	ct->ct_upcallrefs = 0;
+	ct->ct_rcvstate = RCVNORMAL;
 
 	if ((so->so_state & (SS_ISCONNECTED|SS_ISCONFIRMING)) == 0) {
 		error = soconnect(so, raddr, curthread);
@@ -414,6 +416,18 @@ call_again:
 		stat = RPC_CANTRECV;
 		goto out;
 	}
+
+	/*
+	 * For TLS, do an upcall, as required.
+	 * clnt_vc_dotlsupcall() will just return unless an
+	 * an upcall is needed.
+	 * Wait until any upcall is completed.
+	 */
+	clnt_vc_dotlsupcall(ct);
+	while (ct->ct_rcvstate != RCVNORMAL &&
+	    ct->ct_rcvstate != RCVNONAPPDATA)
+		msleep(&ct->ct_rcvstate, &ct->ct_lock, 0, "rpcrcvst", hz);
+
 	TAILQ_INSERT_TAIL(&ct->ct_pending, cr, cr_link);
 	mtx_unlock(&ct->ct_lock);
 
@@ -487,8 +501,30 @@ printf("TRY AGAIN!!\n");
 		goto out;
 	}
 
-	error = msleep(cr, &ct->ct_lock, ct->ct_waitflag, ct->ct_waitchan,
-	    tvtohz(&timeout));
+	/*
+	 * For TLS, msleep() can be awakened to handle
+	 * an upcall via a call to clnt_vc_dotlsupcall().
+	 * If there was no error, it needs to loop
+	 * around and wait for the reply.
+	 */
+	do {
+		/*
+		 * Call clnt_vc_dotlsupcall() both before
+		 * and after the msleep().  If there is
+		 * no upcall to do, clnt_vc_dotlsupcall()
+		 * simply returns.
+		 * Call before msleep() in case ct_rcvstate
+		 * is already set to UPCALLNEEDED and the
+		 * wakeup(ct) has already been done.
+		 * Call after msleep() in case it has its
+		 * reply and will not be looping.
+		 */
+		clnt_vc_dotlsupcall(ct);
+		error = msleep(cr, &ct->ct_lock, ct->ct_waitflag,
+		    ct->ct_waitchan, tvtohz(&timeout));
+		clnt_vc_dotlsupcall(ct);
+	} while (cr->cr_mrep == NULL && error == 0 &&
+	    cr->cr_error == 0);
 
 	TAILQ_REMOVE(&ct->ct_pending, cr, cr_link);
 
@@ -767,9 +803,9 @@ printf("backch tls=0x%x xprt=%p\n", xprt->xp_tls, xprt);
 
 	case CLSET_BLOCKRCV:
 		if (*(int *) info)
-			ct->ct_dontrcv = TRUE;
+			ct->ct_rcvstate = TLSHANDSHAKE;
 		else
-			ct->ct_dontrcv = FALSE;
+			ct->ct_rcvstate = RCVNORMAL;
 		break;
 
 	default:
@@ -898,7 +934,7 @@ clnt_vc_soupcall(struct socket *so, void *arg, int waitflag)
 {
 	struct ct_data *ct = (struct ct_data *) arg;
 	struct uio uio;
-	struct mbuf *m, *m2;
+	struct mbuf *m, *m2, **ctrlp;
 	struct ct_request *cr;
 	int error, rcvflag, foundreq;
 	uint32_t xid_plus_direction[2], header;
@@ -916,7 +952,8 @@ clnt_vc_soupcall(struct socket *so, void *arg, int waitflag)
 	 * the socket via openssl library calls.
 	 */
 	mtx_lock(&ct->ct_lock);
-	if (ct->ct_dontrcv) {
+	if (ct->ct_rcvstate != RCVNORMAL && ct->ct_rcvstate !=
+	    RCVNONAPPDATA) {
 		mtx_unlock(&ct->ct_lock);
 		return (SU_OK);
 	}
@@ -942,8 +979,13 @@ clnt_vc_soupcall(struct socket *so, void *arg, int waitflag)
 		uio.uio_td = curthread;
 		m2 = m = NULL;
 		rcvflag = MSG_DONTWAIT | MSG_SOCALLBCK;
+		if (ct->ct_sslrefno != 0 && ct->ct_rcvstate == RCVNORMAL) {
+			rcvflag |= MSG_TLSAPPDATA;
+			ctrlp = NULL;
+		} else
+			ctrlp = &m2;
 		SOCKBUF_UNLOCK(&so->so_rcv);
-		error = soreceive(so, NULL, &uio, &m, &m2, &rcvflag);
+		error = soreceive(so, NULL, &uio, &m, ctrlp, &rcvflag);
 		SOCKBUF_LOCK(&so->so_rcv);
 
 		if (error == EWOULDBLOCK) {
@@ -964,6 +1006,30 @@ clnt_vc_soupcall(struct socket *so, void *arg, int waitflag)
 			 * to read from the stream.
 			 */
 			error = ECONNRESET;
+		}
+
+		/*
+		 * A return of ENXIO indicates that there is a
+		 * non-application data record at the head of the
+		 * socket's receive queue, for TLS connections.
+		 * This record needs to be handled in userland
+		 * via an SSL_read() call, so do an upcall to the daemon.
+		 */
+		if (ct->ct_sslrefno != 0 && error == ENXIO) {
+			/* Disable reception, marking an upcall needed. */
+			mtx_lock(&ct->ct_lock);
+			ct->ct_rcvstate = UPCALLNEEDED;
+			/*
+			 * If an upcall in needed, wake up all thread(s)
+			 * in clnt_vc_call() so that one of them can do it.
+			 * Not efficient, but this should not happen
+			 * frequently.
+			 */
+			TAILQ_FOREACH(cr, &ct->ct_pending, cr_link)
+				wakeup(cr);
+			mtx_unlock(&ct->ct_lock);
+printf("Mark upcallneeded\n");
+			break;
 		}
 		if (error != 0) {
 		wakeup_all:
@@ -987,16 +1053,18 @@ if (m2->m_next != NULL) printf("EEK! list of controls\n");
 			    cmsg->cmsg_len == CMSG_LEN(sizeof(tgr))) {
 				memcpy(&tgr, CMSG_DATA(cmsg), sizeof(tgr));
 				/*
-				 * For now, just toss non-application
-				 * data records.
-				 * In the future, there may need to be
-				 * an upcall done to the daemon, but
-				 * it cannot be done here.
+				 * This should have been handled by
+				 * setting ct_rcvstate == UPCALLNEEDED,
+				 * but if not, all we can do is toss
+				 * it away.
 				 */
 				if (tgr.tls_type != TLS_RLTYPE_APP) {
 printf("Got weird type=%d\n", tgr.tls_type);
 					m_freem(m);
 					m_free(m2);
+					mtx_lock(&ct->ct_lock);
+					ct->ct_rcvstate = RCVNORMAL;
+					mtx_unlock(&ct->ct_lock);
 					continue;
 				}
 			}
@@ -1206,4 +1274,27 @@ clnt_vc_upcallsdone(struct ct_data *ct)
 	while (ct->ct_upcallrefs > 0)
 		(void) msleep(&ct->ct_upcallrefs,
 		    SOCKBUF_MTX(&ct->ct_socket->so_rcv), 0, "rpcvcup", 0);
+}
+
+/*
+ * Do a TLS upcall to the rpctlscd daemon, as required.
+ */
+static void
+clnt_vc_dotlsupcall(struct ct_data *ct)
+{
+	enum clnt_stat ret;
+
+	mtx_assert(&ct->ct_lock, MA_OWNED);
+	if (ct->ct_rcvstate == UPCALLNEEDED) {
+		ct->ct_rcvstate = UPCALLINPROG;
+		mtx_unlock(&ct->ct_lock);
+		ret = rpctls_cl_handlerecord(ct->ct_sslsec, ct->ct_sslusec,
+		    ct->ct_sslrefno);
+		mtx_lock(&ct->ct_lock);
+		if (ret == RPC_SUCCESS)
+			ct->ct_rcvstate = RCVNORMAL;
+		else
+			ct->ct_rcvstate = RCVNONAPPDATA;
+		wakeup(&ct->ct_rcvstate);
+	}
 }

@@ -82,6 +82,14 @@ struct rc_data {
 	bool			rc_tls; /* Enable TLS on connection */
 };
 
+enum clnt_rcvstate {
+	RCVNORMAL = 0,		/* Normal reception. */
+	RCVNONAPPDATA = 1,	/* Reception of a non-application record. */
+	TLSHANDSHAKE = 2,	/* Reception blocked for TLS handshake. */
+	UPCALLNEEDED = 3,	/* Upcall to rpctlscd needed. */
+	UPCALLINPROG = 4	/* Upcall to rpctlscd in progress. */
+};
+
 struct ct_data {
 	struct mtx	ct_lock;
 	int		ct_threads;	/* number of threads in clnt_vc_call */
@@ -106,7 +114,7 @@ struct ct_data {
 	uint64_t	ct_sslsec;	/* RPC-over-TLS connection. */
 	uint64_t	ct_sslusec;
 	uint64_t	ct_sslrefno;
-	bool_t		ct_dontrcv;	/* TRUE to block receiving */
+	enum clnt_rcvstate ct_rcvstate;	/* Block receiving for TLS upcalls */
 	struct mbuf	*ct_raw;	/* Raw mbufs recv'd */
 };
 
