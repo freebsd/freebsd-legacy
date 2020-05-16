@@ -240,6 +240,7 @@ printf("falloc=%d fd=%d\n", error, fd);
 			rpctls_connect_so = NULL;
 			mtx_unlock(&rpctls_connect_lock);
 			finit(fp, FREAD | FWRITE, DTYPE_SOCKET, so, &socketops);
+			fdrop(fp, td);	/* Drop fp reference. */
 			td->td_retval[0] = fd;
 		}
 printf("returning=%d\n", fd);
@@ -260,6 +261,7 @@ printf("srv falloc=%d fd=%d\n", error, fd);
 			rpctls_server_so = NULL;
 			mtx_unlock(&rpctls_server_lock);
 			finit(fp, FREAD | FWRITE, DTYPE_SOCKET, so, &socketops);
+			fdrop(fp, td);	/* Drop fp reference. */
 			td->td_retval[0] = fd;
 		}
 printf("srv returning=%d\n", fd);
