@@ -404,8 +404,10 @@ rpctls_cl_handlerecord(uint64_t sec, uint64_t usec, uint64_t ssl,
 printf("In rpctls_cl_handlerecord\n");
 	cl = rpctls_connect_client();
 printf("handlerecord_client=%p\n", cl);
-	if (cl == NULL)
-		return (RPC_AUTHERROR);
+	if (cl == NULL) {
+		*reterr = RPCTLSERR_NOSSL;
+		return (RPC_SUCCESS);
+	}
 
 	/* Do the handlerecord upcall. */
 	arg.sec = sec;
@@ -431,8 +433,10 @@ rpctls_srv_handlerecord(uint64_t sec, uint64_t usec, uint64_t ssl,
 printf("In rpctls_srv_handlerecord\n");
 	cl = rpctls_server_client();
 printf("srv handlerecord_client=%p\n", cl);
-	if (cl == NULL)
-		return (RPC_AUTHERROR);
+	if (cl == NULL) {
+		*reterr = RPCTLSERR_NOSSL;
+		return (RPC_SUCCESS);
+	}
 
 	/* Do the handlerecord upcall. */
 	arg.sec = sec;
@@ -459,8 +463,10 @@ rpctls_cl_disconnect(uint64_t sec, uint64_t usec, uint64_t ssl,
 printf("In rpctls_cl_disconnect\n");
 	cl = rpctls_connect_client();
 printf("disconnect_client=%p\n", cl);
-	if (cl == NULL)
-		return (RPC_AUTHERROR);
+	if (cl == NULL) {
+		*reterr = RPCTLSERR_NOSSL;
+		return (RPC_SUCCESS);
+	}
 
 	/* Do the disconnect upcall. */
 	arg.sec = sec;
@@ -486,8 +492,10 @@ rpctls_srv_disconnect(uint64_t sec, uint64_t usec, uint64_t ssl,
 printf("In rpctls_srv_disconnect\n");
 	cl = rpctls_server_client();
 printf("srv disconnect_client=%p\n", cl);
-	if (cl == NULL)
-		return (RPC_AUTHERROR);
+	if (cl == NULL) {
+		*reterr = RPCTLSERR_NOSSL;
+		return (RPC_SUCCESS);
+	}
 
 	/* Do the disconnect upcall. */
 	arg.sec = sec;

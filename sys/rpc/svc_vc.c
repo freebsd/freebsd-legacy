@@ -455,12 +455,17 @@ svc_vc_destroy_common(SVCXPRT *xprt)
 	uint32_t reterr;
 
 	if (xprt->xp_socket) {
-		stat = RPC_FAILED;
-		if ((xprt->xp_tls & RPCTLS_FLAGS_HANDSHAKE) != 0)
+		if ((xprt->xp_tls & RPCTLS_FLAGS_HANDSHAKE) != 0) {
+			/*
+			 * If the upcall fails, the socket has
+			 * probably been closed via the rpctlssd
+			 * daemon having crashed or been
+			 * restarted.
+			 */
 			stat = rpctls_srv_disconnect(xprt->xp_sslsec,
 			    xprt->xp_sslusec, xprt->xp_sslrefno,
 			    &reterr);
-		if (stat != RPC_SUCCESS || reterr == RPCTLSERR_NOCLOSE)
+		} else
 			(void)soclose(xprt->xp_socket);
 	}
 

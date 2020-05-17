@@ -159,7 +159,7 @@ clnt_vc_create(
 	ct->ct_closing = FALSE;
 	ct->ct_closed = FALSE;
 	ct->ct_upcallrefs = 0;
-	ct->ct_rcvstate = RCVNORMAL;
+	ct->ct_rcvstate = RPCRCVSTATE_NORMAL;
 
 	if ((so->so_state & (SS_ISCONNECTED|SS_ISCONFIRMING)) == 0) {
 		error = soconnect(so, raddr, curthread);
@@ -278,6 +278,7 @@ clnt_vc_create(
 	ct->ct_raw = NULL;
 	ct->ct_record = NULL;
 	ct->ct_record_resid = 0;
+	ct->ct_sslrefno = 0;
 	TAILQ_INIT(&ct->ct_pending);
 	return (cl);
 
@@ -424,8 +425,8 @@ call_again:
 	 * Wait until any upcall is completed.
 	 */
 	clnt_vc_dotlsupcall(ct);
-	while (ct->ct_rcvstate != RCVNORMAL &&
-	    ct->ct_rcvstate != RCVNONAPPDATA)
+	while ((ct->ct_rcvstate & (RPCRCVSTATE_NORMAL |
+	    RPCRCVSTATE_NONAPPDATA)) == 0)
 		msleep(&ct->ct_rcvstate, &ct->ct_lock, 0, "rpcrcvst", hz);
 
 	TAILQ_INSERT_TAIL(&ct->ct_pending, cr, cr_link);
@@ -802,10 +803,13 @@ printf("backch tls=0x%x xprt=%p\n", xprt->xp_tls, xprt);
 		break;
 
 	case CLSET_BLOCKRCV:
-		if (*(int *) info)
-			ct->ct_rcvstate = TLSHANDSHAKE;
-		else
-			ct->ct_rcvstate = RCVNORMAL;
+		if (*(int *) info) {
+			ct->ct_rcvstate &= ~RPCRCVSTATE_NORMAL;
+			ct->ct_rcvstate |= RPCRCVSTATE_TLSHANDSHAKE;
+		} else {
+			ct->ct_rcvstate &= ~RPCRCVSTATE_TLSHANDSHAKE;
+			ct->ct_rcvstate |= RPCRCVSTATE_NORMAL;
+		}
 		break;
 
 	default:
@@ -900,13 +904,17 @@ clnt_vc_destroy(CLIENT *cl)
 
 	mtx_destroy(&ct->ct_lock);
 	if (so) {
-		stat = RPC_FAILED;
-		reterr = RPCTLSERR_OK;
-		if (ct->ct_sslrefno != 0)
+		if (ct->ct_sslrefno != 0) {
+			/*
+			 * If the upcall fails, the socket has
+			 * probably been closed via the rpctlscd
+			 * daemon having crashed or been
+			 * restarted.
+			 */
 			stat = rpctls_cl_disconnect(ct->ct_sslsec,
 			    ct->ct_sslusec, ct->ct_sslrefno,
 			    &reterr);
-		if (stat != RPC_SUCCESS || reterr == RPCTLSERR_NOCLOSE) {
+		} else {
 			soshutdown(so, SHUT_WR);
 			soclose(so);
 		}
@@ -955,8 +963,12 @@ clnt_vc_soupcall(struct socket *so, void *arg, int waitflag)
 	 * the socket via openssl library calls.
 	 */
 	mtx_lock(&ct->ct_lock);
-	if (ct->ct_rcvstate != RCVNORMAL && ct->ct_rcvstate !=
-	    RCVNONAPPDATA) {
+	if ((ct->ct_rcvstate & (RPCRCVSTATE_NORMAL |
+	    RPCRCVSTATE_NONAPPDATA)) == 0) {
+		/* Mark that a socket upcall needs to be done. */
+		if ((ct->ct_rcvstate & (RPCRCVSTATE_UPCALLNEEDED |
+		    RPCRCVSTATE_UPCALLINPROG)) != 0)
+			ct->ct_rcvstate |= RPCRCVSTATE_SOUPCALLNEEDED;
 		mtx_unlock(&ct->ct_lock);
 		return (SU_OK);
 	}
@@ -982,7 +994,8 @@ clnt_vc_soupcall(struct socket *so, void *arg, int waitflag)
 		uio.uio_td = curthread;
 		m2 = m = NULL;
 		rcvflag = MSG_DONTWAIT | MSG_SOCALLBCK;
-		if (ct->ct_sslrefno != 0 && ct->ct_rcvstate == RCVNORMAL) {
+		if (ct->ct_sslrefno != 0 && (ct->ct_rcvstate &
+		    RPCRCVSTATE_NORMAL) != 0) {
 			rcvflag |= MSG_TLSAPPDATA;
 			ctrlp = NULL;
 		} else
@@ -1021,7 +1034,7 @@ clnt_vc_soupcall(struct socket *so, void *arg, int waitflag)
 		if (ct->ct_sslrefno != 0 && error == ENXIO) {
 			/* Disable reception, marking an upcall needed. */
 			mtx_lock(&ct->ct_lock);
-			ct->ct_rcvstate = UPCALLNEEDED;
+			ct->ct_rcvstate |= RPCRCVSTATE_UPCALLNEEDED;
 			/*
 			 * If an upcall in needed, wake up all thread(s)
 			 * in clnt_vc_call() so that one of them can do it.
@@ -1057,16 +1070,18 @@ if (m2->m_next != NULL) printf("EEK! list of controls\n");
 				memcpy(&tgr, CMSG_DATA(cmsg), sizeof(tgr));
 				/*
 				 * This should have been handled by
-				 * setting ct_rcvstate == UPCALLNEEDED,
-				 * but if not, all we can do is toss
-				 * it away.
+				 * setting RPCRCVSTATE_UPCALLNEEDED in
+				 * ct_rcvstate but if not, all we can do
+				 * is toss it away.
 				 */
 				if (tgr.tls_type != TLS_RLTYPE_APP) {
 printf("Got weird type=%d\n", tgr.tls_type);
 					m_freem(m);
 					m_free(m2);
 					mtx_lock(&ct->ct_lock);
-					ct->ct_rcvstate = RCVNORMAL;
+					ct->ct_rcvstate &=
+					    ~RPCRCVSTATE_NONAPPDATA;
+					ct->ct_rcvstate |= RPCRCVSTATE_NORMAL;
 					mtx_unlock(&ct->ct_lock);
 					continue;
 				}
@@ -1289,16 +1304,29 @@ clnt_vc_dotlsupcall(struct ct_data *ct)
 	uint32_t reterr;
 
 	mtx_assert(&ct->ct_lock, MA_OWNED);
-	if (ct->ct_rcvstate == UPCALLNEEDED) {
-		ct->ct_rcvstate = UPCALLINPROG;
-		mtx_unlock(&ct->ct_lock);
-		ret = rpctls_cl_handlerecord(ct->ct_sslsec, ct->ct_sslusec,
-		    ct->ct_sslrefno, &reterr);
-		mtx_lock(&ct->ct_lock);
-		if (ret == RPC_SUCCESS && reterr == RPCTLSERR_OK)
-			ct->ct_rcvstate = RCVNORMAL;
-		else
-			ct->ct_rcvstate = RCVNONAPPDATA;
-		wakeup(&ct->ct_rcvstate);
+	while ((ct->ct_rcvstate & (RPCRCVSTATE_UPCALLNEEDED |
+	    RPCRCVSTATE_SOUPCALLNEEDED)) != 0) {
+		if ((ct->ct_rcvstate & RPCRCVSTATE_UPCALLNEEDED) != 0) {
+			ct->ct_rcvstate &= ~RPCRCVSTATE_UPCALLNEEDED;
+			ct->ct_rcvstate |= RPCRCVSTATE_UPCALLINPROG;
+			mtx_unlock(&ct->ct_lock);
+			ret = rpctls_cl_handlerecord(ct->ct_sslsec, ct->ct_sslusec,
+			    ct->ct_sslrefno, &reterr);
+			mtx_lock(&ct->ct_lock);
+			ct->ct_rcvstate &= ~RPCRCVSTATE_UPCALLINPROG;
+			if (ret == RPC_SUCCESS && reterr == RPCTLSERR_OK)
+				ct->ct_rcvstate |= RPCRCVSTATE_NORMAL;
+			else
+				ct->ct_rcvstate |= RPCRCVSTATE_NONAPPDATA;
+			wakeup(&ct->ct_rcvstate);
+		}
+		if ((ct->ct_rcvstate & RPCRCVSTATE_SOUPCALLNEEDED) != 0) {
+			ct->ct_rcvstate &= ~RPCRCVSTATE_SOUPCALLNEEDED;
+			mtx_unlock(&ct->ct_lock);
+			SOCKBUF_LOCK(&ct->ct_socket->so_rcv);
+			clnt_vc_soupcall(ct->ct_socket, ct, M_NOWAIT);
+			SOCKBUF_UNLOCK(&ct->ct_socket->so_rcv);
+			mtx_lock(&ct->ct_lock);
+		}
 	}
 }
