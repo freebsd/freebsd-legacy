@@ -317,7 +317,8 @@ rpctls_server_client(void)
 
 /* Do an upcall for a new socket connect using TLS. */
 enum clnt_stat
-rpctls_connect(CLIENT *newclient, struct socket *so, uint64_t *sslp)
+rpctls_connect(CLIENT *newclient, struct socket *so, uint64_t *sslp,
+    uint32_t *reterr)
 {
 	struct rpctlscd_connect_res res;
 	struct rpc_callextra ext;
@@ -366,9 +367,12 @@ printf("rpctls_conect so=%p\n", so);
 	stat = rpctlscd_connect_1(NULL, &res, cl);
 printf("aft connect upcall=%d\n", stat);
 	if (stat == RPC_SUCCESS) {
-		*sslp++ = res.sec;
-		*sslp++ = res.usec;
-		*sslp = res.ssl;
+		*reterr = res.reterr;
+		if (res.reterr == 0) {
+			*sslp++ = res.sec;
+			*sslp++ = res.usec;
+			*sslp = res.ssl;
+		}
 	}
 	CLNT_RELEASE(cl);
 
@@ -389,9 +393,11 @@ printf("aft wakeup\n");
 
 /* Do an upcall to handle an non-application data record using TLS. */
 enum clnt_stat
-rpctls_cl_handlerecord(uint64_t sec, uint64_t usec, uint64_t ssl)
+rpctls_cl_handlerecord(uint64_t sec, uint64_t usec, uint64_t ssl,
+    uint32_t *reterr)
 {
 	struct rpctlscd_handlerecord_arg arg;
+	struct rpctlscd_handlerecord_res res;
 	enum clnt_stat stat;
 	CLIENT *cl;
 
@@ -399,22 +405,26 @@ printf("In rpctls_cl_handlerecord\n");
 	cl = rpctls_connect_client();
 printf("handlerecord_client=%p\n", cl);
 	if (cl == NULL)
-		return (RPC_FAILED);
+		return (RPC_AUTHERROR);
 
 	/* Do the handlerecord upcall. */
 	arg.sec = sec;
 	arg.usec = usec;
 	arg.ssl = ssl;
-	stat = rpctlscd_handlerecord_1(&arg, NULL, cl);
+	stat = rpctlscd_handlerecord_1(&arg, &res, cl);
 printf("aft handlerecord upcall=%d\n", stat);
 	CLNT_RELEASE(cl);
+	if (stat == RPC_SUCCESS)
+		*reterr = res.reterr;
 	return (stat);
 }
 
 enum clnt_stat
-rpctls_srv_handlerecord(uint64_t sec, uint64_t usec, uint64_t ssl)
+rpctls_srv_handlerecord(uint64_t sec, uint64_t usec, uint64_t ssl,
+    uint32_t *reterr)
 {
 	struct rpctlssd_handlerecord_arg arg;
+	struct rpctlssd_handlerecord_res res;
 	enum clnt_stat stat;
 	CLIENT *cl;
 
@@ -422,23 +432,27 @@ printf("In rpctls_srv_handlerecord\n");
 	cl = rpctls_server_client();
 printf("srv handlerecord_client=%p\n", cl);
 	if (cl == NULL)
-		return (RPC_FAILED);
+		return (RPC_AUTHERROR);
 
 	/* Do the handlerecord upcall. */
 	arg.sec = sec;
 	arg.usec = usec;
 	arg.ssl = ssl;
-	stat = rpctlssd_handlerecord_1(&arg, NULL, cl);
+	stat = rpctlssd_handlerecord_1(&arg, &res, cl);
 printf("aft srv handlerecord upcall=%d\n", stat);
 	CLNT_RELEASE(cl);
+	if (stat == RPC_SUCCESS)
+		*reterr = res.reterr;
 	return (stat);
 }
 
 /* Do an upcall to shut down a socket using TLS. */
 enum clnt_stat
-rpctls_cl_disconnect(uint64_t sec, uint64_t usec, uint64_t ssl)
+rpctls_cl_disconnect(uint64_t sec, uint64_t usec, uint64_t ssl,
+    uint32_t *reterr)
 {
 	struct rpctlscd_disconnect_arg arg;
+	struct rpctlscd_disconnect_res res;
 	enum clnt_stat stat;
 	CLIENT *cl;
 
@@ -446,22 +460,26 @@ printf("In rpctls_cl_disconnect\n");
 	cl = rpctls_connect_client();
 printf("disconnect_client=%p\n", cl);
 	if (cl == NULL)
-		return (RPC_FAILED);
+		return (RPC_AUTHERROR);
 
 	/* Do the disconnect upcall. */
 	arg.sec = sec;
 	arg.usec = usec;
 	arg.ssl = ssl;
-	stat = rpctlscd_disconnect_1(&arg, NULL, cl);
+	stat = rpctlscd_disconnect_1(&arg, &res, cl);
 printf("aft disconnect upcall=%d\n", stat);
 	CLNT_RELEASE(cl);
+	if (stat == RPC_SUCCESS)
+		*reterr = res.reterr;
 	return (stat);
 }
 
 enum clnt_stat
-rpctls_srv_disconnect(uint64_t sec, uint64_t usec, uint64_t ssl)
+rpctls_srv_disconnect(uint64_t sec, uint64_t usec, uint64_t ssl,
+    uint32_t *reterr)
 {
 	struct rpctlssd_disconnect_arg arg;
+	struct rpctlssd_disconnect_res res;
 	enum clnt_stat stat;
 	CLIENT *cl;
 
@@ -469,15 +487,17 @@ printf("In rpctls_srv_disconnect\n");
 	cl = rpctls_server_client();
 printf("srv disconnect_client=%p\n", cl);
 	if (cl == NULL)
-		return (RPC_FAILED);
+		return (RPC_AUTHERROR);
 
 	/* Do the disconnect upcall. */
 	arg.sec = sec;
 	arg.usec = usec;
 	arg.ssl = ssl;
-	stat = rpctlssd_disconnect_1(&arg, NULL, cl);
+	stat = rpctlssd_disconnect_1(&arg, &res, cl);
 printf("aft srv disconnect upcall=%d\n", stat);
 	CLNT_RELEASE(cl);
+	if (stat == RPC_SUCCESS)
+		*reterr = res.reterr;
 	return (stat);
 }
 

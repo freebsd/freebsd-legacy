@@ -43,17 +43,24 @@
 #define	RPCTLS_FLAGS_DISABLED	0x10
 #define	RPCTLS_FLAGS_CERTUSER	0x20
 
+/* Error return values for upcall rpcs. */
+#define	RPCTLSERR_OK		0
+#define	RPCTLSERR_NOCLOSE	1
+#define	RPCTLSERR_NOSSL		2
+#define	RPCTLSERR_NOSOCKET	3
+
 #ifdef _KERNEL
 /* Functions that perform upcalls to the rpctlsd daemon. */
 enum clnt_stat	rpctls_connect(CLIENT *newclient, struct socket *so,
-		    uint64_t *sslp);
+		    uint64_t *sslp, uint32_t *reterr);
 enum clnt_stat	rpctls_cl_handlerecord(uint64_t sec, uint64_t usec,
-		    uint64_t ssl);
+		    uint64_t ssl, uint32_t *reterr);
 enum clnt_stat	rpctls_srv_handlerecord(uint64_t sec, uint64_t usec,
-		    uint64_t ssl);
-enum clnt_stat	rpctls_cl_disconnect(uint64_t sec, uint64_t usec, uint64_t ssl);
+		    uint64_t ssl, uint32_t *reterr);
+enum clnt_stat	rpctls_cl_disconnect(uint64_t sec, uint64_t usec,
+		    uint64_t ssl, uint32_t *reterr);
 enum clnt_stat	rpctls_srv_disconnect(uint64_t sec, uint64_t usec,
-		    uint64_t ssl);
+		    uint64_t ssl, uint32_t *reterr);
 
 /* Initialization function for rpcsec_tls. */
 int		rpctls_init(void);

@@ -79,7 +79,6 @@ __FBSDID("$FreeBSD$");
 static struct pidfh	*rpctls_pfh = NULL;
 static int		rpctls_debug_level;
 static bool		rpctls_verbose;
-static int testnossl;
 static SSL_CTX		*rpctls_ctx = NULL;
 static const char	*rpctls_verify_cafile = NULL;
 static const char	*rpctls_verify_capath = NULL;
@@ -153,9 +152,8 @@ main(int argc, char **argv)
 	rpctls_ssl_usec = tm.tv_usec;
 
 	rpctls_verbose = false;
-	testnossl = 0;
 	cert = false;
-	while ((ch = getopt(argc, argv, "D:dl:mp:r:tv")) != -1) {
+	while ((ch = getopt(argc, argv, "D:dl:mp:r:v")) != -1) {
 		switch (ch) {
 		case 'D':
 			rpctls_certdir = optarg;
@@ -174,9 +172,6 @@ main(int argc, char **argv)
 			break;
 		case 'r':
 			rpctls_crlfile = optarg;
-			break;
-		case 't':
-			testnossl = 1;
 			break;
 		case 'v':
 			rpctls_verbose = true;
@@ -325,30 +320,25 @@ rpctlscd_connect_1_svc(void *argp,
 	/* Get the socket fd from the kernel. */
 	s = gssd_syscall("C");
 rpctlscd_verbose_out("rpctlsd_connect s=%d\n", s);
-	if (s < 0)
-		return (FALSE);
+	if (s < 0) {
+		result->reterr = RPCTLSERR_NOSOCKET;
+		return (TRUE);
+	}
 
 	/* Do a TLS connect handshake. */
 	ssl = rpctls_connect(rpctls_ctx, s);
-	if (ssl == NULL)
+	if (ssl == NULL) {
 		rpctlscd_verbose_out("rpctlsd_connect: can't do TLS "
 		    "handshake\n");
-	else {
+		result->reterr = RPCTLSERR_NOSSL;
+	} else {
+		result->reterr = RPCTLSERR_OK;
 		result->sec = rpctls_ssl_sec;
 		result->usec = rpctls_ssl_usec;
 		result->ssl = ++rpctls_ssl_refno;
 		/* Hard to believe this will ever wrap around.. */
 		if (rpctls_ssl_refno == 0)
 			result->ssl = ++rpctls_ssl_refno;
-	}
-	if (testnossl != 0 && ssl != NULL) {
-		/* Read the 478 bytes of junk off the socket. */
-		siz = 478;
-		ret = 1;
-		while (siz > 0 && ret > 0) {
-			ret = recv(s, &buf[478 - siz], siz, 0);
-			siz -= ret;
-		}
 	}
 
 	if (ssl == NULL) {
@@ -358,7 +348,7 @@ rpctlscd_verbose_out("rpctlsd_connect s=%d\n", s);
 		 */
 		shutdown(s, SHUT_WR);
 		close(s);
-		return (FALSE);
+		return (TRUE);
 	}
 
 	/* Maintain list of all current SSL *'s */
@@ -372,7 +362,7 @@ rpctlscd_verbose_out("rpctlsd_connect s=%d\n", s);
 
 bool_t
 rpctlscd_handlerecord_1_svc(struct rpctlscd_handlerecord_arg *argp,
-    void *result, struct svc_req *rqstp)
+    struct rpctlscd_handlerecord_res *result, struct svc_req *rqstp)
 {
 	struct ssl_entry *slp;
 	int ret;
@@ -401,14 +391,15 @@ rpctlscd_handlerecord_1_svc(struct rpctlscd_handlerecord_arg *argp,
 			else
 				fprintf(stderr, "SSL_read returned %d\n", ret);
 		}
+		result->reterr = RPCTLSERR_OK;
 	} else
-		return (FALSE);
+		result->reterr = RPCTLSERR_NOSSL;
 	return (TRUE);
 }
 
 bool_t
 rpctlscd_disconnect_1_svc(struct rpctlscd_disconnect_arg *argp,
-    void *result, struct svc_req *rqstp)
+    struct rpctlscd_disconnect_res *result, struct svc_req *rqstp)
 {
 	struct ssl_entry *slp;
 	int ret;
@@ -441,8 +432,9 @@ rpctlscd_verbose_out("get_shutdown=%d\n", ret);
 		shutdown(slp->s, SHUT_WR);
 		close(slp->s);
 		free(slp);
+		result->reterr = RPCTLSERR_OK;
 	} else
-		return (FALSE);
+		result->reterr = RPCTLSERR_NOCLOSE;
 	return (TRUE);
 }
 

@@ -420,7 +420,7 @@ rpctlssd_verbose_out("rpctlsd_connect_svc s=%d\n", s);
 
 bool_t
 rpctlssd_handlerecord_1_svc(struct rpctlssd_handlerecord_arg *argp,
-    void *result, struct svc_req *rqstp)
+    struct rpctlssd_handlerecord_res *result, struct svc_req *rqstp)
 {
 	struct ssl_entry *slp;
 	int ret;
@@ -456,14 +456,15 @@ rpctlssd_verbose_out("get_shutdown=%d\n", ret);
 			else
 				fprintf(stderr, "SSL_read returned %d\n", ret);
 		}
+		result->reterr = RPCTLSERR_OK;
 	} else
-		return (FALSE);
+		result->reterr = RPCTLSERR_NOSSL;
 	return (TRUE);
 }
 
 bool_t
 rpctlssd_disconnect_1_svc(struct rpctlssd_disconnect_arg *argp,
-    void *result, struct svc_req *rqstp)
+    struct rpctlssd_disconnect_res *result, struct svc_req *rqstp)
 {
 	struct ssl_entry *slp;
 
@@ -488,8 +489,9 @@ rpctlssd_disconnect_1_svc(struct rpctlssd_disconnect_arg *argp,
 		shutdown(slp->s, SHUT_WR);
 		close(slp->s);
 		free(slp);
+		result->reterr = RPCTLSERR_OK;
 	} else
-		return (FALSE);
+		result->reterr = RPCTLSERR_NOCLOSE;
 	return (TRUE);
 }
 

@@ -452,13 +452,15 @@ static void
 svc_vc_destroy_common(SVCXPRT *xprt)
 {
 	enum clnt_stat stat;
+	uint32_t reterr;
 
 	if (xprt->xp_socket) {
 		stat = RPC_FAILED;
 		if ((xprt->xp_tls & RPCTLS_FLAGS_HANDSHAKE) != 0)
 			stat = rpctls_srv_disconnect(xprt->xp_sslsec,
-			    xprt->xp_sslusec, xprt->xp_sslrefno);
-		if (stat != RPC_SUCCESS)
+			    xprt->xp_sslusec, xprt->xp_sslrefno,
+			    &reterr);
+		if (stat != RPC_SUCCESS || reterr == RPCTLSERR_NOCLOSE)
 			(void)soclose(xprt->xp_socket);
 	}
 
@@ -671,7 +673,7 @@ svc_vc_recv(SVCXPRT *xprt, struct rpc_msg *msg,
 	struct socket* so = xprt->xp_socket;
 	XDR xdrs;
 	int error, rcvflag;
-	uint32_t xid_plus_direction[2];
+	uint32_t reterr, xid_plus_direction[2];
 	struct cmsghdr *cmsg;
 	struct tls_get_record tgr;
 	enum clnt_stat ret;
@@ -801,10 +803,11 @@ tryagain:
 			sx_xunlock(&xprt->xp_lock);
 printf("Call rpctls_srv_handlerecord\n");
 			ret = rpctls_srv_handlerecord(xprt->xp_sslsec,
-			    xprt->xp_sslusec, xprt->xp_sslrefno);
+			    xprt->xp_sslusec, xprt->xp_sslrefno,
+			    &reterr);
 			sx_xlock(&xprt->xp_lock);
 			xprt->xp_dontrcv = FALSE;
-			if (ret != RPC_SUCCESS) {
+			if (ret != RPC_SUCCESS || reterr != RPCTLSERR_OK) {
 				/*
 				 * All we can do is soreceive() it and
 				 * then toss it.

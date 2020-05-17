@@ -875,6 +875,7 @@ clnt_vc_destroy(CLIENT *cl)
 	struct socket *so = NULL;
 	SVCXPRT *xprt;
 	enum clnt_stat stat;
+	uint32_t reterr;
 
 	clnt_vc_close(cl);
 
@@ -900,10 +901,12 @@ clnt_vc_destroy(CLIENT *cl)
 	mtx_destroy(&ct->ct_lock);
 	if (so) {
 		stat = RPC_FAILED;
+		reterr = RPCTLSERR_OK;
 		if (ct->ct_sslrefno != 0)
 			stat = rpctls_cl_disconnect(ct->ct_sslsec,
-			    ct->ct_sslusec, ct->ct_sslrefno);
-		if (stat != RPC_SUCCESS) {
+			    ct->ct_sslusec, ct->ct_sslrefno,
+			    &reterr);
+		if (stat != RPC_SUCCESS || reterr == RPCTLSERR_NOCLOSE) {
 			soshutdown(so, SHUT_WR);
 			soclose(so);
 		}
@@ -1283,15 +1286,16 @@ static void
 clnt_vc_dotlsupcall(struct ct_data *ct)
 {
 	enum clnt_stat ret;
+	uint32_t reterr;
 
 	mtx_assert(&ct->ct_lock, MA_OWNED);
 	if (ct->ct_rcvstate == UPCALLNEEDED) {
 		ct->ct_rcvstate = UPCALLINPROG;
 		mtx_unlock(&ct->ct_lock);
 		ret = rpctls_cl_handlerecord(ct->ct_sslsec, ct->ct_sslusec,
-		    ct->ct_sslrefno);
+		    ct->ct_sslrefno, &reterr);
 		mtx_lock(&ct->ct_lock);
-		if (ret == RPC_SUCCESS)
+		if (ret == RPC_SUCCESS && reterr == RPCTLSERR_OK)
 			ct->ct_rcvstate = RCVNORMAL;
 		else
 			ct->ct_rcvstate = RCVNONAPPDATA;

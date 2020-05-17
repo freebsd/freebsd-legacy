@@ -132,6 +132,7 @@ clnt_reconnect_connect(CLIENT *cl)
 	struct ucred *oldcred;
 	CLIENT *newclient = NULL;
 	uint64_t ssl[3];
+	uint32_t reterr;
 
 	mtx_lock(&rc->rc_lock);
 	while (rc->rc_connecting) {
@@ -198,9 +199,11 @@ clnt_reconnect_connect(CLIENT *cl)
 		    rc->rc_sendsz, rc->rc_recvsz, rc->rc_intr);
 		if (rc->rc_tls && newclient != NULL) {
 printf("at rpctls_connect\n");
-			stat = rpctls_connect(newclient, so, ssl);
+			stat = rpctls_connect(newclient, so, ssl, &reterr);
 printf("aft rpctls_connect=%d ssl=%jd\n", stat, (uintmax_t)ssl[2]);
-			if (stat != RPC_SUCCESS) {
+			if (stat != RPC_SUCCESS || reterr != RPCTLSERR_OK) {
+				if (stat == RPC_SUCCESS)
+					stat = RPC_FAILED;
 				stat = rpc_createerr.cf_stat = stat;
 				rpc_createerr.cf_error.re_errno = 0;
 				CLNT_CLOSE(newclient);
@@ -282,6 +285,7 @@ clnt_reconnect_call(
 		if (!rc->rc_client) {
 			mtx_unlock(&rc->rc_lock);
 			stat = clnt_reconnect_connect(cl);
+printf("reconnect_connect=%d\n", stat);
 			if (stat == RPC_SYSTEMERROR) {
 				error = tsleep(&fake_wchan,
 				    rc->rc_intr ? PCATCH : 0, "rpccon", hz);
@@ -307,6 +311,7 @@ clnt_reconnect_call(
 		mtx_unlock(&rc->rc_lock);
 		stat = CLNT_CALL_MBUF(client, ext, proc, args,
 		    resultsp, utimeout);
+if (stat != RPC_SUCCESS) printf("clnt_reconnect_call=%d\n", stat);
 
 		if (stat != RPC_SUCCESS) {
 			if (!ext)

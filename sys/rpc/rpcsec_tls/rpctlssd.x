@@ -44,10 +44,18 @@ struct rpctlssd_handlerecord_arg {
 	uint64_t ssl;
 };
 
+struct rpctlssd_handlerecord_res {
+	uint32_t reterr;
+};
+
 struct rpctlssd_disconnect_arg {
 	uint64_t sec;
 	uint64_t usec;
 	uint64_t ssl;
+};
+
+struct rpctlssd_disconnect_res {
+	uint32_t reterr;
 };
 
 program RPCTLSSD {
@@ -57,8 +65,10 @@ program RPCTLSSD {
 		rpctlssd_connect_res
 		RPCTLSSD_CONNECT(void) = 1;
 
-		void RPCTLSSD_HANDLERECORD(rpctlssd_handlerecord_arg) = 2;
+		rpctlssd_handlerecord_res
+		RPCTLSSD_HANDLERECORD(rpctlssd_handlerecord_arg) = 2;
 
-		void RPCTLSSD_DISCONNECT(rpctlssd_disconnect_arg) = 3;
+		rpctlssd_disconnect_res
+		RPCTLSSD_DISCONNECT(rpctlssd_disconnect_arg) = 3;
 	} = 1;
 } = 0x40677375;

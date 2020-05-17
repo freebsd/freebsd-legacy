@@ -30,6 +30,7 @@
 /* $FreeBSD:$ */
 
 struct rpctlscd_connect_res {
+	uint32_t reterr;
 	uint64_t sec;
 	uint64_t usec;
 	uint64_t ssl;
@@ -41,10 +42,18 @@ struct rpctlscd_handlerecord_arg {
 	uint64_t ssl;
 };
 
+struct rpctlscd_handlerecord_res {
+	uint32_t reterr;
+};
+
 struct rpctlscd_disconnect_arg {
 	uint64_t sec;
 	uint64_t usec;
 	uint64_t ssl;
+};
+
+struct rpctlscd_disconnect_res {
+	uint32_t reterr;
 };
 
 program RPCTLSCD {
@@ -54,8 +63,10 @@ program RPCTLSCD {
 		rpctlscd_connect_res
 		RPCTLSCD_CONNECT(void) = 1;
 
-		void RPCTLSCD_HANDLERECORD(rpctlscd_handlerecord_arg) = 2;
+		rpctlscd_handlerecord_res
+		RPCTLSCD_HANDLERECORD(rpctlscd_handlerecord_arg) = 2;
 
-		void RPCTLSCD_DISCONNECT(rpctlscd_disconnect_arg) = 3;
+		rpctlscd_disconnect_res
+		RPCTLSCD_DISCONNECT(rpctlscd_disconnect_arg) = 3;
 	} = 1;
 } = 0x40677374;
