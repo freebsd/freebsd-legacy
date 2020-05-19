@@ -260,7 +260,7 @@ fprintf(stderr, "dnsname=%s\n", rpctls_dnsname);
 		signal(SIGHUP, SIG_IGN);
 	}
 	signal(SIGTERM, rpctlssd_terminate);
-	signal(SIGPIPE, rpctlssd_terminate);
+	signal(SIGPIPE, SIG_IGN);
 	signal(SIGHUP, rpctls_huphandler);
 
 	pidfile_write(rpctls_pfh);
@@ -467,6 +467,7 @@ rpctlssd_disconnect_1_svc(struct rpctlssd_disconnect_arg *argp,
     struct rpctlssd_disconnect_res *result, struct svc_req *rqstp)
 {
 	struct ssl_entry *slp;
+	int ret;
 
 	slp = NULL;
 	if (argp->sec == rpctls_ssl_sec && argp->usec ==
@@ -481,6 +482,14 @@ rpctlssd_disconnect_1_svc(struct rpctlssd_disconnect_arg *argp,
 		rpctlssd_verbose_out("rpctlssd_disconnect fd=%d closed\n",
 		    slp->s);
 		LIST_REMOVE(slp, next);
+		ret = SSL_get_shutdown(slp->ssl);
+rpctlssd_verbose_out("get_shutdown1=%d\n", ret);
+		/*
+		 * Do an SSL_shutdown() unless a close alert has
+		 * already been sent.
+		 */
+		if ((ret & SSL_SENT_SHUTDOWN) == 0)
+			SSL_shutdown(slp->ssl);
 		SSL_free(slp->ssl);
 		/*
 		 * For RPC-over-TLS, this upcall is expected

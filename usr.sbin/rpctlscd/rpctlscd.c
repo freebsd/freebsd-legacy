@@ -220,7 +220,7 @@ main(int argc, char **argv)
 		signal(SIGHUP, SIG_IGN);
 	}
 	signal(SIGTERM, rpctlscd_terminate);
-	signal(SIGPIPE, rpctlscd_terminate);
+	signal(SIGPIPE, SIG_IGN);
 	signal(SIGHUP, rpctls_huphandler);
 
 	pidfile_write(rpctls_pfh);
@@ -385,7 +385,14 @@ rpctlscd_handlerecord_1_svc(struct rpctlscd_handlerecord_arg *argp,
 		 * handle the non-application data record before doing so.
 		 */
 		ret = SSL_read(slp->ssl, &junk, 0);
-		if (ret > 0) {
+		if (ret <= 0) {
+			/* Check to see if this was a close alert. */
+			ret = SSL_get_shutdown(slp->ssl);
+rpctlscd_verbose_out("get_shutdown2=%d\n", ret);
+			if ((ret & (SSL_SENT_SHUTDOWN |
+			    SSL_RECEIVED_SHUTDOWN)) == SSL_RECEIVED_SHUTDOWN)
+				SSL_shutdown(slp->ssl);
+		} else {
 			if (rpctls_debug_level == 0)
 				syslog(LOG_ERR, "SSL_read returned %d", ret);
 			else
@@ -417,12 +424,13 @@ rpctlscd_disconnect_1_svc(struct rpctlscd_disconnect_arg *argp,
 		rpctlscd_verbose_out("rpctlscd_disconnect: fd=%d closed\n",
 		    slp->s);
 		LIST_REMOVE(slp, next);
-		SSL_shutdown(slp->ssl);
-		/* Check to see if the peer has sent a close alert. */
 		ret = SSL_get_shutdown(slp->ssl);
-rpctlscd_verbose_out("get_shutdown=%d\n", ret);
-		if ((ret & (SSL_SENT_SHUTDOWN | SSL_RECEIVED_SHUTDOWN)) ==
-		    SSL_SENT_SHUTDOWN)
+rpctlscd_verbose_out("get_shutdown0=%d\n", ret);
+		/*
+		 * Do an SSL_shutdown() unless a close alert has
+		 * already been sent.
+		 */
+		if ((ret & SSL_SENT_SHUTDOWN) == 0)
 			SSL_shutdown(slp->ssl);
 		SSL_free(slp->ssl);
 		/*
