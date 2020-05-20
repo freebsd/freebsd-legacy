@@ -62,6 +62,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
+#include <sys/kthread.h>
 #include <sys/ktls.h>
 #include <sys/lock.h>
 #include <sys/malloc.h>
@@ -101,7 +102,7 @@ static void clnt_vc_close(CLIENT *);
 static void clnt_vc_destroy(CLIENT *);
 static bool_t time_not_ok(struct timeval *);
 static int clnt_vc_soupcall(struct socket *so, void *arg, int waitflag);
-static void clnt_vc_dotlsupcall(struct ct_data *ct);
+static void clnt_vc_dotlsupcall(void *data);
 
 static struct clnt_ops clnt_vc_ops = {
 	.cl_call =	clnt_vc_call,
@@ -418,13 +419,7 @@ call_again:
 		goto out;
 	}
 
-	/*
-	 * For TLS, do an upcall, as required.
-	 * clnt_vc_dotlsupcall() will just return unless an
-	 * an upcall is needed.
-	 * Wait until any upcall is completed.
-	 */
-	clnt_vc_dotlsupcall(ct);
+	/* For TLS, wait for an upcall to be done, as required. */
 	while ((ct->ct_rcvstate & (RPCRCVSTATE_NORMAL |
 	    RPCRCVSTATE_NONAPPDATA)) == 0)
 		msleep(&ct->ct_rcvstate, &ct->ct_lock, 0, "rpcrcvst", hz);
@@ -502,30 +497,8 @@ printf("TRY AGAIN!!\n");
 		goto out;
 	}
 
-	/*
-	 * For TLS, msleep() can be awakened to handle
-	 * an upcall via a call to clnt_vc_dotlsupcall().
-	 * If there was no error, it needs to loop
-	 * around and wait for the reply.
-	 */
-	do {
-		/*
-		 * Call clnt_vc_dotlsupcall() both before
-		 * and after the msleep().  If there is
-		 * no upcall to do, clnt_vc_dotlsupcall()
-		 * simply returns.
-		 * Call before msleep() in case ct_rcvstate
-		 * is already set to UPCALLNEEDED and the
-		 * wakeup(ct) has already been done.
-		 * Call after msleep() in case it has its
-		 * reply and will not be looping.
-		 */
-		clnt_vc_dotlsupcall(ct);
-		error = msleep(cr, &ct->ct_lock, ct->ct_waitflag,
-		    ct->ct_waitchan, tvtohz(&timeout));
-		clnt_vc_dotlsupcall(ct);
-	} while (cr->cr_mrep == NULL && error == 0 &&
-	    cr->cr_error == 0);
+	error = msleep(cr, &ct->ct_lock, ct->ct_waitflag, ct->ct_waitchan,
+	    tvtohz(&timeout));
 
 	TAILQ_REMOVE(&ct->ct_pending, cr, cr_link);
 
@@ -673,6 +646,8 @@ clnt_vc_control(CLIENT *cl, u_int request, void *info)
 	void *infop = info;
 	SVCXPRT *xprt;
 	uint64_t *p;
+	int error;
+	static u_int thrdnum = 0;
 
 	mtx_lock(&ct->ct_lock);
 
@@ -800,7 +775,13 @@ printf("backch tls=0x%x xprt=%p\n", xprt->xp_tls, xprt);
 		ct->ct_sslsec = *p++;
 		ct->ct_sslusec = *p++;
 		ct->ct_sslrefno = *p;
-		break;
+		mtx_unlock(&ct->ct_lock);
+		/* Start the kthread that handles upcalls. */
+		error = kthread_add(clnt_vc_dotlsupcall, ct,
+		    NULL, NULL, 0, 0, "krpctls%u", thrdnum++);
+		if (error != 0)
+			panic("Can't add KRPC thread error %d", error);
+		return (TRUE);
 
 	case CLSET_BLOCKRCV:
 		if (*(int *) info) {
@@ -868,6 +849,7 @@ clnt_vc_close(CLIENT *cl)
 
 	ct->ct_closing = FALSE;
 	ct->ct_closed = TRUE;
+	wakeup(&ct->ct_sslrefno);
 	mtx_unlock(&ct->ct_lock);
 	wakeup(ct);
 }
@@ -900,6 +882,10 @@ clnt_vc_destroy(CLIENT *cl)
 		}
 	}
 
+	/* Wait for the upcall kthread to terminate. */
+	while ((ct->ct_rcvstate & RPCRCVSTATE_UPCALLTHREAD) != 0)
+		msleep(&ct->ct_sslrefno, &ct->ct_lock, 0,
+		    "clntvccl", hz);
 	mtx_unlock(&ct->ct_lock);
 
 	mtx_destroy(&ct->ct_lock);
@@ -1036,13 +1022,10 @@ clnt_vc_soupcall(struct socket *so, void *arg, int waitflag)
 			mtx_lock(&ct->ct_lock);
 			ct->ct_rcvstate |= RPCRCVSTATE_UPCALLNEEDED;
 			/*
-			 * If an upcall in needed, wake up all thread(s)
-			 * in clnt_vc_call() so that one of them can do it.
-			 * Not efficient, but this should not happen
-			 * frequently.
+			 * If an upcall in needed, wake up the kthread
+			 * that runs clnt_vc_dotlsupcall().
 			 */
-			TAILQ_FOREACH(cr, &ct->ct_pending, cr_link)
-				wakeup(cr);
+			wakeup(&ct->ct_sslrefno);
 			mtx_unlock(&ct->ct_lock);
 printf("Mark upcallneeded\n");
 			break;
@@ -1296,16 +1279,19 @@ clnt_vc_upcallsdone(struct ct_data *ct)
 
 /*
  * Do a TLS upcall to the rpctlscd daemon, as required.
+ * This function runs as a kthread.
  */
 static void
-clnt_vc_dotlsupcall(struct ct_data *ct)
+clnt_vc_dotlsupcall(void *data)
 {
+	struct ct_data *ct = (struct ct_data *)data;
 	enum clnt_stat ret;
 	uint32_t reterr;
 
-	mtx_assert(&ct->ct_lock, MA_OWNED);
-	while ((ct->ct_rcvstate & (RPCRCVSTATE_UPCALLNEEDED |
-	    RPCRCVSTATE_SOUPCALLNEEDED)) != 0) {
+printf("TLSupcall started\n");
+	mtx_lock(&ct->ct_lock);
+	ct->ct_rcvstate |= RPCRCVSTATE_UPCALLTHREAD;
+	while (!ct->ct_closed) {
 		if ((ct->ct_rcvstate & RPCRCVSTATE_UPCALLNEEDED) != 0) {
 			ct->ct_rcvstate &= ~RPCRCVSTATE_UPCALLNEEDED;
 			ct->ct_rcvstate |= RPCRCVSTATE_UPCALLINPROG;
@@ -1328,5 +1314,11 @@ clnt_vc_dotlsupcall(struct ct_data *ct)
 			SOCKBUF_UNLOCK(&ct->ct_socket->so_rcv);
 			mtx_lock(&ct->ct_lock);
 		}
+		msleep(&ct->ct_sslrefno, &ct->ct_lock, 0, "clntvcdu", hz);
 	}
+	ct->ct_rcvstate &= ~RPCRCVSTATE_UPCALLTHREAD;
+	wakeup(&ct->ct_sslrefno);
+	mtx_unlock(&ct->ct_lock);
+printf("TLSupcall exit\n");
+	kthread_exit();
 }

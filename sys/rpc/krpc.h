@@ -89,6 +89,7 @@ struct rc_data {
 #define RPCRCVSTATE_UPCALLNEEDED	0x08	/* Upcall to rpctlscd needed. */
 #define RPCRCVSTATE_UPCALLINPROG	0x10	/* Upcall to rpctlscd in progress. */
 #define RPCRCVSTATE_SOUPCALLNEEDED	0x20	/* Socket upcall needed. */
+#define RPCRCVSTATE_UPCALLTHREAD	0x40	/* Upcall kthread running. */
 
 struct ct_data {
 	struct mtx	ct_lock;
