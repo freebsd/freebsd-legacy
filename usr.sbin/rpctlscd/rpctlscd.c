@@ -538,9 +538,19 @@ rpctls_setupcl_ssl(bool cert)
 				return (NULL);
 			}
 		}
+#if OPENSSL_VERSION_NUMBER >= 0x30000000
+		ret = 1;
+		if (rpctls_verify_cafile != NULL)
+			ret = SSL_CTX_load_verify_file(ctx,
+			    rpctls_verify_cafile);
+		if (ret != 0 && rpctls_verify_capath != NULL)
+			ret = SSL_CTX_load_verify_dir(ctx,
+			    rpctls_verify_capath);
+#else
 		ret = SSL_CTX_load_verify_locations(ctx,
 		    rpctls_verify_cafile, rpctls_verify_capath);
-		if (ret != 1) {
+#endif
+		if (ret == 0) {
 			rpctlscd_verbose_out("rpctls_setupcl_ssl: "
 			    "Can't load verify locations\n");
 			SSL_CTX_free(ctx);
