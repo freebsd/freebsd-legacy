@@ -2070,8 +2070,7 @@ ktls_work_thread(void *ctx)
 {
 	struct ktls_wq *wq = ctx;
 	struct socket *so, *son;
-	struct ktls_session *tls;
-	struct mbuf *m;
+	struct mbuf *m, *n;
 	STAILQ_HEAD(, mbuf) local_head;
 	STAILQ_HEAD(, socket) local_so_head;
 
@@ -2093,9 +2092,6 @@ ktls_work_thread(void *ctx)
 		STAILQ_CONCAT(&local_so_head, &wq->so_head);
 		mtx_unlock(&wq->mtx);
 
-		STAILQ_FOREACH_SAFE(p, &local_head, stailq, n) {
-			if (p->mbuf != NULL) {
-				ktls_encrypt(p);
 		STAILQ_FOREACH_SAFE(m, &local_head, m_epg_stailq, n) {
 			if (m->m_epg_flags & EPG_FLAG_2FREE) {
 				ktls_free(m->m_epg_tls);
