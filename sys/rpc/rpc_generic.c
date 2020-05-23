@@ -889,8 +889,8 @@ _rpc_copym_into_ext_pgs(struct mbuf *mp, int maxextsiz)
 	struct mbuf *m, *m2, *m3, *mhead;
 	int tlen;
 
-	KASSERT((mp->m_flags & (M_EXT | M_NOMAP)) !=
-	    (M_EXT | M_NOMAP), ("_rpc_copym_into_ext_pgs:"
+	KASSERT((mp->m_flags & (M_EXT | M_EXTPG)) !=
+	    (M_EXT | M_EXTPG), ("_rpc_copym_into_ext_pgs:"
 	    " first mbuf is an ext_pgs"));
 	/*
 	 * Find the last non-ext_pgs mbuf and the total
@@ -901,7 +901,7 @@ _rpc_copym_into_ext_pgs(struct mbuf *mp, int maxextsiz)
 	tlen = mp->m_len;
 	m2 = mp;
 	for (m = mp->m_next; m != NULL; m = m->m_next) {
-		if ((m->m_flags & M_NOMAP) != 0)
+		if ((m->m_flags & M_EXTPG) != 0)
 			break;
 		tlen += m->m_len;
 		m2 = m;
@@ -934,8 +934,8 @@ _rpc_copym_into_ext_pgs(struct mbuf *mp, int maxextsiz)
 	while (m2 != NULL) {
 		KASSERT(m2->m_len >= 0, ("_rpc_copym_into_ext_pgs:"
 		    " negative m_len"));
-		KASSERT((m2->m_flags & (M_EXT | M_NOMAP)) ==
-		    (M_EXT | M_NOMAP), ("_rpc_copym_into_ext_pgs:"
+		KASSERT((m2->m_flags & (M_EXT | M_EXTPG)) ==
+		    (M_EXT | M_EXTPG), ("_rpc_copym_into_ext_pgs:"
 			    " non-nomap mbuf in list"));
 		if (m2->m_len == 0) {
 			if (m3 != NULL)
@@ -949,7 +949,7 @@ _rpc_copym_into_ext_pgs(struct mbuf *mp, int maxextsiz)
 			else
 				m2 = m;
 		} else {
-			MBUF_EXT_PGS_ASSERT_SANITY(&m2->m_ext_pgs);
+			MBUF_EXT_PGS_ASSERT_SANITY(m2);
 			m3 = m2;
 			tlen += m2->m_len;
 			m2 = m2->m_next;

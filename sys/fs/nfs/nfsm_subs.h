@@ -85,7 +85,7 @@ nfsm_build(struct nfsrv_descript *nd, int siz)
 			nd->nd_mb = mb2;
 		} else
 			nd->nd_bextpgsiz -= siz;
-		nd->nd_mb->m_ext_pgs.last_pg_len += siz;
+		nd->nd_mb->m_epg_last_len += siz;
 	}
 	retp = (void *)(nd->nd_bpos);
 	nd->nd_mb->m_len += siz;

@@ -849,7 +849,6 @@ nfsrv_createiovec_extpgs(int len, int maxextsiz, struct mbuf **mpp,
     struct mbuf **mpendp, struct iovec **ivp)
 {
 	struct mbuf *m, *m2 = NULL, *m3;
-	struct mbuf_ext_pgs *pgs;
 	struct iovec *iv;
 	int i, left, pgno, siz;
 
@@ -876,7 +875,6 @@ nfsrv_createiovec_extpgs(int len, int maxextsiz, struct mbuf **mpp,
 	left = len;
 	i = 0;
 	pgno = 0;
-	pgs = &m->m_ext_pgs;
 	while (left > 0) {
 		if (m == NULL)
 			panic("nfsvno_createiovec_extpgs iov");
@@ -885,18 +883,17 @@ nfsrv_createiovec_extpgs(int len, int maxextsiz, struct mbuf **mpp,
 			iv->iov_base = (void *)PHYS_TO_DMAP(m->m_epg_pa[pgno]);
 			iv->iov_len = siz;
 			m->m_len += siz;
-			if (pgno == pgs->npgs - 1)
-				pgs->last_pg_len = siz;
+			if (pgno == m->m_epg_npgs - 1)
+				m->m_epg_last_len = siz;
 			left -= siz;
 			iv++;
 			i++;
 			pgno++;
 		}
-		if (pgno == pgs->npgs && left > 0) {
+		if (pgno == m->m_epg_npgs && left > 0) {
 			m = m->m_next;
 			if (m == NULL)
 				panic("nfsvno_createiovec_extpgs iov");
-			pgs = &m->m_ext_pgs;
 			pgno = 0;
 		}
 	}
@@ -4134,11 +4131,8 @@ nfsrv_pnfscreate(struct vnode *vp, struct vattr *vap, struct ucred *cred,
 		if (tds->nfsdev_nmp != NULL) {
 			if (tds->nfsdev_mdsisset == 0 && ds == NULL)
 				ds = tds;
-			else if (tds->nfsdev_mdsisset != 0 &&
-			    mp->mnt_stat.f_fsid.val[0] ==
-			    tds->nfsdev_mdsfsid.val[0] &&
-			    mp->mnt_stat.f_fsid.val[1] ==
-			    tds->nfsdev_mdsfsid.val[1]) {
+			else if (tds->nfsdev_mdsisset != 0 && fsidcmp(
+			    &mp->mnt_stat.f_fsid, &tds->nfsdev_mdsfsid) == 0) {
 				ds = fds = tds;
 				break;
 			}
@@ -4158,10 +4152,8 @@ nfsrv_pnfscreate(struct vnode *vp, struct vattr *vap, struct ucred *cred,
 			if (tds->nfsdev_nmp != NULL &&
 			    ((tds->nfsdev_mdsisset == 0 && fds == NULL) ||
 			     (tds->nfsdev_mdsisset != 0 && fds != NULL &&
-			      mp->mnt_stat.f_fsid.val[0] ==
-			      tds->nfsdev_mdsfsid.val[0] &&
-			      mp->mnt_stat.f_fsid.val[1] ==
-			      tds->nfsdev_mdsfsid.val[1]))) {
+			      fsidcmp(&mp->mnt_stat.f_fsid,
+			      &tds->nfsdev_mdsfsid) == 0))) {
 				dsdir[mirrorcnt] = i;
 				dvp[mirrorcnt] = tds->nfsdev_dsdir[i];
 				mirrorcnt++;
@@ -4893,10 +4885,8 @@ nfsrv_dsgetsockmnt(struct vnode *vp, int lktype, char *buf, int *buflenp,
 					      fndds->nfsdev_mdsisset == 0) ||
 					     (tds->nfsdev_mdsisset != 0 &&
 					      fndds->nfsdev_mdsisset != 0 &&
-					      tds->nfsdev_mdsfsid.val[0] ==
-					      mp->mnt_stat.f_fsid.val[0] &&
-					      tds->nfsdev_mdsfsid.val[1] ==
-					      mp->mnt_stat.f_fsid.val[1]))) {
+					      fsidcmp(&tds->nfsdev_mdsfsid,
+					      &mp->mnt_stat.f_fsid) == 0))) {
 						*newnmpp = tds->nfsdev_nmp;
 						break;
 					}
@@ -5190,7 +5180,7 @@ nfsrv_writedsdorpc(struct nfsmount *nmp, fhandle_t *fhp, off_t off, int len,
 
 	/* Put data in mbuf chain. */
 	nd->nd_mb->m_next = m;
-	if ((m->m_flags & M_NOMAP) != 0)
+	if ((m->m_flags & M_EXTPG) != 0)
 		nd->nd_flag |= ND_NOMAP;
 
 	/* Set nd_mb and nd_bpos to end of data. */
@@ -6085,8 +6075,7 @@ nfsrv_pnfsstatfs(struct statfs *sf, struct mount *mp)
 	/* First, search for matches for same file system. */
 	TAILQ_FOREACH(ds, &nfsrv_devidhead, nfsdev_list) {
 		if (ds->nfsdev_nmp != NULL && ds->nfsdev_mdsisset != 0 &&
-		    ds->nfsdev_mdsfsid.val[0] == mp->mnt_stat.f_fsid.val[0] &&
-		    ds->nfsdev_mdsfsid.val[1] == mp->mnt_stat.f_fsid.val[1]) {
+		    fsidcmp(&ds->nfsdev_mdsfsid, &mp->mnt_stat.f_fsid) == 0) {
 			if (++i > nfsrv_devidcnt)
 				break;
 			*tdvpp++ = ds->nfsdev_dvp;

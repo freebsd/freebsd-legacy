@@ -327,6 +327,8 @@ int nfsm_advance(struct nfsrv_descript *, int, int);
 void *nfsm_dissct(struct nfsrv_descript *, int, int);
 void nfsm_trimtrailing(struct nfsrv_descript *, struct mbuf *,
     caddr_t, int, int);
+void newnfs_trimtrailing(struct nfsrv_descript *, struct mbuf *,
+    caddr_t);
 void newnfs_copycred(struct nfscred *, struct ucred *);
 void newnfs_copyincred(struct ucred *, struct nfscred *);
 int nfsrv_dissectacl(struct nfsrv_descript *, NFSACL_T *, int *,

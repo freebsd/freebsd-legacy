@@ -1154,6 +1154,12 @@ send:
 		} else
 			flags |= TH_ECE|TH_CWR;
 	}
+	/* Handle parallel SYN for ECN */
+	if ((tp->t_state == TCPS_SYN_RECEIVED) &&
+	    (tp->t_flags2 & TF2_ECN_SND_ECE)) {
+			flags |= TH_ECE;
+			tp->t_flags2 &= ~TF2_ECN_SND_ECE;
+	}
 
 	if (tp->t_state == TCPS_ESTABLISHED &&
 	    (tp->t_flags2 & TF2_ECN_PERMIT)) {
@@ -1164,7 +1170,8 @@ send:
 		 */
 		if (len > 0 && SEQ_GEQ(tp->snd_nxt, tp->snd_max) &&
 		    (sack_rxmit == 0) &&
-		    !((tp->t_flags & TF_FORCEDATA) && len == 1)) {
+		    !((tp->t_flags & TF_FORCEDATA) && len == 1 &&
+		    SEQ_LT(tp->snd_una, tp->snd_max))) {
 #ifdef INET6
 			if (isipv6)
 				ip6->ip6_flow |= htonl(IPTOS_ECN_ECT0 << 20);
@@ -1172,14 +1179,14 @@ send:
 #endif
 				ip->ip_tos |= IPTOS_ECN_ECT0;
 			TCPSTAT_INC(tcps_ecn_ect0);
-		}
-
-		/*
-		 * Reply with proper ECN notifications.
-		 */
-		if (tp->t_flags2 & TF2_ECN_SND_CWR) {
-			flags |= TH_CWR;
-			tp->t_flags2 &= ~TF2_ECN_SND_CWR;
+			/*
+			 * Reply with proper ECN notifications.
+			 * Only set CWR on new data segments.
+			 */
+			if (tp->t_flags2 & TF2_ECN_SND_CWR) {
+				flags |= TH_CWR;
+				tp->t_flags2 &= ~TF2_ECN_SND_CWR;
+			}
 		}
 		if (tp->t_flags2 & TF2_ECN_SND_ECE)
 			flags |= TH_ECE;
@@ -1911,8 +1918,8 @@ tcp_m_copym(struct mbuf *m, int32_t off0, int32_t *plen,
 	top = NULL;
 	pkthdrlen = NULL;
 #ifdef KERN_TLS
-	if (hw_tls && (m->m_flags & M_NOMAP))
-		tls = m->m_ext_pgs.tls;
+	if (hw_tls && (m->m_flags & M_EXTPG))
+		tls = m->m_epg_tls;
 	else
 		tls = NULL;
 	start = m;
@@ -1928,8 +1935,8 @@ tcp_m_copym(struct mbuf *m, int32_t off0, int32_t *plen,
 		}
 #ifdef KERN_TLS
 		if (hw_tls) {
-			if (m->m_flags & M_NOMAP)
-				ntls = m->m_ext_pgs.tls;
+			if (m->m_flags & M_EXTPG)
+				ntls = m->m_epg_tls;
 			else
 				ntls = NULL;
 
@@ -1961,14 +1968,14 @@ tcp_m_copym(struct mbuf *m, int32_t off0, int32_t *plen,
 		mlen = min(len, m->m_len - off);
 		if (seglimit) {
 			/*
-			 * For M_NOMAP mbufs, add 3 segments
+			 * For M_EXTPG mbufs, add 3 segments
 			 * + 1 in case we are crossing page boundaries
 			 * + 2 in case the TLS hdr/trailer are used
 			 * It is cheaper to just add the segments
 			 * than it is to take the cache miss to look
 			 * at the mbuf ext_pgs state in detail.
 			 */
-			if (m->m_flags & M_NOMAP) {
+			if (m->m_flags & M_EXTPG) {
 				fragsize = min(segsize, PAGE_SIZE);
 				frags = 3;
 			} else {
@@ -2023,7 +2030,7 @@ tcp_m_copym(struct mbuf *m, int32_t off0, int32_t *plen,
 		}
 		n->m_len = mlen;
 		len_cp += n->m_len;
-		if (m->m_flags & M_EXT) {
+		if (m->m_flags & (M_EXT|M_EXTPG)) {
 			n->m_data = m->m_data + off;
 			mb_dupcl(n, m);
 		} else

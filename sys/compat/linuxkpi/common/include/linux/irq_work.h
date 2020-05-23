@@ -1,6 +1,8 @@
 /*-
- * Copyright (c) 2015 Allan Jude <allanjude@FreeBSD.org>
- * All rights reserved.
+ * Copyright (c) 2020 The FreeBSD Foundation
+ *
+ * This software was developed by Emmanuel Vadot under sponsorship
+ * from the FreeBSD Foundation.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -11,10 +13,10 @@
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
  *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHORS AND CONTRIBUTORS ``AS IS'' AND
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHORS OR CONTRIBUTORS BE LIABLE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
  * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
  * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
@@ -26,23 +28,25 @@
  * $FreeBSD$
  */
 
-#ifndef _CRYPTO_XFORM_USERLAND_H_
-#define _CRYPTO_XFORM_USERLAND_H_
+#ifndef __LINUX_IRQ_WORK_H__
+#define	__LINUX_IRQ_WORK_H__
 
-#ifdef _KERNEL
-#include <sys/systm.h>
-#define KMALLOC(size, type, flags)	malloc(size, type, flags)
-#define KFREE(ptr, type)		free(ptr, type)
-#else /* not _KERNEL */
-#ifdef _STANDALONE
-#include <stand.h>
-#else /* !_STAND */
-#include <stdlib.h>
-#include <string.h>
-#endif /* _STAND */
-#define KMALLOC(size, type, flags)	malloc(size)
-#define KFREE(ptr, type)		free(ptr)
-#endif /* _KERNEL */
+#include <linux/workqueue.h>
 
+struct irq_work {
+	struct work_struct work;
+};
 
-#endif /* _CRYPTO_XFORM_USERLAND_H_ */
+static inline void
+init_irq_work(struct irq_work *irqw, void (*func)(struct irq_work *))
+{
+	INIT_WORK(&irqw->work, (work_func_t)func);
+}
+
+static inline void
+irq_work_queue(struct irq_work *irqw)
+{
+	schedule_work(&irqw->work);
+}
+
+#endif /* __LINUX_IRQ_WORK_H__ */

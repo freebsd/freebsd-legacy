@@ -1144,7 +1144,6 @@ sctp_init_asoc(struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 	asoc->sctp_cmt_on_off = inp->sctp_cmt_on_off;
 	asoc->ecn_supported = inp->ecn_supported;
 	asoc->prsctp_supported = inp->prsctp_supported;
-	asoc->idata_supported = inp->idata_supported;
 	asoc->auth_supported = inp->auth_supported;
 	asoc->asconf_supported = inp->asconf_supported;
 	asoc->reconfig_supported = inp->reconfig_supported;
@@ -1489,6 +1488,7 @@ select_a_new_ep:
 		}
 		tinp = it->inp;
 		it->inp = LIST_NEXT(it->inp, sctp_list);
+		it->stcb = NULL;
 		SCTP_INP_RUNLOCK(tinp);
 		if (it->inp == NULL) {
 			goto done_with_iterator;
@@ -1558,6 +1558,9 @@ select_a_new_ep:
 			atomic_add_int(&it->stcb->asoc.refcnt, -1);
 			iteration_count = 0;
 		}
+		KASSERT(it->inp == it->stcb->sctp_ep,
+		    ("%s: stcb %p does not belong to inp %p, but inp %p",
+		    __func__, it->stcb, it->inp, it->stcb->sctp_ep));
 
 		/* run function on this one */
 		(*it->function_assoc) (it->inp, it->stcb, it->pointer, it->val);
@@ -1590,6 +1593,7 @@ no_stcb:
 	} else {
 		it->inp = LIST_NEXT(it->inp, sctp_list);
 	}
+	it->stcb = NULL;
 	if (it->inp == NULL) {
 		goto done_with_iterator;
 	}
@@ -1841,14 +1845,19 @@ sctp_timeout_handler(void *t)
 			struct sctp_tmit_chunk *chk;
 
 			/*
-			 * safeguard. If there on some on the sent queue
+			 * Safeguard. If there on some on the sent queue
 			 * somewhere but no timers running something is
 			 * wrong... so we start a timer on the first chunk
 			 * on the send queue on whatever net it is sent to.
 			 */
-			chk = TAILQ_FIRST(&stcb->asoc.sent_queue);
-			sctp_timer_start(SCTP_TIMER_TYPE_SEND, inp, stcb,
-			    chk->whoTo);
+			TAILQ_FOREACH(chk, &stcb->asoc.sent_queue, sctp_next) {
+				if (chk->whoTo != NULL) {
+					break;
+				}
+			}
+			if (chk != NULL) {
+				sctp_timer_start(SCTP_TIMER_TYPE_SEND, stcb->sctp_ep, stcb, chk->whoTo);
+			}
 		}
 		break;
 	case SCTP_TIMER_TYPE_INIT:
@@ -2923,7 +2932,7 @@ sctp_calculate_rto(struct sctp_tcb *stcb,
 		(void)SCTP_GETTIME_TIMEVAL(&now);
 	}
 	if ((old->tv_sec > now.tv_sec) ||
-	    ((old->tv_sec == now.tv_sec) && (old->tv_sec > now.tv_sec))) {
+	    ((old->tv_sec == now.tv_sec) && (old->tv_usec > now.tv_usec))) {
 		/* The starting point is in the future. */
 		return (0);
 	}

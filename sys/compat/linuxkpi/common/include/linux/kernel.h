@@ -107,6 +107,7 @@
       if (__ret) {						\
 		printf("WARNING %s failed at %s:%d\n",		\
 		    __stringify(cond), __FILE__, __LINE__);	\
+		linux_dump_stack();				\
       }								\
       unlikely(__ret);						\
 })
@@ -120,6 +121,7 @@
 		__warn_on_once = 1;				\
 		printf("WARNING %s failed at %s:%d\n",		\
 		    __stringify(cond), __FILE__, __LINE__);	\
+		linux_dump_stack();				\
       }								\
       unlikely(__ret);						\
 })
@@ -390,6 +392,21 @@ kstrtou32(const char *cp, unsigned int base, u32 *res)
 }
 
 static inline int
+kstrtou64(const char *cp, unsigned int base, u64 *res)
+{
+       char *end;
+
+       *res = strtouq(cp, &end, base);
+
+       /* skip newline character, if any */
+       if (*end == '\n')
+               end++;
+       if (*cp == 0 || *end != 0)
+               return (-EINVAL);
+       return (0);
+}
+
+static inline int
 kstrtobool(const char *s, bool *res)
 {
 	int len;
@@ -444,6 +461,9 @@ kstrtobool_from_user(const char __user *s, size_t count, bool *res)
 	type __max1 = (x);			\
 	type __max2 = (y);			\
 	__max1 > __max2 ? __max1 : __max2; })
+
+#define offsetofend(t, m)	\
+        (offsetof(t, m) + sizeof((((t *)0)->m)))
 
 #define clamp_t(type, _x, min, max)	min_t(type, max_t(type, _x, min), max)
 #define clamp(x, lo, hi)		min( max(x,lo), hi)

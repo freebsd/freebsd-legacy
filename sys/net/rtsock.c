@@ -742,7 +742,6 @@ handle_rtm_get(struct rt_addrinfo *info, u_int fibnum,
 		}
 	}
 	RT_LOCK(rt);
-	RT_ADDREF(rt);
 	RIB_RUNLOCK(rnh);
 
 	*ret_nrt = rt;
@@ -930,7 +929,6 @@ route_output(struct mbuf *m, struct socket *so, ...)
 #endif
 			RT_LOCK(saved_nrt);
 			rtm->rtm_index = saved_nrt->rt_nhop->nh_ifp->if_index;
-			RT_REMREF(saved_nrt);
 			RT_UNLOCK(saved_nrt);
 		}
 		break;
@@ -987,8 +985,7 @@ report:
 
 flush:
 	NET_EPOCH_EXIT(et);
-	if (rt != NULL)
-		RTFREE(rt);
+	rt = NULL;
 
 #ifdef INET6
 	if (rtm != NULL) {
@@ -1078,7 +1075,6 @@ rt_getmetrics(const struct rtentry *rt, struct rt_metrics *out)
 	bzero(out, sizeof(*out));
 	out->rmx_mtu = rt->rt_nhop->nh_mtu;
 	out->rmx_weight = rt->rt_weight;
-	out->rmx_pksent = counter_u64_fetch(rt->rt_pksent);
 	out->rmx_nhidx = nhop_get_idx(rt->rt_nhop);
 	/* Kernel -> userland timebase conversion. */
 	out->rmx_expire = rt->rt_expire ?

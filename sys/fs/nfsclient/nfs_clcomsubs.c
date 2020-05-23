@@ -41,7 +41,6 @@ __FBSDID("$FreeBSD$");
  * the nfs op functions. They do things like create the rpc header and
  * copy data between mbuf chains and uio lists.
  */
-#ifndef APPLEKEXT
 #include <fs/nfs/nfsport.h>
 
 extern struct nfsstatsv1 nfsstatsv1;
@@ -49,7 +48,6 @@ extern int ncl_mbuf_mlen;
 extern enum vtype newnv2tov_type[8];
 extern enum vtype nv34tov_type[8];
 NFSCLSTATEMUTEX;
-#endif	/* !APPLEKEXT */
 
 static nfsuint64 nfs_nullcookie = {{ 0, 0 }};
 
@@ -57,7 +55,7 @@ static nfsuint64 nfs_nullcookie = {{ 0, 0 }};
  * copies a uio scatter/gather list to an mbuf chain.
  * NOTE: can ony handle iovcnt == 1
  */
-APPLESTATIC void
+void
 nfsm_uiombuf(struct nfsrv_descript *nd, struct uio *uiop, int siz)
 {
 	char *uiocp;
@@ -116,7 +114,7 @@ nfsm_uiombuf(struct nfsrv_descript *nd, struct uio *uiop, int siz)
 			mcp += xfer;
 			if ((nd->nd_flag & ND_NOMAP) != 0) {
 				nd->nd_bextpgsiz -= xfer;
-				mp->m_ext_pgs.last_pg_len += xfer;
+				mp->m_epg_last_len += xfer;
 			}
 			uiop->uio_offset += xfer;
 			uiop->uio_resid -= xfer;
@@ -148,7 +146,7 @@ nfsm_uiombuf(struct nfsrv_descript *nd, struct uio *uiop, int siz)
 		nd->nd_bpos = mcp;
 		if ((nd->nd_flag & ND_NOMAP) != 0) {
 			nd->nd_bextpgsiz -= rem;
-			mp->m_ext_pgs.last_pg_len += rem;
+			mp->m_epg_last_len += rem;
 		}
 	} else
 		nd->nd_bpos = mcp;
@@ -164,7 +162,7 @@ nfsm_uiombuf(struct nfsrv_descript *nd, struct uio *uiop, int siz)
  * always have space for an exact multiple of 4 bytes in
  * each mbuf.  This implies that the nul padding can be
  * safely done without checking for available space in
- * the mbuf data area (or page for M_NOMAP mbufs).
+ * the mbuf data area (or page for M_EXTPG mbufs).
  * NOTE: can ony handle iovcnt == 1
  */
 struct mbuf *
@@ -241,7 +239,7 @@ nfsm_uiombuflist(bool doextpgs, int maxextsiz, struct uio *uiop, int siz,
 			mcp += xfer;
 			if (doextpgs) {
 				bextpgsiz -= xfer;
-				mp->m_ext_pgs.last_pg_len += xfer;
+				mp->m_epg_last_len += xfer;
 			}
 			uiop->uio_offset += xfer;
 			uiop->uio_resid -= xfer;
@@ -256,7 +254,7 @@ nfsm_uiombuflist(bool doextpgs, int maxextsiz, struct uio *uiop, int siz,
 		*mcp++ = '\0';
 		mp->m_len++;
 		if (doextpgs)
-			mp->m_ext_pgs.last_pg_len++;
+			mp->m_epg_last_len++;
 	}
 	if (cpp != NULL)
 		*cpp = mcp;
@@ -269,7 +267,7 @@ nfsm_uiombuflist(bool doextpgs, int maxextsiz, struct uio *uiop, int siz,
  * Load vnode attributes from the xdr file attributes.
  * Returns EBADRPC if they can't be parsed, 0 otherwise.
  */
-APPLESTATIC int
+int
 nfsm_loadattr(struct nfsrv_descript *nd, struct nfsvattr *nap)
 {
 	struct nfs_fattr *fp;
@@ -336,7 +334,7 @@ nfsmout:
  * This function finds the directory cookie that corresponds to the
  * logical byte offset given.
  */
-APPLESTATIC nfsuint64 *
+nfsuint64 *
 nfscl_getcookie(struct nfsnode *np, off_t off, int add)
 {
 	struct nfsdmap *dp, *dp2;
@@ -388,7 +386,7 @@ nfscl_getcookie(struct nfsnode *np, off_t off, int add)
  * the file handle and the file's attributes.
  * For V4, it assumes that Getfh and Getattr Op's results are here.
  */
-APPLESTATIC int
+int
 nfscl_mtofh(struct nfsrv_descript *nd, struct nfsfh **nfhpp,
     struct nfsvattr *nap, int *attrflagp)
 {
@@ -449,7 +447,7 @@ nfsmout:
 /*
  * Initialize the owner/delegation sleep lock.
  */
-APPLESTATIC void
+void
 nfscl_lockinit(struct nfsv4lock *lckp)
 {
 
@@ -461,7 +459,7 @@ nfscl_lockinit(struct nfsv4lock *lckp)
  * Get an exclusive lock. (Not needed for OpenBSD4, since there is only one
  * thread for each posix process in the kernel.)
  */
-APPLESTATIC void
+void
 nfscl_lockexcl(struct nfsv4lock *lckp, void *mutex)
 {
 	int igotlock;
@@ -474,7 +472,7 @@ nfscl_lockexcl(struct nfsv4lock *lckp, void *mutex)
 /*
  * Release an exclusive lock.
  */
-APPLESTATIC void
+void
 nfscl_lockunlock(struct nfsv4lock *lckp)
 {
 
@@ -484,7 +482,7 @@ nfscl_lockunlock(struct nfsv4lock *lckp)
 /*
  * Called to derefernce a lock on a stateid (delegation or open owner).
  */
-APPLESTATIC void
+void
 nfscl_lockderef(struct nfsv4lock *lckp)
 {
 

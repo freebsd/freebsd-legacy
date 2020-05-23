@@ -2956,6 +2956,7 @@ sctp_handle_cookie_ack(struct sctp_cookie_ack_chunk *cp SCTP_UNUSED,
 {
 	/* cp must not be used, others call this without a c-ack :-) */
 	struct sctp_association *asoc;
+	struct sctp_tmit_chunk *chk;
 
 	SCTPDBG(SCTP_DEBUG_INPUT2,
 	    "sctp_handle_cookie_ack: handling COOKIE-ACK\n");
@@ -3059,11 +3060,13 @@ sctp_handle_cookie_ack(struct sctp_cookie_ack_chunk *cp SCTP_UNUSED,
 closed_socket:
 	/* Toss the cookie if I can */
 	sctp_toss_old_cookies(stcb, asoc);
-	if (!TAILQ_EMPTY(&asoc->sent_queue)) {
-		/* Restart the timer if we have pending data */
-		struct sctp_tmit_chunk *chk;
-
-		chk = TAILQ_FIRST(&asoc->sent_queue);
+	/* Restart the timer if we have pending data */
+	TAILQ_FOREACH(chk, &asoc->sent_queue, sctp_next) {
+		if (chk->whoTo != NULL) {
+			break;
+		}
+	}
+	if (chk != NULL) {
 		sctp_timer_start(SCTP_TIMER_TYPE_SEND, stcb->sctp_ep, stcb, chk->whoTo);
 	}
 }
@@ -4689,7 +4692,7 @@ sctp_process_control(struct mbuf *m, int iphlen, int *offset, int length,
 			}
 		}
 		if (stcb == NULL) {
-			snprintf(msg, sizeof(msg), "OOTB, %s:%d at %s", __FILE__, __LINE__, __func__);
+			SCTP_SNPRINTF(msg, sizeof(msg), "OOTB, %s:%d at %s", __FILE__, __LINE__, __func__);
 			op_err = sctp_generate_cause(SCTP_BASE_SYSCTL(sctp_diag_info_code),
 			    msg);
 			/* no association, so it's out of the blue... */
@@ -4731,7 +4734,7 @@ sctp_process_control(struct mbuf *m, int iphlen, int *offset, int length,
 				if (stcb != NULL) {
 					SCTP_TCB_UNLOCK(stcb);
 				}
-				snprintf(msg, sizeof(msg), "OOTB, %s:%d at %s", __FILE__, __LINE__, __func__);
+				SCTP_SNPRINTF(msg, sizeof(msg), "OOTB, %s:%d at %s", __FILE__, __LINE__, __func__);
 				op_err = sctp_generate_cause(SCTP_BASE_SYSCTL(sctp_diag_info_code),
 				    msg);
 				sctp_handle_ootb(m, iphlen, *offset, src, dst,
@@ -5159,6 +5162,7 @@ process_control_chunks:
 			} else {
 				struct mbuf *ret_buf;
 				struct sctp_inpcb *linp;
+				struct sctp_tmit_chunk *chk;
 
 				if (stcb) {
 					linp = NULL;
@@ -5220,14 +5224,13 @@ process_control_chunks:
 					got_auth = 1;
 					auth_skipped = 0;
 				}
-				if (!TAILQ_EMPTY(&stcb->asoc.sent_queue)) {
-					/*
-					 * Restart the timer if we have
-					 * pending data
-					 */
-					struct sctp_tmit_chunk *chk;
-
-					chk = TAILQ_FIRST(&stcb->asoc.sent_queue);
+				/* Restart the timer if we have pending data */
+				TAILQ_FOREACH(chk, &stcb->asoc.sent_queue, sctp_next) {
+					if (chk->whoTo != NULL) {
+						break;
+					}
+				}
+				if (chk != NULL) {
 					sctp_timer_start(SCTP_TIMER_TYPE_SEND, stcb->sctp_ep, stcb, chk->whoTo);
 				}
 			}
@@ -5668,7 +5671,7 @@ sctp_common_input_processing(struct mbuf **mm, int iphlen, int offset, int lengt
 			SCTP_TCB_UNLOCK(stcb);
 			stcb = NULL;
 			SCTP_PROBE5(receive, NULL, stcb, m, stcb, sh);
-			snprintf(msg, sizeof(msg), "OOTB, %s:%d at %s", __FILE__, __LINE__, __func__);
+			SCTP_SNPRINTF(msg, sizeof(msg), "OOTB, %s:%d at %s", __FILE__, __LINE__, __func__);
 			op_err = sctp_generate_cause(SCTP_BASE_SYSCTL(sctp_diag_info_code),
 			    msg);
 			sctp_handle_ootb(m, iphlen, offset, src, dst, sh, inp, op_err,
@@ -5730,7 +5733,7 @@ sctp_common_input_processing(struct mbuf **mm, int iphlen, int offset, int lengt
 		if (stcb == NULL) {
 			/* out of the blue DATA chunk */
 			SCTP_PROBE5(receive, NULL, NULL, m, NULL, sh);
-			snprintf(msg, sizeof(msg), "OOTB, %s:%d at %s", __FILE__, __LINE__, __func__);
+			SCTP_SNPRINTF(msg, sizeof(msg), "OOTB, %s:%d at %s", __FILE__, __LINE__, __func__);
 			op_err = sctp_generate_cause(SCTP_BASE_SYSCTL(sctp_diag_info_code),
 			    msg);
 			sctp_handle_ootb(m, iphlen, offset, src, dst, sh, inp, op_err,
@@ -5796,7 +5799,7 @@ sctp_common_input_processing(struct mbuf **mm, int iphlen, int offset, int lengt
 			/*
 			 * We consider OOTB any data sent during asoc setup.
 			 */
-			snprintf(msg, sizeof(msg), "OOTB, %s:%d at %s", __FILE__, __LINE__, __func__);
+			SCTP_SNPRINTF(msg, sizeof(msg), "OOTB, %s:%d at %s", __FILE__, __LINE__, __func__);
 			op_err = sctp_generate_cause(SCTP_BASE_SYSCTL(sctp_diag_info_code),
 			    msg);
 			sctp_handle_ootb(m, iphlen, offset, src, dst, sh, inp, op_err,

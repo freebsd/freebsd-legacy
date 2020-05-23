@@ -41,7 +41,6 @@ __FBSDID("$FreeBSD$");
  * the nfs op functions. They do things like create the rpc header and
  * copy data between mbuf chains and uio lists.
  */
-#ifndef APPLEKEXT
 #include "opt_inet.h"
 #include "opt_inet6.h"
 #include "opt_kern_tls.h"
@@ -200,7 +199,6 @@ struct nfsv4_opflag nfsv4_opflag[NFSV42_NOPS] = {
 	{ 0, 1, 0, 0, LK_SHARED, 1, 1 },		/* Listxattrs */
 	{ 0, 1, 1, 1, LK_EXCLUSIVE, 1, 1 },		/* Removexattr */
 };
-#endif	/* !APPLEKEXT */
 
 static int ncl_mbuf_mhlen = MHLEN;
 static int nfsrv_usercnt = 0;
@@ -324,7 +322,7 @@ static int nfs_bigrequest[NFSV42_NPROCS] = {
  * Start building a request. Mostly just put the first file handle in
  * place.
  */
-APPLESTATIC void
+void
 nfscl_reqstart(struct nfsrv_descript *nd, int procnum, struct nfsmount *nmp,
     u_int8_t *nfhp, int fhlen, u_int32_t **opcntpp, struct nfsclsession *sep,
     int vers, int minorvers, bool use_ext)
@@ -482,7 +480,7 @@ nfscl_reqstart(struct nfsrv_descript *nd, int procnum, struct nfsmount *nmp,
 /*
  * Put a state Id in the mbuf list.
  */
-APPLESTATIC void
+void
 nfsm_stateidtom(struct nfsrv_descript *nd, nfsv4stateid_t *stateidp, int flag)
 {
 	nfsv4stateid_t *st;
@@ -718,7 +716,7 @@ out:
  * This is used by the macro NFSM_DISSECT for tough
  * cases.
  */
-APPLESTATIC void *
+void *
 nfsm_dissct(struct nfsrv_descript *nd, int siz, int how)
 {
 	struct mbuf *mp2;
@@ -784,7 +782,7 @@ nfsm_dissct(struct nfsrv_descript *nd, int siz, int how)
  * here than check for offs > 0 for all calls to nfsm_advance.
  * If left == -1, it should be calculated here.
  */
-APPLESTATIC int
+int
 nfsm_advance(struct nfsrv_descript *nd, int offs, int left)
 {
 	int error = 0;
@@ -832,7 +830,7 @@ out:
  * Copy a string into mbuf(s).
  * Return the number of bytes output, including XDR overheads.
  */
-APPLESTATIC int
+int
 nfsm_strtom(struct nfsrv_descript *nd, const char *cp, int siz)
 {
 	struct mbuf *m2;
@@ -853,10 +851,10 @@ nfsm_strtom(struct nfsrv_descript *nd, const char *cp, int siz)
 	else
 		left = M_TRAILINGSPACE(m2);
 
-	KASSERT(((m2->m_flags & (M_EXT | M_NOMAP)) ==
-	    (M_EXT | M_NOMAP) && (nd->nd_flag & ND_NOMAP) != 0) ||
-	    ((m2->m_flags & (M_EXT | M_NOMAP)) !=
-	    (M_EXT | M_NOMAP) && (nd->nd_flag & ND_NOMAP) == 0),
+	KASSERT(((m2->m_flags & (M_EXT | M_EXTPG)) ==
+	    (M_EXT | M_EXTPG) && (nd->nd_flag & ND_NOMAP) != 0) ||
+	    ((m2->m_flags & (M_EXT | M_EXTPG)) !=
+	    (M_EXT | M_EXTPG) && (nd->nd_flag & ND_NOMAP) == 0),
 	    ("nfsm_strtom: ext_pgs and non-ext_pgs mbufs mixed"));
 	/*
 	 * Loop around copying the string to mbuf(s).
@@ -893,7 +891,7 @@ nfsm_strtom(struct nfsrv_descript *nd, const char *cp, int siz)
 		left -= xfer;
 		if ((nd->nd_flag & ND_NOMAP) != 0) {
 			nd->nd_bextpgsiz -= xfer;
-			m2->m_ext_pgs.last_pg_len += xfer;
+			m2->m_epg_last_len += xfer;
 		}
 		if (siz == 0 && rem) {
 			if (left < rem)
@@ -903,7 +901,7 @@ nfsm_strtom(struct nfsrv_descript *nd, const char *cp, int siz)
 			cp2 += rem;
 			if ((nd->nd_flag & ND_NOMAP) != 0) {
 				nd->nd_bextpgsiz -= rem;
-				m2->m_ext_pgs.last_pg_len += rem;
+				m2->m_epg_last_len += rem;
 			}
 		}
 	}
@@ -918,7 +916,7 @@ nfsm_strtom(struct nfsrv_descript *nd, const char *cp, int siz)
 /*
  * Called once to initialize data structures...
  */
-APPLESTATIC void
+void
 newnfs_init(void)
 {
 	static int nfs_inited = 0;
@@ -948,7 +946,7 @@ newnfs_init(void)
  * set_true == 1 if there should be an newnfs_true prepended on the file handle.
  * Return the number of bytes output, including XDR overhead.
  */
-APPLESTATIC int
+int
 nfsm_fhtom(struct nfsrv_descript *nd, u_int8_t *fhp, int size, int set_true)
 {
 	u_int32_t *tl;
@@ -991,7 +989,7 @@ nfsm_fhtom(struct nfsrv_descript *nd, u_int8_t *fhp, int size, int set_true)
  * The AF_INET family is handled as a special case so that address mbufs
  * don't need to be saved to store "struct in_addr", which is only 4 bytes.
  */
-APPLESTATIC int
+int
 nfsaddr_match(int family, union nethostaddr *haddr, NFSSOCKADDR_T nam)
 {
 #ifdef INET
@@ -1028,7 +1026,7 @@ nfsaddr_match(int family, union nethostaddr *haddr, NFSSOCKADDR_T nam)
 /*
  * Similar to the above, but takes to NFSSOCKADDR_T args.
  */
-APPLESTATIC int
+int
 nfsaddr2_match(NFSSOCKADDR_T nam1, NFSSOCKADDR_T nam2)
 {
 	struct sockaddr_in *addr1, *addr2;
@@ -1062,15 +1060,13 @@ nfsaddr2_match(NFSSOCKADDR_T nam1, NFSSOCKADDR_T nam2)
 	return (0);
 }
 
-
 /*
  * Trim trailing data off the mbuf list being built.
  */
-APPLESTATIC void
+void
 nfsm_trimtrailing(struct nfsrv_descript *nd, struct mbuf *mb, char *bpos,
     int bextpg, int bextpgsiz)
 {
-	struct mbuf_ext_pgs *pgs;
 	vm_page_t pg;
 	int fullpgsiz, i;
 
@@ -1078,23 +1074,22 @@ nfsm_trimtrailing(struct nfsrv_descript *nd, struct mbuf *mb, char *bpos,
 		m_freem(mb->m_next);
 		mb->m_next = NULL;
 	}
-	if ((mb->m_flags & M_NOMAP) != 0) {
-		pgs = &mb->m_ext_pgs;
+	if ((mb->m_flags & M_EXTPG) != 0) {
 		/* First, get rid of any pages after this position. */
-		for (i = pgs->npgs - 1; i > bextpg; i--) {
+		for (i = mb->m_epg_npgs - 1; i > bextpg; i--) {
 			pg = PHYS_TO_VM_PAGE(mb->m_epg_pa[i]);
 			vm_page_unwire_noq(pg);
 			vm_page_free(pg);
 		}
-		pgs->npgs = bextpg + 1;
+		mb->m_epg_npgs = bextpg + 1;
 		if (bextpg == 0)
-			fullpgsiz = PAGE_SIZE - pgs->first_pg_off;
+			fullpgsiz = PAGE_SIZE - mb->m_epg_1st_off;
 		else
 			fullpgsiz = PAGE_SIZE;
-		pgs->last_pg_len = fullpgsiz - bextpgsiz;
-		mb->m_len = mbuf_ext_pg_len(pgs, 0, pgs->first_pg_off);
-		for (i = 1; i < pgs->npgs; i++)
-			mb->m_len += mbuf_ext_pg_len(pgs, i, 0);
+		mb->m_epg_last_len = fullpgsiz - bextpgsiz;
+		mb->m_len = m_epg_pagelen(mb, 0, mb->m_epg_1st_off);
+		for (i = 1; i < mb->m_epg_npgs; i++)
+			mb->m_len += m_epg_pagelen(mb, i, 0);
 		nd->nd_bextpgsiz = bextpgsiz;
 		nd->nd_bextpg = bextpg;
 	} else
@@ -1106,7 +1101,7 @@ nfsm_trimtrailing(struct nfsrv_descript *nd, struct mbuf *mb, char *bpos,
 /*
  * Dissect a file handle on the client.
  */
-APPLESTATIC int
+int
 nfsm_getfh(struct nfsrv_descript *nd, struct nfsfh **nfhpp)
 {
 	u_int32_t *tl;
@@ -1141,7 +1136,7 @@ nfsmout:
  * Break down the nfsv4 acl.
  * If the aclp == NULL or won't fit in an acl, just discard the acl info.
  */
-APPLESTATIC int
+int
 nfsrv_dissectacl(struct nfsrv_descript *nd, NFSACL_T *aclp, int *aclerrp,
     int *aclsizep, __unused NFSPROC_T *p)
 {
@@ -1207,7 +1202,7 @@ nfsmout:
  * Returns EBADRPC for a parsing error, 0 otherwise.
  * If the clearinvalid flag is set, clear the bits not supported.
  */
-APPLESTATIC int
+int
 nfsrv_getattrbits(struct nfsrv_descript *nd, nfsattrbit_t *attrbitp, int *cntp,
     int *retnotsupp)
 {
@@ -1253,7 +1248,7 @@ nfsmout:
  * and 0 otherwise.
  * Returns EBADRPC if it can't be parsed, 0 otherwise.
  */
-APPLESTATIC int
+int
 nfsv4_loadattr(struct nfsrv_descript *nd, vnode_t vp,
     struct nfsvattr *nap, struct nfsfh **nfhpp, fhandle_t *fhp, int fhsize,
     struct nfsv3_pathconf *pc, struct statfs *sbp, struct nfsstatfs *sfp,
@@ -2297,7 +2292,7 @@ nfsmout:
  * and the mp argument indicates to check for a forced dismount, iff not
  * NULL.
  */
-APPLESTATIC int
+int
 nfsv4_lock(struct nfsv4lock *lp, int iwantlock, int *isleptp,
     void *mutex, struct mount *mp)
 {
@@ -2344,7 +2339,7 @@ nfsv4_lock(struct nfsv4lock *lp, int iwantlock, int *isleptp,
  * The second argument is set to 1 to indicate the nfslock_usecnt should be
  * incremented, as well.
  */
-APPLESTATIC void
+void
 nfsv4_unlock(struct nfsv4lock *lp, int incref)
 {
 
@@ -2357,7 +2352,7 @@ nfsv4_unlock(struct nfsv4lock *lp, int incref)
 /*
  * Release a reference cnt.
  */
-APPLESTATIC void
+void
 nfsv4_relref(struct nfsv4lock *lp)
 {
 
@@ -2377,7 +2372,7 @@ nfsv4_relref(struct nfsv4lock *lp)
  * If the mp argument is not NULL, check for NFSCL_FORCEDISM() being set and
  * return without getting a refcnt for that case.
  */
-APPLESTATIC void
+void
 nfsv4_getref(struct nfsv4lock *lp, int *isleptp, void *mutex,
     struct mount *mp)
 {
@@ -2407,7 +2402,7 @@ nfsv4_getref(struct nfsv4lock *lp, int *isleptp, void *mutex,
  * Get a reference as above, but return failure instead of sleeping if
  * an exclusive lock is held.
  */
-APPLESTATIC int
+int
 nfsv4_getref_nonblock(struct nfsv4lock *lp)
 {
 
@@ -2421,7 +2416,7 @@ nfsv4_getref_nonblock(struct nfsv4lock *lp)
 /*
  * Test for a lock. Return 1 if locked, 0 otherwise.
  */
-APPLESTATIC int
+int
 nfsv4_testlock(struct nfsv4lock *lp)
 {
 
@@ -2449,7 +2444,7 @@ nfsv4_wanted(struct nfsv4lock *lp)
  * Return EBADRPC if there is an mbuf error,
  * 0 otherwise.
  */
-APPLESTATIC int
+int
 nfsrv_mtostr(struct nfsrv_descript *nd, char *str, int siz)
 {
 	char *cp;
@@ -2500,7 +2495,7 @@ out:
 /*
  * Fill in the attributes as marked by the bitmap (V4).
  */
-APPLESTATIC int
+int
 nfsv4_fillattr(struct nfsrv_descript *nd, struct mount *mp, vnode_t vp,
     NFSACL_T *saclp, struct vattr *vap, fhandle_t *fhp, int rderror,
     nfsattrbit_t *attrbitp, struct ucred *cred, NFSPROC_T *p, int isdgram,
@@ -3080,7 +3075,7 @@ nfsv4_fillattr(struct nfsrv_descript *nd, struct mount *mp, vnode_t vp,
  * Put the attribute bits onto an mbuf list.
  * Return the number of bytes of output generated.
  */
-APPLESTATIC int
+int
 nfsrv_putattrbit(struct nfsrv_descript *nd, nfsattrbit_t *attrbitp)
 {
 	u_int32_t *tl;
@@ -3105,7 +3100,7 @@ nfsrv_putattrbit(struct nfsrv_descript *nd, nfsattrbit_t *attrbitp)
  *       (malloc a larger one, as required)
  * retlenp - pointer to length to be returned
  */
-APPLESTATIC void
+void
 nfsv4_uidtostr(uid_t uid, u_char **cpp, int *retlenp)
 {
 	int i;
@@ -3262,7 +3257,7 @@ tryagain:
  * string is made up entirely of digits, just convert the string to
  * a number.
  */
-APPLESTATIC int
+int
 nfsv4_strtouid(struct nfsrv_descript *nd, u_char *str, int len, uid_t *uidp)
 {
 	int i;
@@ -3364,7 +3359,7 @@ out:
  *       (malloc a larger one, as required)
  * retlenp - pointer to length to be returned
  */
-APPLESTATIC void
+void
 nfsv4_gidtostr(gid_t gid, u_char **cpp, int *retlenp)
 {
 	int i;
@@ -3476,7 +3471,7 @@ tryagain:
  * string is made up entirely of digits, just convert the string to
  * a number.
  */
-APPLESTATIC int
+int
 nfsv4_strtogid(struct nfsrv_descript *nd, u_char *str, int len, gid_t *gidp)
 {
 	int i;
@@ -3601,7 +3596,7 @@ nfsrv_cmpmixedcase(u_char *cp, u_char *cp2, int len)
 /*
  * Set the port for the nfsuserd.
  */
-APPLESTATIC int
+int
 nfsrv_nfsuserdport(struct nfsuserd_args *nargs, NFSPROC_T *p)
 {
 	struct nfssockreq *rp;
@@ -3684,7 +3679,7 @@ out:
 /*
  * Delete the nfsuserd port.
  */
-APPLESTATIC void
+void
 nfsrv_nfsuserddelport(void)
 {
 
@@ -3771,7 +3766,7 @@ out:
  * This function is called from the nfssvc(2) system call, to update the
  * kernel user/group name list(s) for the V4 owner and ownergroup attributes.
  */
-APPLESTATIC int
+int
 nfssvc_idname(struct nfsd_idargs *nidp)
 {
 	struct nfsusrgrp *nusrp, *usrp, *newusrp;
@@ -4164,7 +4159,7 @@ nfsrv_removeuser(struct nfsusrgrp *usrp, int isuser)
  * running, since it doesn't do any locking.
  * This function is meant to be used when the nfscommon module is unloaded.
  */
-APPLESTATIC void
+void
 nfsrv_cleanusergroup(void)
 {
 	struct nfsrv_lughash *hp, *hp2;
@@ -4211,7 +4206,7 @@ nfsrv_cleanusergroup(void)
  * This function scans a byte string and checks for UTF-8 compliance.
  * It returns 0 if it conforms and NFSERR_INVAL if not.
  */
-APPLESTATIC int
+int
 nfsrv_checkutf8(u_int8_t *cp, int len)
 {
 	u_int32_t val = 0x0;
@@ -4464,7 +4459,7 @@ nfsrv_refstrbigenough(int siz, u_char **cpp, u_char **cpp2, int *slenp)
 /*
  * Initialize the reply header data structures.
  */
-APPLESTATIC void
+void
 nfsrvd_rephead(struct nfsrv_descript *nd)
 {
 	struct mbuf *mreq;
@@ -4539,7 +4534,7 @@ newnfs_sndunlock(int *flagp)
 	NFSUNLOCKSOCK();
 }
 
-APPLESTATIC int
+int
 nfsv4_getipaddr(struct nfsrv_descript *nd, struct sockaddr_in *sin,
     struct sockaddr_in6 *sin6, sa_family_t *saf, int *isudp)
 {
@@ -4720,7 +4715,7 @@ nfsv4_seqsess_cacherep(uint32_t slotid, struct nfsslot *slots, int repstat,
 /*
  * Generate the xdr for an NFSv4.1 Sequence Operation.
  */
-APPLESTATIC void
+void
 nfsv4_setsequence(struct nfsmount *nmp, struct nfsrv_descript *nd,
     struct nfsclsession *sep, int dont_replycache)
 {
@@ -4828,7 +4823,7 @@ nfsv4_sequencelookup(struct nfsmount *nmp, struct nfsclsession *sep,
 /*
  * Free a session slot.
  */
-APPLESTATIC void
+void
 nfsv4_freeslot(struct nfsclsession *sep, int slot)
 {
 	uint64_t bitval;
@@ -4876,25 +4871,21 @@ void
 nfsm_set(struct nfsrv_descript *nd, u_int offs)
 {
 	struct mbuf *m;
-	struct mbuf_ext_pgs *pgs;
 	int rlen;
 
 	m = nd->nd_mb;
-	if ((m->m_flags & M_NOMAP) != 0) {
-		pgs = &m->m_ext_pgs;
+	if ((m->m_flags & M_EXTPG) != 0) {
 		nd->nd_bextpg = 0;
 		while (offs > 0) {
 			if (nd->nd_bextpg == 0)
-				rlen = mbuf_ext_pg_len(pgs, 0,
-				    pgs->first_pg_off);
+				rlen = m_epg_pagelen(m, 0, m->m_epg_1st_off);
 			else
-				rlen = mbuf_ext_pg_len(pgs,
-				    nd->nd_bextpg, 0);
+				rlen = m_epg_pagelen(m, nd->nd_bextpg, 0);
 			if (offs <= rlen)
 				break;
 			offs -= rlen;
 			nd->nd_bextpg++;
-			if (nd->nd_bextpg == pgs->npgs) {
+			if (nd->nd_bextpg == m->m_epg_npgs) {
 				printf("nfsm_set: build offs "
 				    "out of range\n");
 				nd->nd_bextpg--;
@@ -4904,13 +4895,12 @@ nfsm_set(struct nfsrv_descript *nd, u_int offs)
 		nd->nd_bpos = (char *)(void *)
 		    PHYS_TO_DMAP(m->m_epg_pa[nd->nd_bextpg]);
 		if (nd->nd_bextpg == 0)
-			nd->nd_bpos += pgs->first_pg_off;
+			nd->nd_bpos += m->m_epg_1st_off;
 		if (offs > 0) {
 			nd->nd_bpos += offs;
 			nd->nd_bextpgsiz = rlen - offs;
 		} else if (nd->nd_bextpg == 0)
-			nd->nd_bextpgsiz = PAGE_SIZE -
-			    pgs->first_pg_off;
+			nd->nd_bextpgsiz = PAGE_SIZE - m->m_epg_1st_off;
 		else
 			nd->nd_bextpgsiz = PAGE_SIZE;
 	} else
@@ -4924,12 +4914,10 @@ nfsm_set(struct nfsrv_descript *nd, u_int offs)
 struct mbuf *
 nfsm_add_ext_pgs(struct mbuf *m, int maxextsiz, int *bextpg)
 {
-	struct mbuf_ext_pgs *pgs;
 	struct mbuf *mp;
 	vm_page_t pg;
 
-	pgs = &m->m_ext_pgs;
-	if ((pgs->npgs + 1) * PAGE_SIZE > maxextsiz) {
+	if ((m->m_epg_npgs + 1) * PAGE_SIZE > maxextsiz) {
 		mp = mb_alloc_ext_plus_pages(PAGE_SIZE, M_WAITOK,
 		    mb_free_mext_pgs);
 		*bextpg = 0;
@@ -4942,10 +4930,10 @@ nfsm_add_ext_pgs(struct mbuf *m, int maxextsiz, int *bextpg)
 			if (pg == NULL)
 				vm_wait(NULL);
 		} while (pg == NULL);
-		m->m_epg_pa[pgs->npgs] = VM_PAGE_TO_PHYS(pg);
-		*bextpg = pgs->npgs;
-		pgs->npgs++;
-		pgs->last_pg_len = 0;
+		m->m_epg_pa[m->m_epg_npgs] = VM_PAGE_TO_PHYS(pg);
+		*bextpg = m->m_epg_npgs;
+		m->m_epg_npgs++;
+		m->m_epg_last_len = 0;
 		mp = m;
 	}
 	return (mp);
