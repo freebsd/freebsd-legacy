@@ -27,13 +27,19 @@
  *	$FreeBSD$
  */
 
-#ifndef	_RPCTLS_IMPL_H
-#define	_RPCTLS_IMPL_H
+#ifndef	_RPC_RPCSEC_TLS_H_
+#define	_RPC_RPCSEC_TLS_H_
 
 /* Operation values for rpctls syscall. */
-#define	RPCTLS_SYSC_SETPATH	1
-#define	RPCTLS_SYSC_CONNECT	2
-#define	RPCTLS_SYSC_SERVER	3
+#define	RPCTLS_SYSC_CLSETPATH	1
+#define	RPCTLS_SYSC_CLSOCKET	2
+#define	RPCTLS_SYSC_CLSHUTDOWN	3
+#define	RPCTLS_SYSC_SRVSETPATH	4
+#define	RPCTLS_SYSC_SRVSOCKET	5
+#define	RPCTLS_SYSC_SRVSHUTDOWN	6
+
+/* System call used by the rpctlscd, rpctlssd daemons. */
+int	rpctls_syscall(int, const char *);
 
 /* Flag bits to indicate certificate results. */
 #define	RPCTLS_FLAGS_HANDSHAKE	0x01
@@ -73,4 +79,4 @@ bool		rpctls_getinfo(u_int *maxlen);
 
 #endif	/* _KERNEL */
 
-#endif	/* _RPCTLS_IMPL_H */
+#endif	/* _RPC_RPCSEC_TLS_H_ */
