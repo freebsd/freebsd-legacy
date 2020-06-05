@@ -5181,7 +5181,7 @@ nfsrv_writedsdorpc(struct nfsmount *nmp, fhandle_t *fhp, off_t off, int len,
 	/* Put data in mbuf chain. */
 	nd->nd_mb->m_next = m;
 	if ((m->m_flags & M_EXTPG) != 0)
-		nd->nd_flag |= ND_NOMAP;
+		nd->nd_flag |= ND_EXTPG;
 
 	/* Set nd_mb and nd_bpos to end of data. */
 	while (m->m_next != NULL)
@@ -6278,9 +6278,9 @@ nfsvno_getxattr(struct vnode *vp, char *name, uint32_t maxresp,
 	/*
 	 * If the cnt is larger than MCLBYTES, use ext_pgs if
 	 * possible.
-	 * Always use ext_pgs if ND_NOMAP is set.
+	 * Always use ext_pgs if ND_EXTPG is set.
 	 */
-	if ((flag & ND_NOMAP) != 0 || (tlen > MCLBYTES &&
+	if ((flag & ND_EXTPG) != 0 || (tlen > MCLBYTES &&
 	    PMAP_HAS_DMAP != 0 && ((flag & ND_TLS) != 0 || nfs_use_ext_pgs)))
 		uiop->uio_iovcnt = nfsrv_createiovec_extpgs(tlen, maxextsiz,
 		    &m, &m2, &iv);

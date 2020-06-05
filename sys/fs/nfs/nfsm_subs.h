@@ -64,7 +64,7 @@ nfsm_build(struct nfsrv_descript *nd, int siz)
 	void *retp;
 	struct mbuf *mb2;
 
-	if ((nd->nd_flag & ND_NOMAP) == 0 &&
+	if ((nd->nd_flag & ND_EXTPG) == 0 &&
 	    siz > M_TRAILINGSPACE(nd->nd_mb)) {
 		NFSMCLGET(mb2, M_NOWAIT);
 		if (siz > MLEN)
@@ -73,7 +73,7 @@ nfsm_build(struct nfsrv_descript *nd, int siz)
 		nd->nd_bpos = mtod(mb2, char *);
 		nd->nd_mb->m_next = mb2;
 		nd->nd_mb = mb2;
-	} else if ((nd->nd_flag & ND_NOMAP) != 0) {
+	} else if ((nd->nd_flag & ND_EXTPG) != 0) {
 		if (siz > nd->nd_bextpgsiz) {
 			mb2 = mb_alloc_ext_plus_pages(PAGE_SIZE, M_WAITOK,
 			    mb_free_mext_pgs);

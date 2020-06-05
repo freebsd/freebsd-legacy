@@ -363,7 +363,7 @@ nfscl_reqstart(struct nfsrv_descript *nd, int procnum, struct nfsmount *nmp,
 	nd->nd_repstat = 0;
 	nd->nd_maxextsiz = 16384;
 	if (use_ext && PMAP_HAS_DMAP != 0) {
-		nd->nd_flag |= ND_NOMAP;
+		nd->nd_flag |= ND_EXTPG;
 #ifdef KERN_TLS
 		if (rpctls_getinfo(&maxlen))
 			nd->nd_maxextsiz = min(TLS_MAX_MSG_SIZE_V10_2,
@@ -374,7 +374,7 @@ nfscl_reqstart(struct nfsrv_descript *nd, int procnum, struct nfsmount *nmp,
 	/*
 	 * Get the first mbuf for the request.
 	 */
-	if ((nd->nd_flag & ND_NOMAP) != 0) {
+	if ((nd->nd_flag & ND_EXTPG) != 0) {
 		mb = mb_alloc_ext_plus_pages(PAGE_SIZE, M_WAITOK,
 		    mb_free_mext_pgs);
 		nd->nd_mreq = nd->nd_mb = mb;
@@ -846,22 +846,22 @@ nfsm_strtom(struct nfsrv_descript *nd, const char *cp, int siz)
 	bytesize = NFSX_UNSIGNED + siz + rem;
 	m2 = nd->nd_mb;
 	cp2 = nd->nd_bpos;
-	if ((nd->nd_flag & ND_NOMAP) != 0)
+	if ((nd->nd_flag & ND_EXTPG) != 0)
 		left = nd->nd_bextpgsiz;
 	else
 		left = M_TRAILINGSPACE(m2);
 
 	KASSERT(((m2->m_flags & (M_EXT | M_EXTPG)) ==
-	    (M_EXT | M_EXTPG) && (nd->nd_flag & ND_NOMAP) != 0) ||
+	    (M_EXT | M_EXTPG) && (nd->nd_flag & ND_EXTPG) != 0) ||
 	    ((m2->m_flags & (M_EXT | M_EXTPG)) !=
-	    (M_EXT | M_EXTPG) && (nd->nd_flag & ND_NOMAP) == 0),
+	    (M_EXT | M_EXTPG) && (nd->nd_flag & ND_EXTPG) == 0),
 	    ("nfsm_strtom: ext_pgs and non-ext_pgs mbufs mixed"));
 	/*
 	 * Loop around copying the string to mbuf(s).
 	 */
 	while (siz > 0) {
 		if (left == 0) {
-			if ((nd->nd_flag & ND_NOMAP) != 0) {
+			if ((nd->nd_flag & ND_EXTPG) != 0) {
 				m2 = nfsm_add_ext_pgs(m2,
 				    nd->nd_maxextsiz, &nd->nd_bextpg);
 				cp2 = (char *)(void *)PHYS_TO_DMAP(
@@ -889,7 +889,7 @@ nfsm_strtom(struct nfsrv_descript *nd, const char *cp, int siz)
 		m2->m_len += xfer;
 		siz -= xfer;
 		left -= xfer;
-		if ((nd->nd_flag & ND_NOMAP) != 0) {
+		if ((nd->nd_flag & ND_EXTPG) != 0) {
 			nd->nd_bextpgsiz -= xfer;
 			m2->m_epg_last_len += xfer;
 		}
@@ -899,14 +899,14 @@ nfsm_strtom(struct nfsrv_descript *nd, const char *cp, int siz)
 			NFSBZERO(cp2, rem);
 			m2->m_len += rem;
 			cp2 += rem;
-			if ((nd->nd_flag & ND_NOMAP) != 0) {
+			if ((nd->nd_flag & ND_EXTPG) != 0) {
 				nd->nd_bextpgsiz -= rem;
 				m2->m_epg_last_len += rem;
 			}
 		}
 	}
 	nd->nd_mb = m2;
-	if ((nd->nd_flag & ND_NOMAP) != 0)
+	if ((nd->nd_flag & ND_EXTPG) != 0)
 		nd->nd_bpos = cp2;
 	else
 		nd->nd_bpos = mtod(m2, char *) + m2->m_len;
@@ -4464,7 +4464,7 @@ nfsrvd_rephead(struct nfsrv_descript *nd)
 {
 	struct mbuf *mreq;
 
-	if ((nd->nd_flag & ND_NOMAP) != 0) {
+	if ((nd->nd_flag & ND_EXTPG) != 0) {
 		mreq = mb_alloc_ext_plus_pages(PAGE_SIZE, M_WAITOK,
 		    mb_free_mext_pgs);
 		nd->nd_mreq = nd->nd_mb = mreq;

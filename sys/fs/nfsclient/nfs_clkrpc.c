@@ -118,7 +118,7 @@ printf("cbreq nd_md=%p\n", nd.nd_md);
 #endif
 		if (((xprt->xp_tls & RPCTLS_FLAGS_HANDSHAKE) != 0 ||
 		    nfs_use_ext_pgs) && PMAP_HAS_DMAP != 0) {
-			nd.nd_flag |= ND_NOMAP;
+			nd.nd_flag |= ND_EXTPG;
 			nd.nd_maxextsiz = 16384;
 #ifdef KERN_TLS
 			if ((xprt->xp_tls & RPCTLS_FLAGS_HANDSHAKE) != 0 &&

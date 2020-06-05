@@ -681,7 +681,7 @@ nfsrvd_readlink(struct nfsrv_descript *nd, __unused int isdgram,
 			nd->nd_repstat = EINVAL;
 	}
 	if (nd->nd_repstat == 0) {
-		if ((nd->nd_flag & ND_NOMAP) != 0)
+		if ((nd->nd_flag & ND_EXTPG) != 0)
 			nd->nd_repstat = nfsvno_readlink(vp, nd->nd_cred,
 			    nd->nd_maxextsiz, p, &mp, &mpend, &len);
 		else
@@ -859,9 +859,9 @@ nfsrvd_read(struct nfsrv_descript *nd, __unused int isdgram,
 		/*
 		 * If the cnt is larger than MCLBYTES, use ext_pgs if
 		 * possible.
-		 * Always use ext_pgs if ND_NOMAP is set.
+		 * Always use ext_pgs if ND_EXTPG is set.
 		 */
-		if ((nd->nd_flag & ND_NOMAP) != 0 || (PMAP_HAS_DMAP != 0 &&
+		if ((nd->nd_flag & ND_EXTPG) != 0 || (PMAP_HAS_DMAP != 0 &&
 		    ((nd->nd_flag & ND_TLS) != 0 || (nfs_use_ext_pgs &&
 		    cnt > MCLBYTES))))
 			nd->nd_repstat = nfsvno_read(vp, off, cnt, nd->nd_cred,
@@ -904,7 +904,7 @@ nfsrvd_read(struct nfsrv_descript *nd, __unused int isdgram,
 		nd->nd_mb->m_next = m3;
 		nd->nd_mb = m2;
 		if ((m2->m_flags & M_EXTPG) != 0) {
-			nd->nd_flag |= ND_NOMAP;
+			nd->nd_flag |= ND_EXTPG;
 			nd->nd_bextpg = m2->m_epg_npgs - 1;
 			nd->nd_bpos = (char *)(void *)
 			    PHYS_TO_DMAP(m2->m_epg_pa[nd->nd_bextpg]);
@@ -5608,7 +5608,7 @@ nfsrvd_getxattr(struct nfsrv_descript *nd, __unused int isdgram,
 			nd->nd_mb->m_next = mp;
 			nd->nd_mb = mpend;
 			if ((mpend->m_flags & M_EXTPG) != 0) {
-				nd->nd_flag |= ND_NOMAP;
+				nd->nd_flag |= ND_EXTPG;
 				nd->nd_bextpg = mpend->m_epg_npgs - 1;
 				nd->nd_bpos = (char *)(void *)
 				   PHYS_TO_DMAP(mpend->m_epg_pa[nd->nd_bextpg]);
