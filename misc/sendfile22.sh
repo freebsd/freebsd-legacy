@@ -156,7 +156,6 @@ test(void)
 				sizeof (struct in_addr));
 
 			inetaddr.sin_family = AF_INET;
-			inetaddr.sin_addr.s_addr = INADDR_ANY;
 			inetaddr.sin_port = htons(port);
 			inetaddr.sin_len = sizeof(inetaddr);
 

@@ -48,7 +48,7 @@ cd $odir
 
 set -e
 size="$((`sysctl -n hw.usermem` / 2 / 1024 / 1024 / 1024))"
-size="$((size * 8 / 10))g"
+size="$((size * 7 / 10))g"
 [ "$size" = "0g" ] && exit 0
 [ "$newfs_flags" = "-U" ] || exit 0
 newfs_flags="-j"
@@ -57,17 +57,17 @@ mp1=$mntpoint
 mkdir -p $mp1
 md1=$mdstart
 mount | grep "on $mp1 " | grep -q /dev/md && umount -f $mp1
-[ -c /dev/md$md1 ] &&  mdconfig -d -u $md1
+[ -c /dev/md$md1 ] && mdconfig -d -u $md1
 mdconfig -a -t swap -s $size -u $md1
 bsdlabel -w md$md1 auto
 newfs $newfs_flags -n md${md1}$part > /dev/null 2>&1
 mount /dev/md${md1}$part $mp1
 
-mp2=${mntpoint}2
-mkdir -p $mp2
 md2=$((mdstart + 1))
+mp2=${mntpoint}$md2
+mkdir -p $mp2
 mount | grep "on $mp2 " | grep -q /dev/md && umount -f $mp2
-[ -c /dev/md$md2 ] &&  mdconfig -d -u $md2
+[ -c /dev/md$md2 ] && mdconfig -d -u $md2
 mdconfig -a -t swap -s $size -u $md2
 bsdlabel -w md$md2 auto
 newfs $newfs_flags -n md${md2}$part > /dev/null 2>&1
@@ -75,16 +75,18 @@ mount /dev/md${md2}$part $mp2
 set +e
 
 free=`df $mp1 | tail -1 | awk '{print $4}'`
-$dir/sendfile13 5432 $mp1 $mp2 $((free * 8 / 10)) &
-$dir/sendfile13 5433 $mp2 $mp1 $((free * 8 / 10)) &
+$dir/sendfile13 5432 $mp1 $mp2 $((free / 2)) &
+p1=$!
+$dir/sendfile13 5433 $mp2 $mp1 $((free / 2)) &
+p2=$!
 cd $odir
-while [ ! -f $mp1/done ]; do
-	sleep 1
-done
 s=0
-wait
+wait $p1; code=$?
+[ $code -ne 0 ] && { s=$code; echo "$p1 exit status $code"; }
+wait $p2; code=$?
+[ $code -ne 0 ] && { s=$code; echo "$p2 exit status $code"; }
 [ -f sendfile13.core -a $s -eq 0 ] &&
-    { ls -l sendfile13.core; mv sendfile13.core /tmp; s=1; }
+    { ls -l sendfile13.core; mv sendfile13.core /tmp; }
 cd $odir
 
 for i in `jot 6`; do
@@ -93,8 +95,16 @@ for i in `jot 6`; do
 	[ $i -eq 6 ] &&
 	    { echo FATAL; fstat -mf $mp1; exit 1; }
 done
+for i in `jot 6`; do
+	mount | grep -q "on $mp2 " || break
+	umount $mp2 && break || sleep 10
+	[ $i -eq 6 ] &&
+	    { echo FATAL; fstat -mf $mp2; exit 1; }
+done
 checkfs /dev/md${md1}$part || s=1
+checkfs /dev/md${md2}$part || s=1
 mdconfig -d -u $md1 || s=1
+mdconfig -d -u $md2 || s=1
 
 for i in `jot 6`; do
 	mount | grep -q "on $mp2 " || break
@@ -160,9 +170,6 @@ create(char *path, size_t size)
 		close(ifd);
 		files++;
 	}
-	if ((fd = open("done", O_WRONLY | O_CREAT, 0640)) == -1)
-		err(1, "create(%s)", file);
-	close(fd);
 	snprintf(help, sizeof(help),
 	    "umount %s 2>&1 | grep -v 'Device busy'", path);
 	system(help);
@@ -211,11 +218,13 @@ server(void)
 	idx = 0;
 	len = sizeof(inetpeer);
 	for (;;) {
+		alarm(120);
 		if ((msgsock = accept(tcpsock,
 		    (struct sockaddr *)&inetpeer, &len)) < 0)
 			err(1, "accept(), %s:%d", __FILE__, __LINE__);
 
 		if ((pid = fork()) == 0) {
+			alarm(120);
 			t = 0;
 			if ((buf = malloc(BUFSIZE)) == NULL)
 				err(1, "malloc(%d), %s:%d", BUFSIZE,
@@ -237,7 +246,7 @@ server(void)
 				if (n == 0) break;
 
 				if ((write(fd, buf, n)) != n)
-					err(1, "write");
+					err(1, "write n=%d", n);
 			}
 			close(msgsock);
 			close(fd);
@@ -262,6 +271,7 @@ writer(char *inputFile) {
 	size_t size;
 	int i, fd, on, r, tcpsock;
 
+	alarm(120);
 	on = 1;
 	for (i = 1; i < 5; i++) {
 		if ((tcpsock = socket(AF_INET, SOCK_STREAM, 0)) < 0)
@@ -282,7 +292,6 @@ writer(char *inputFile) {
 			sizeof (struct in_addr));
 
 		inetaddr.sin_family = AF_INET;
-		inetaddr.sin_addr.s_addr = INADDR_ANY;
 		inetaddr.sin_port = htons(port);
 		inetaddr.sin_len = sizeof(inetaddr);
 
@@ -304,7 +313,7 @@ writer(char *inputFile) {
 
 	if (sendfile(fd, tcpsock, 0, statb.st_size, NULL, &off,
 	    SF_NOCACHE) == -1)
-		err(1, "sendfile");
+		warn("sendfile()");
 	close(fd);
 
 	return;
@@ -327,7 +336,7 @@ main(int argc, char *argv[])
 {
 	pid_t spid;
 	size_t size;
-	int e, i;
+	int i, status;
 
 	if (argc != 5) {
 		fprintf(stderr,
@@ -340,7 +349,6 @@ main(int argc, char *argv[])
 	if (chdir(fromdir) == -1)
 		err(1, "chdir(%s)", fromdir);
 	todir = argv[3];
-	e = 0;
 	sscanf(argv[4], "%zd", &size);
 	size = size * 1024;
 	create(fromdir, size);
@@ -352,8 +360,14 @@ main(int argc, char *argv[])
 		move(i);
 		sleep(10);
 	}
-	if (waitpid(spid, NULL, 0) != spid)
+	if (waitpid(spid, &status, 0) != spid)
 		err(1, "waitpid");
+	if (status != 0) {
+		if (WIFSIGNALED(status))
+			fprintf(stderr,
+			    "pid %d exit signal %d\n",
+			    spid, WTERMSIG(status));
+	}
 
-	return (e);
+	return (status == 0 ? 0 : 1);
 }

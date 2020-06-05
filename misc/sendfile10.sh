@@ -38,9 +38,9 @@
 dir=/tmp
 odir=`pwd`
 cd $dir
-sed '1,/^EOF/d' < $odir/$0 > $dir/semdfile10.c
-mycc -o semdfile10 -Wall -Wextra -O0 -g semdfile10.c || exit 1
-rm -f semdfile10.c
+sed '1,/^EOF/d' < $odir/$0 > $dir/sendfile10.c
+mycc -o sendfile10 -Wall -Wextra -O0 -g sendfile10.c || exit 1
+rm -f sendfile10.c
 cd $odir
 
 mount | grep "on $mntpoint " | grep -q /dev/md && umount -f $mntpoint
@@ -51,8 +51,8 @@ newfs $newfs_flags -n md${mdstart}$part > /dev/null
 mount /dev/md${mdstart}$part $mntpoint
 
 cd $mntpoint
-dd if=/dev/random of=template bs=1m count=50  2>&1 | egrep -v "records|transferred"
-/tmp/semdfile10 template in out 76543
+dd if=/dev/random of=template bs=1m count=50 status=none
+/tmp/sendfile10 template in out 76543
 s=$?
 cd $odir
 
@@ -62,7 +62,7 @@ for i in `jot 6`; do
 done
 [ $i -eq 6 ] && exit 1
 mdconfig -d -u $mdstart
-rm -rf /tmp/semdfile10
+rm -rf /tmp/sendfile10
 exit $s
 
 EOF
@@ -142,16 +142,18 @@ reader(void) {
 		err(1, "listen(), %s:%d", __FILE__, __LINE__);
 
 	len = sizeof(inetpeer);
+	alarm(10);
 	if ((msgsock = accept(tcpsock,
 	    (struct sockaddr *)&inetpeer, &len)) < 0)
 		err(1, "accept(), %s:%d", __FILE__, __LINE__);
+	alarm(0);
 
 	t = 0;
 	if ((buf = malloc(BUFSIZE)) == NULL)
-			err(1, "malloc(%d), %s:%d", BUFSIZE, __FILE__, __LINE__);
+		err(1, "malloc(%d), %s:%d", BUFSIZE, __FILE__, __LINE__);
 
 	if ((fd = open(output, O_RDWR | O_CREAT | O_TRUNC, 0640)) == -1)
-			err(1, "open(%s)", output);
+		err(1, "open(%s)", output);
 
 	for (;;) {
 		if ((n = read(msgsock, buf, BUFSIZE)) < 0)
@@ -207,7 +209,6 @@ writer(void) {
 			sizeof (struct in_addr));
 
 		inetaddr.sin_family = AF_INET;
-		inetaddr.sin_addr.s_addr = INADDR_ANY;
 		inetaddr.sin_port = htons(port);
 		inetaddr.sin_len = sizeof(inetaddr);
 

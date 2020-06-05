@@ -32,6 +32,7 @@
 
 # sendfile(2) && block size > page size:
 # panic: vnode_pager_generic_getpages: sector size 8192 too large
+# https://people.freebsd.org/~pho/stress/log/sendfile11.txt
 
 . ../default.cfg
 
@@ -179,7 +180,6 @@ writer(void) {
 			sizeof (struct in_addr));
 
 		inetaddr.sin_family = AF_INET;
-		inetaddr.sin_addr.s_addr = INADDR_ANY;
 		inetaddr.sin_port = htons(port);
 		inetaddr.sin_len = sizeof(inetaddr);
 
