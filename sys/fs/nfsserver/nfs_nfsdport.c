@@ -860,8 +860,7 @@ nfsrv_createiovec_extpgs(int len, int maxextsiz, struct mbuf **mpp,
 	i = 0;
 	while (left > 0) {
 		siz = min(left, maxextsiz);
-		m = mb_alloc_ext_plus_pages(siz, M_WAITOK,
-		    mb_free_mext_pgs);
+		m = mb_alloc_ext_plus_pages(siz, M_WAITOK);
 		left -= siz;
 		i += m->m_epg_npgs;
 		if (m3 != NULL)

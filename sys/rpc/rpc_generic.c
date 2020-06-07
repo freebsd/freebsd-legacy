@@ -912,8 +912,8 @@ _rpc_copym_into_ext_pgs(struct mbuf *mp, int maxextsiz)
 	 * mbuf list.
 	 */
 	m2->m_next = NULL;
-	mhead = mb_copym_ext_pgs(mp, tlen, maxextsiz, M_WAITOK,
-	    mb_free_mext_pgs, &m2);
+	mhead = mb_mapped_to_unmapped(mp, tlen, maxextsiz,
+	    M_WAITOK, &m2);
 
 	/*
 	 * Link the ext_pgs list onto the newly copied

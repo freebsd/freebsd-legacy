@@ -183,8 +183,7 @@ nfsm_uiombuflist(bool doextpgs, int maxextsiz, struct uio *uiop, int siz,
 		clflg = 0;
 	rem = NFSM_RNDUP(siz) - siz;
 	if (doextpgs) {
-		mp = mb_alloc_ext_plus_pages(PAGE_SIZE, M_WAITOK,
-		    mb_free_mext_pgs);
+		mp = mb_alloc_ext_plus_pages(PAGE_SIZE, M_WAITOK);
 		mcp = (char *)(void *)
 		    PHYS_TO_DMAP(mp->m_epg_pa[0]);
 		bextpgsiz = PAGE_SIZE;

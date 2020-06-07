@@ -375,8 +375,7 @@ nfscl_reqstart(struct nfsrv_descript *nd, int procnum, struct nfsmount *nmp,
 	 * Get the first mbuf for the request.
 	 */
 	if ((nd->nd_flag & ND_EXTPG) != 0) {
-		mb = mb_alloc_ext_plus_pages(PAGE_SIZE, M_WAITOK,
-		    mb_free_mext_pgs);
+		mb = mb_alloc_ext_plus_pages(PAGE_SIZE, M_WAITOK);
 		nd->nd_mreq = nd->nd_mb = mb;
 		nfsm_set(nd, 0);
 	} else {
@@ -4465,8 +4464,7 @@ nfsrvd_rephead(struct nfsrv_descript *nd)
 	struct mbuf *mreq;
 
 	if ((nd->nd_flag & ND_EXTPG) != 0) {
-		mreq = mb_alloc_ext_plus_pages(PAGE_SIZE, M_WAITOK,
-		    mb_free_mext_pgs);
+		mreq = mb_alloc_ext_plus_pages(PAGE_SIZE, M_WAITOK);
 		nd->nd_mreq = nd->nd_mb = mreq;
 		nd->nd_bpos = (char *)(void *)
 		    PHYS_TO_DMAP(mreq->m_epg_pa[0]);
@@ -4918,8 +4916,7 @@ nfsm_add_ext_pgs(struct mbuf *m, int maxextsiz, int *bextpg)
 	vm_page_t pg;
 
 	if ((m->m_epg_npgs + 1) * PAGE_SIZE > maxextsiz) {
-		mp = mb_alloc_ext_plus_pages(PAGE_SIZE, M_WAITOK,
-		    mb_free_mext_pgs);
+		mp = mb_alloc_ext_plus_pages(PAGE_SIZE, M_WAITOK);
 		*bextpg = 0;
 		m->m_next = mp;
 	} else {
