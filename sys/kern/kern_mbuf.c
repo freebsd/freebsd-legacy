@@ -1583,37 +1583,35 @@ struct mbuf *
 mb_mapped_to_unmapped(struct mbuf *mp, int len, int mlen, int how,
     struct mbuf **mlast)
 {
-	struct mbuf *m, *mout = NULL;
-	char *pgpos = NULL, *mbpos;
-	int i = 0, mblen, mbufsiz, pglen, xfer;
+	struct mbuf *m, *mout;
+	char *pgpos, *mbpos;
+	int i, mblen, mbufsiz, pglen, xfer;
 
 	if (len == 0)
 		return (NULL);
-	m = NULL;
-	pglen = mblen = 0;
+	mbufsiz = min(mlen, len);
+	m = mout = mb_alloc_ext_plus_pages(mbufsiz, how);
+	if (m == NULL)
+		return (m);
+	pgpos = (char *)(void *)PHYS_TO_DMAP(m->m_epg_pa[0]);
+	pglen = PAGE_SIZE;
+	mblen = 0;
+	i = 0;
 	do {
 		if (pglen == 0) {
-			if (m == NULL || ++i == m->m_epg_npgs) {
+			if (++i == m->m_epg_npgs) {
+				m->m_epg_last_len = PAGE_SIZE;
 				mbufsiz = min(mlen, len);
+				m->m_next = mb_alloc_ext_plus_pages(mbufsiz,
+				    how);
+				m = m->m_next;
 				if (m == NULL) {
-					m = mout = mb_alloc_ext_plus_pages(
-					    mbufsiz, how);
-					if (m == NULL)
-						return (m);
-				} else {
-					m->m_epg_last_len = PAGE_SIZE;
-					m->m_next = mb_alloc_ext_plus_pages(
-					    mbufsiz, how);
-					m = m->m_next;
-					if (m == NULL) {
-						m_freem(mout);
-						return (m);
-					}
+					m_freem(mout);
+					return (m);
 				}
 				i = 0;
 			}
-			pgpos = (char *)(void *)
-			    PHYS_TO_DMAP(m->m_epg_pa[i]);
+			pgpos = (char *)(void *)PHYS_TO_DMAP(m->m_epg_pa[i]);
 			pglen = PAGE_SIZE;
 		}
 		while (mblen == 0) {
@@ -1628,7 +1626,7 @@ mb_mapped_to_unmapped(struct mbuf *mp, int len, int mlen, int how,
 			mp = mp->m_next;
 		}
 		xfer = min(mblen, pglen);
-		bcopy(mbpos, pgpos, xfer);
+		memcpy(pgpos, mbpos, xfer);
 		pgpos += xfer;
 		mbpos += xfer;
 		pglen -= xfer;
