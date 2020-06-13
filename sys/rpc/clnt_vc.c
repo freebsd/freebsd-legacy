@@ -1174,6 +1174,7 @@ printf("soup m_split returned NULL\n");
 				    m_length(ct->ct_record, NULL) <
 				    sizeof(xid_plus_direction)) {
 					m_freem(ct->ct_record);
+					ct->ct_record = NULL;
 					break;
 				}
 				m_copydata(ct->ct_record, 0,
