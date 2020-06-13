@@ -1091,7 +1091,6 @@ printf("Got weird type=%d\n", tgr.tls_type);
 			m_copydata(ct->ct_raw, 0, sizeof(uint32_t),
 			    (char *)&header);
 			header = ntohl(header);
-			ct->ct_record = NULL;
 			ct->ct_record_resid = header & 0x7fffffff;
 			ct->ct_record_eor = ((header & 0x80000000) != 0);
 			if (ct->ct_record_resid < 20 ||
@@ -1140,7 +1139,7 @@ printf("soup m_split returned NULL\n");
 					 * connection and allow
 					 * clnt_reconnect_XXX() to try
 					 * and establish a new one.
-					 * If we just return and there are
+					 * If we just return and there is
 					 * no more data received, the
 					 * connection will be hung.
 					 */
@@ -1173,9 +1172,21 @@ printf("soup m_split returned NULL\n");
 				    sizeof(xid_plus_direction) &&
 				    m_length(ct->ct_record, NULL) <
 				    sizeof(xid_plus_direction)) {
-					m_freem(ct->ct_record);
-					ct->ct_record = NULL;
-					break;
+					/*
+					 * What to do now?
+					 * The TCP stream is messed up.
+					 * I think it best to close this
+					 * connection and allow
+					 * clnt_reconnect_XXX() to try
+					 * and establish a new one.
+					 * If we just return and there is
+					 * no more data received, the
+					 * connection will be hung.
+					 */
+					printf("clnt_vc_soupcall: "
+					    "connection data corrupted\n");
+					error = ECONNRESET;
+					goto wakeup_all;
 				}
 				m_copydata(ct->ct_record, 0,
 				    sizeof(xid_plus_direction),
