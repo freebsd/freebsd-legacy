@@ -80,18 +80,16 @@
 #		CAM stuck in vmwait seen				20200112
 # pfl3.sh	panic: handle_written_inodeblock: live inodedep		20190211
 # pageout.sh	panic: handle_written_filepage: not started		20190218
+# quota10.sh	people.freebsd.org/~pho/stress/log/quota10-2.txt	20200525
 # quota2.sh	panic: dqflush: stray dquot				20120221
 # quota3.sh	panic: softdep_deallocate_dependencies: unrecovered ...	20111222
 # quota6.sh	panic: softdep_deallocate_dependencies: unrecovered ...	20130206
 # quota7.sh	panic: dqflush: stray dquot				20120221
-# rename14.sh	WiP							20200215
-# rename15.sh	WiP							20200215
+# rename14.sh	mark136.txt						20200525
 # sctp.sh	WiP							20200307
 # sctp2.sh	panic: soclose: SS_NOFDREF on enter			20200307
 # sctp3.sh	WiP							20190809
-# sendfile18.sh	WiP							20200313
-# sendfile19.sh	WiP							20200317
-# sendfile20.sh	WiP							20200318
+# sendfile25.sh	WiP							20200611
 # signal.sh	Timing issues. Needs fixing				20171116
 # snap4.sh	panic: snapacct_ufs2: bad block				20181014
 # snap6.sh	panic: softdep_deallocate_dependencies: unrecovered ...	20130630
@@ -102,13 +100,16 @@
 # swapoff2.sh	swap_pager_force_pagein: read from swap failed		20171223
 # systrace.sh	WiP							20200227
 # systrace2.sh	WiP							20200227
-# syzkaller4.sh	WiP							20200210
+# syzkaller11.sh	WiP						20200419
+# syzkaller13.sh	WiP						20200607
+# syzkaller15.sh	WiP						20200617
 # ucom.sh	Stuck in tail -F					20180129
 # umountf7.sh	panic: handle_written_inodeblock: live inodedep ...	20190219
 # umountf9.sh	panic: handle_written_inodeblock: live inodedep ...	20170221
 # unionfs.sh	insmntque: non-locked vp: xx is not exclusive locked...	20130909
 # unionfs2.sh	insmntque: mp-safe fs and non-locked vp is not ...	20111219
 # unionfs3.sh	insmntque: mp-safe fs and non-locked vp is not ...	20111216
+# zfs11.sh	Deadlock WiP						20200513
 
 # Test not to run for other reasons:
 
