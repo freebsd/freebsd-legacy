@@ -30,6 +30,7 @@
 #
 
 # A socketpair() test scenario illustrating issues with a missing EOF
+# Fixed by r361037 + r361056
 
 . ../default.cfg
 [ `id -u` -ne 0 ] && echo "Must be root!" && exit 1
