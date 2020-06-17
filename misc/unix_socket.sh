@@ -84,7 +84,7 @@ client(void) {
 
 	if ((len = recv(fd, buff, 8192, 0)) < 0)
 		err(1, "recv");
-		printf ("receive %d %s\n", len, buff);
+	printf ("receive %d %s\n", len, buff);
 
 	if (fd >= 0) {
 		close(fd);
