@@ -941,8 +941,6 @@ clnt_vc_soupcall(struct socket *so, void *arg, int waitflag)
 	struct cmsghdr *cmsg;
 	struct tls_get_record tgr;
 
-	CTASSERT(sizeof(xid_plus_direction) == 2 * sizeof(uint32_t));
-
 	/*
 	 * RPC-over-TLS needs to block reception during
 	 * upcalls since the upcall will be doing I/O on
@@ -998,6 +996,9 @@ clnt_vc_soupcall(struct socket *so, void *arg, int waitflag)
 			 * after our call to soreceive fails with
 			 * EWOULDBLOCK.
 			 */
+if (so->so_rcv.sb_lowat > 1)
+printf("lowat=%d\n", so->so_rcv.sb_lowat);
+			error = 0;
 			if (!soreadable(so))
 				break;
 			continue;
@@ -1030,19 +1031,8 @@ clnt_vc_soupcall(struct socket *so, void *arg, int waitflag)
 printf("Mark upcallneeded\n");
 			break;
 		}
-		if (error != 0) {
-		wakeup_all:
-printf("wakeup_all err=%d\n", error);
-			mtx_lock(&ct->ct_lock);
-			ct->ct_error.re_status = RPC_CANTRECV;
-			ct->ct_error.re_errno = error;
-			TAILQ_FOREACH(cr, &ct->ct_pending, cr_link) {
-				cr->cr_error = error;
-				wakeup(cr);
-			}
-			mtx_unlock(&ct->ct_lock);
-			goto out;
-		}
+		if (error != 0)
+			break;
 
 		/* Process any record header(s). */
 		if (m2 != NULL) {
@@ -1093,22 +1083,6 @@ printf("Got weird type=%d\n", tgr.tls_type);
 			header = ntohl(header);
 			ct->ct_record_resid = header & 0x7fffffff;
 			ct->ct_record_eor = ((header & 0x80000000) != 0);
-			if (ct->ct_record_resid < 20 ||
-			    ct->ct_record_resid > 150000 ||
-			    !ct->ct_record_eor) {
-				printf("clnt_vc_soupcall: bogus record "
-				    "mark recres=%zd eor=%d\n",
-				    ct->ct_record_resid, ct->ct_record_eor);
-				/*
-				 * Connection is messed up. All we can
-				 * do now is shut it down and let
-				 * clnt_reconnect_XXX establish a new
-				 * connection.
-				 * This should never happen, but??
-				 */
-				error = ECONNRESET;
-				goto wakeup_all;
-			}
 			m_adj(ct->ct_raw, sizeof(uint32_t));
 			rawlen -= sizeof(uint32_t);
 		} else {
@@ -1130,22 +1104,10 @@ printf("Got weird type=%d\n", tgr.tls_type);
 			} else {
 				m = m_split(ct->ct_raw, ct->ct_record_resid,
 				    M_NOWAIT);
-				if (m == NULL) {
-printf("soup m_split returned NULL\n");
-					/*
-					 * What to do now?
-					 * The system is out of mbufs.
-					 * I think it best to close this
-					 * connection and allow
-					 * clnt_reconnect_XXX() to try
-					 * and establish a new one.
-					 * If we just return and there is
-					 * no more data received, the
-					 * connection will be hung.
-					 */
-					error = ECONNRESET;
-					goto wakeup_all;
-				}
+				if (m == NULL)
+{ printf("soup m_split returned NULL\n");
+					break;
+}
 				if (ct->ct_record != NULL)
 					m_last(ct->ct_record)->m_next =
 					    ct->ct_raw;
@@ -1266,7 +1228,24 @@ printf("backxprt=%p\n", xprt);
 			}
 		}
 	}
-out:
+	if (error != 0) {
+	wakeup_all:
+		/*
+		 * This socket is broken, so mark that it cannot
+		 * receive and fail all RPCs waiting for a reply
+		 * on it, so that they will be retried on a new
+		 * TCP connection created by clnt_reconnect_X().
+		 */
+		mtx_lock(&ct->ct_lock);
+		ct->ct_error.re_status = RPC_CANTRECV;
+		ct->ct_error.re_errno = error;
+		TAILQ_FOREACH(cr, &ct->ct_pending, cr_link) {
+			cr->cr_error = error;
+			wakeup(cr);
+		}
+		mtx_unlock(&ct->ct_lock);
+	}
+
 	ct->ct_upcallrefs--;
 	if (ct->ct_upcallrefs < 0)
 		panic("rpcvc upcall refcnt");
