@@ -1136,14 +1136,13 @@ printf("Got weird type=%d\n", tgr.tls_type);
 				    sizeof(xid_plus_direction)) {
 					/*
 					 * What to do now?
-					 * The TCP stream is messed up.
+					 * The data in the TCP stream is
+					 * corrupted such that there is no
+					 * valid RPC message to parse.
 					 * I think it best to close this
 					 * connection and allow
-					 * clnt_reconnect_XXX() to try
+					 * clnt_reconnect_call() to try
 					 * and establish a new one.
-					 * If we just return and there is
-					 * no more data received, the
-					 * connection will be hung.
 					 */
 					printf("clnt_vc_soupcall: "
 					    "connection data corrupted\n");
@@ -1228,6 +1227,7 @@ printf("backxprt=%p\n", xprt);
 			}
 		}
 	}
+
 	if (error != 0) {
 	wakeup_all:
 		/*
