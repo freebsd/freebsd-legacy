@@ -51,8 +51,6 @@ Fix the include files. Here's my "cheat" way of doing this.
 # ln -s /usr/nfs-over-tls/sys/fs fs
 # mv netinet netinet.old
 # ln -s /usr/nfs-over-tls/sys/netinet netinet
-# cd rpc
-# cp /usr/nfs-over-tls/sys/rpc/rpcsec_tls.h .
 - This should be enough to allow userspace building.
 
 Now, you need jhb@'s patched openssl3 source tree, so you can build it.
@@ -60,7 +58,7 @@ Now, you need jhb@'s patched openssl3 source tree, so you can build it.
   (If you don't have git anywhere, I think "pkg install git" will get it
    installed.)
   - You will need perl5.
-# pkg install perl
+# pkg install perl5
 # cd /usr
 # mkdir openssl
 # cd openssl
