@@ -1036,7 +1036,6 @@ printf("Mark upcallneeded\n");
 
 		/* Process any record header(s). */
 		if (m2 != NULL) {
-if (m2->m_next != NULL) printf("EEK! list of controls\n");
 			cmsg = mtod(m2, struct cmsghdr *);
 			if (cmsg->cmsg_type == TLS_GET_RECORD &&
 			    cmsg->cmsg_len == CMSG_LEN(sizeof(tgr))) {
