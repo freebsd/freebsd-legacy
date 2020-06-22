@@ -66,7 +66,6 @@ __FBSDID("$FreeBSD$");
 
 #ifndef _PATH_RPCTLSSDSOCK
 #define _PATH_RPCTLSSDSOCK	"/var/run/rpctlssd.sock"
-#define _PATH_RPCTLSSDS	"S/var/run/rpctlssd.sock"
 #endif
 #ifndef	_PATH_CERTANDKEY
 #define	_PATH_CERTANDKEY	"/etc/rpctlssd/"
@@ -127,7 +126,6 @@ static char		*rpctls_getdnsname(char *dnsname);
 static void		rpctls_huphandler(int sig __unused);
 
 extern void		rpctlssd_1(struct svc_req *rqstp, SVCXPRT *transp);
-extern int		gssd_syscall(const char *path);
 
 int
 main(int argc, char **argv)
@@ -324,9 +322,9 @@ fprintf(stderr, "dnsname=%s\n", rpctls_dnsname);
 	rpctls_gothup = false;
 	LIST_INIT(&rpctls_ssllist);
 
-	gssd_syscall(_PATH_RPCTLSSDS);
+	rpctls_syscall(RPCTLS_SYSC_SRVSETPATH, _PATH_RPCTLSSDSOCK);
 	svc_run();
-	gssd_syscall("S");
+	rpctls_syscall(RPCTLS_SYSC_SRVSHUTDOWN, "");
 
 	SSL_CTX_free(rpctls_ctx);
 	EVP_cleanup();
@@ -370,7 +368,7 @@ rpctlssd_connect_1_svc(void *argp,
 	rpctlssd_verbose_out("rpctlsd_connect_svc: started\n");
 	memset(result, 0, sizeof(*result));
 	/* Get the socket fd from the kernel. */
-	s = gssd_syscall("E");
+	s = rpctls_syscall(RPCTLS_SYSC_SRVSOCKET, "");
 rpctlssd_verbose_out("rpctlsd_connect_svc s=%d\n", s);
 	if (s < 0)
 		return (FALSE);
@@ -521,7 +519,7 @@ static void
 rpctlssd_terminate(int sig __unused)
 {
 
-	gssd_syscall("S");
+	rpctls_syscall(RPCTLS_SYSC_SRVSHUTDOWN, "");
 	pidfile_remove(rpctls_pfh);
 	exit(0);
 }

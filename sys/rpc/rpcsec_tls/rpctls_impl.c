@@ -68,17 +68,9 @@ extern struct fileops badfileops;
  * Syscall hooks
  */
 static struct syscall_helper_data rpctls_syscalls[] = {
-	SYSCALL_INIT_HELPER(gssd_syscall),
+	SYSCALL_INIT_HELPER(rpctls_syscall),
 	SYSCALL_INIT_LAST
 };
-
-#ifdef notnow
-struct rpctls_syscall_args {
-	char op_l_[PADL_(int)]; int op; char op_r_[PADR_(int)];
-	char path_l_[PADL_(const char *)]; const char * path; char path_r_[PADR_(const char *)];
-	char s_l_[PADL_(int)]; int s; char s_r_[PADR_(int)];
-};
-#endif
 
 static CLIENT		*rpctls_connect_handle;
 static struct mtx	rpctls_connect_lock;
@@ -115,85 +107,45 @@ rpctls_init(void)
 }
 
 int
-sys_gssd_syscall(struct thread *td, struct gssd_syscall_args *uap)
+sys_rpctls_syscall(struct thread *td, struct rpctls_syscall_args *uap)
 {
         struct sockaddr_un sun;
         struct netconfig *nconf;
 	struct file *fp;
 	struct socket *so;
-	char path[MAXPATHLEN], *pathp;
+	char path[MAXPATHLEN];
 	int fd = -1, error, retry_count = 5;
 	CLIENT *cl, *oldcl;
-	bool ssd;
 #ifdef KERN_TLS
 	u_int maxlen;
 #endif
         
-printf("in gssd syscall\n");
+printf("in rpctls syscall\n");
 	error = priv_check(td, PRIV_NFS_DAEMON);
 printf("aft priv_check=%d\n", error);
 	if (error != 0)
 		return (error);
 
-#ifdef notyet
 	switch (uap->op) {
-	case RPCTLS_SYSC_SETPATH:
-#else
+	case RPCTLS_SYSC_CLSETPATH:
 		error = copyinstr(uap->path, path, sizeof(path), NULL);
 printf("setting err=%d path=%s\n", error, path);
-	if (error != 0)
-		return (error);
-	if (path[0] == 'S') {
-		ssd = true;
-		pathp = &path[1];
-	} else {
-		ssd = false;
-		pathp = &path[0];
-	}
-	if (pathp[0] == '/' || pathp[0] == '\0') {
+		if (error == 0) {
+			error = ENXIO;
+#ifdef KERN_TLS
+			if (PMAP_HAS_DMAP != 0 && mb_use_ext_pgs &&
+			    rpctls_getinfo(&maxlen))
+				error = 0;
 #endif
-	if (ssd) {
-		if (error == 0 && strlen(pathp) + 1 > sizeof(sun.sun_path))
-			error = EINVAL;
-	
-		if (error == 0 && pathp[0] != '\0') {
-			sun.sun_family = AF_LOCAL;
-			strlcpy(sun.sun_path, pathp, sizeof(sun.sun_path));
-			sun.sun_len = SUN_LEN(&sun);
-			
-			nconf = getnetconfigent("local");
-			cl = clnt_reconnect_create(nconf,
-			    (struct sockaddr *)&sun, RPCTLSSD, RPCTLSSDVERS,
-			    RPC_MAXDATASIZE, RPC_MAXDATASIZE);
-printf("got cl=%p\n", cl);
-			/*
-			 * The number of retries defaults to INT_MAX, which
-			 * effectively means an infinite, uninterruptable loop. 
-			 * Limiting it to five retries keeps it from running
-			 * forever.
-			 */
-			if (cl != NULL)
-				CLNT_CONTROL(cl, CLSET_RETRIES, &retry_count);
-		} else
-			cl = NULL;
-	
-		mtx_lock(&rpctls_server_lock);
-		oldcl = rpctls_server_handle;
-		rpctls_server_handle = cl;
-		mtx_unlock(&rpctls_server_lock);
-	
-printf("cl=%p oldcl=%p\n", cl, oldcl);
-		if (oldcl != NULL) {
-			CLNT_CLOSE(oldcl);
-			CLNT_RELEASE(oldcl);
 		}
-	} else {
-		if (error == 0 && strlen(pathp) + 1 > sizeof(sun.sun_path))
+		if (error == 0 && (strlen(path) + 1 > sizeof(sun.sun_path) ||
+		    strlen(path) == 0))
 			error = EINVAL;
 	
-		if (error == 0 && pathp[0] != '\0') {
+		cl = NULL;
+		if (error == 0) {
 			sun.sun_family = AF_LOCAL;
-			strlcpy(sun.sun_path, pathp, sizeof(sun.sun_path));
+			strlcpy(sun.sun_path, path, sizeof(sun.sun_path));
 			sun.sun_len = SUN_LEN(&sun);
 			
 			nconf = getnetconfigent("local");
@@ -209,8 +161,9 @@ printf("got cl=%p\n", cl);
 			 */
 			if (cl != NULL)
 				CLNT_CONTROL(cl, CLSET_RETRIES, &retry_count);
-		} else
-			cl = NULL;
+			else
+				error = EINVAL;
+		}
 	
 		mtx_lock(&rpctls_connect_lock);
 		oldcl = rpctls_connect_handle;
@@ -222,17 +175,83 @@ printf("cl=%p oldcl=%p\n", cl, oldcl);
 			CLNT_CLOSE(oldcl);
 			CLNT_RELEASE(oldcl);
 		}
-	}
-	} else if (path[0] == 'C') {
-printf("In connect\n");
-		error = EINVAL;
+		break;
+	case RPCTLS_SYSC_SRVSETPATH:
+		error = copyinstr(uap->path, path, sizeof(path), NULL);
+printf("setting err=%d path=%s\n", error, path);
+		if (error == 0) {
+			error = ENXIO;
 #ifdef KERN_TLS
-		if (PMAP_HAS_DMAP != 0 && mb_use_ext_pgs &&
-		    rpctls_getinfo(&maxlen))
-			error = 0;
+			if (PMAP_HAS_DMAP != 0 && mb_use_ext_pgs &&
+			    rpctls_getinfo(&maxlen))
+				error = 0;
 #endif
-		if (error == 0)
-			error = falloc(td, &fp, &fd, 0);
+		}
+		if (error == 0 && (strlen(path) + 1 > sizeof(sun.sun_path) ||
+		    strlen(path) == 0))
+			error = EINVAL;
+	
+		cl = NULL;
+		if (error == 0) {
+			sun.sun_family = AF_LOCAL;
+			strlcpy(sun.sun_path, path, sizeof(sun.sun_path));
+			sun.sun_len = SUN_LEN(&sun);
+			
+			nconf = getnetconfigent("local");
+			cl = clnt_reconnect_create(nconf,
+			    (struct sockaddr *)&sun, RPCTLSSD, RPCTLSSDVERS,
+			    RPC_MAXDATASIZE, RPC_MAXDATASIZE);
+printf("got cl=%p\n", cl);
+			/*
+			 * The number of retries defaults to INT_MAX, which
+			 * effectively means an infinite, uninterruptable loop. 
+			 * Limiting it to five retries keeps it from running
+			 * forever.
+			 */
+			if (cl != NULL)
+				CLNT_CONTROL(cl, CLSET_RETRIES, &retry_count);
+			else
+				error = EINVAL;
+		}
+	
+		mtx_lock(&rpctls_server_lock);
+		oldcl = rpctls_server_handle;
+		rpctls_server_handle = cl;
+		mtx_unlock(&rpctls_server_lock);
+	
+printf("srvcl=%p oldcl=%p\n", cl, oldcl);
+		if (oldcl != NULL) {
+			CLNT_CLOSE(oldcl);
+			CLNT_RELEASE(oldcl);
+		}
+		break;
+	case RPCTLS_SYSC_CLSHUTDOWN:
+		mtx_lock(&rpctls_connect_lock);
+		oldcl = rpctls_connect_handle;
+		rpctls_connect_handle = NULL;
+		mtx_unlock(&rpctls_connect_lock);
+	
+printf("clshutd oldcl=%p\n", oldcl);
+		if (oldcl != NULL) {
+			CLNT_CLOSE(oldcl);
+			CLNT_RELEASE(oldcl);
+		}
+		break;
+	case RPCTLS_SYSC_SRVSHUTDOWN:
+		mtx_lock(&rpctls_server_lock);
+		oldcl = rpctls_server_handle;
+		rpctls_server_handle = NULL;
+		mtx_unlock(&rpctls_server_lock);
+	
+printf("srvshutd oldcl=%p\n", oldcl);
+		if (oldcl != NULL) {
+			CLNT_CLOSE(oldcl);
+			CLNT_RELEASE(oldcl);
+		}
+		break;
+	case RPCTLS_SYSC_CLSOCKET:
+printf("In connect\n");
+		error = falloc(td, &fp, &fd, 0);
 		if (error == 0) {
 printf("falloc=%d fd=%d\n", error, fd);
 			mtx_lock(&rpctls_connect_lock);
@@ -244,18 +263,12 @@ printf("falloc=%d fd=%d\n", error, fd);
 			td->td_retval[0] = fd;
 		}
 printf("returning=%d\n", fd);
-	} else if (path[0] == 'E') {
+		break;
+	case RPCTLS_SYSC_SRVSOCKET:
 printf("In srvconnect\n");
-		error = EINVAL;
-#ifdef KERN_TLS
-		if (PMAP_HAS_DMAP != 0 && mb_use_ext_pgs &&
-		    rpctls_getinfo(&maxlen))
-			error = 0;
-#endif
-		if (error == 0)
-			error = falloc(td, &fp, &fd, 0);
+		error = falloc(td, &fp, &fd, 0);
 		if (error == 0) {
-printf("srv falloc=%d fd=%d\n", error, fd);
+printf("falloc=%d fd=%d\n", error, fd);
 			mtx_lock(&rpctls_server_lock);
 			so = rpctls_server_so;
 			rpctls_server_so = NULL;
@@ -265,17 +278,9 @@ printf("srv falloc=%d fd=%d\n", error, fd);
 			td->td_retval[0] = fd;
 		}
 printf("srv returning=%d\n", fd);
-	} else if (path[0] == 'F') {
-printf("In EOserver\n");
-		fd = strtol(&path[1], NULL, 10);
-printf("srv fd=%d\n", fd);
-		if (fd >= 0) {
-			error = kern_close(td, fd);
-printf("srv aft kern_close=%d\n", error);
-		} else {
-			printf("rpctlss fd negative\n");
-			error = EINVAL;
-		}
+		break;
+	default:
+		error = EINVAL;
 	}
 
 	return (error);
@@ -602,7 +607,7 @@ printf("authtls proc=%d\n", rqst->rq_proc);
 	if (rqst->rq_proc != NULLPROC)
 		return (AUTH_REJECTEDCRED);
 
-	if (PMAP_HAS_DMAP == 0)
+	if (PMAP_HAS_DMAP == 0 || !mb_use_ext_pgs)
 		return (AUTH_REJECTEDCRED);
 
 #ifndef KERN_TLS

@@ -114,7 +114,6 @@ static int		rpctls_loadcrlfile(SSL_CTX *ctx);
 static void		rpctls_huphandler(int sig __unused);
 
 extern void rpctlscd_1(struct svc_req *rqstp, SVCXPRT *transp);
-extern int gssd_syscall(const char *path);
 
 int
 main(int argc, char **argv)
@@ -273,9 +272,9 @@ main(int argc, char **argv)
 		err(1, "Can't register service for local rpctlscd socket");
 	}
 
-	gssd_syscall(_PATH_RPCTLSCDSOCK);
+	rpctls_syscall(RPCTLS_SYSC_CLSETPATH, _PATH_RPCTLSCDSOCK);
 	svc_run();
-	gssd_syscall("");
+	rpctls_syscall(RPCTLS_SYSC_CLSHUTDOWN, "");
 
 	SSL_CTX_free(rpctls_ctx);
 	EVP_cleanup();
@@ -318,7 +317,7 @@ rpctlscd_connect_1_svc(void *argp,
 
 	rpctlscd_verbose_out("rpctlsd_connect: started\n");
 	/* Get the socket fd from the kernel. */
-	s = gssd_syscall("C");
+	s = rpctls_syscall(RPCTLS_SYSC_CLSOCKET, "");
 rpctlscd_verbose_out("rpctlsd_connect s=%d\n", s);
 	if (s < 0) {
 		result->reterr = RPCTLSERR_NOSOCKET;
@@ -457,7 +456,7 @@ static void
 rpctlscd_terminate(int sig __unused)
 {
 
-	gssd_syscall("");
+	rpctls_syscall(RPCTLS_SYSC_CLSHUTDOWN, "");
 	pidfile_remove(rpctls_pfh);
 	exit(0);
 }
