@@ -1,6 +1,5 @@
 #!/bin/sh
 
-
 # panic: sbflush_internal: ccc 0 mb 0 mbcnt 256
 # cpuid = 4
 # time = 1592126385
@@ -19,7 +18,8 @@
 # [ thread pid 93263 tid 100202 ]
 # Stopped at      kdb_enter+0x37: movq    $0,0x10c5456(%rip)
 # db> x/s version
-# version:        FreeBSD 13.0-CURRENT #0 r362171: Sun Jun 14 09:06:12 CEST 2020\012    pho@mercat1.netperf.freebsd.org:/usr/src/sys/amd64/compile/PHO\012
+# version:        FreeBSD 13.0-CURRENT #0 r362171: Sun Jun 14 09:06:12 CEST 2020
+# pho@mercat1.netperf.freebsd.org:/usr/src/sys/amd64/compile/PHO
 # db> 
 
 # $FreeBSD$
