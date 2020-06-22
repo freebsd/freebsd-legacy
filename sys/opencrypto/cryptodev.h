@@ -446,6 +446,7 @@ struct cryptop {
 	struct task	crp_task;
 
 	crypto_session_t crp_session;	/* Session */
+	int		crp_ilen;	/* Input data total length */
 	int		crp_olen;	/* Result total length */
 
 	int		crp_etype;	/*
