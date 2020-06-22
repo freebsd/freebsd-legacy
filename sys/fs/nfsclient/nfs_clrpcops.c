@@ -8494,7 +8494,7 @@ nfsrpc_setextattr(vnode_t vp, const char *name, struct uio *uiop,
 	int error;
 	struct nfsrv_descript nfsd;
 	struct nfsrv_descript *nd = &nfsd;
-	struct nfsmount *nmp = VFSTONFS(vp->v_mount);
+	struct nfsmount *nmp = VFSTONFS(vnode_mount(vp));
 	nfsattrbit_t attrbits;
 	bool use_ext;
 
