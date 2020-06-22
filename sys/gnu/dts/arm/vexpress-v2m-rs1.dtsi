@@ -19,7 +19,7 @@
  */
 
 / {
-	bus@8000000 {
+	smb@8000000 {
 		motherboard {
 			model = "V2M-P1";
 			arm,hbi = <0x190>;

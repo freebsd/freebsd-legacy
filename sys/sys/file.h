@@ -81,8 +81,7 @@ struct ucred;
 
 #define	FOF_OFFSET	0x01	/* Use the offset in uio argument */
 #define	FOF_NOLOCK	0x02	/* Do not take FOFFSET_LOCK */
-#define	FOF_NEXTOFF_R	0x04	/* Also update f_nextoff[UIO_READ] */
-#define	FOF_NEXTOFF_W	0x08	/* Also update f_nextoff[UIO_WRITE] */
+#define	FOF_NEXTOFF	0x04	/* Also update f_nextoff */
 #define	FOF_NOUPDATE	0x10	/* Do not update f_offset */
 off_t foffset_lock(struct file *fp, int flags);
 void foffset_lock_uio(struct file *fp, struct uio *uio, int flags);
@@ -164,7 +163,7 @@ struct fileops {
  * Below is the list of locks that protects members in struct file.
  *
  * (a) f_vnode lock required (shared allows both reads and writes)
- * (f) updated with atomics and blocking on sleepq
+ * (f) protected with mtx_lock(mtx_pool_find(fp))
  * (d) cdevpriv_mtx
  * none	not locked
  */
@@ -188,10 +187,10 @@ struct file {
 	 *  DTYPE_VNODE specific fields.
 	 */
 	union {
-		int16_t	f_seqcount[2];	/* (a) Count of seq. reads and writes. */
+		int16_t	f_seqcount;	/* (a) Count of sequential accesses. */
 		int	f_pipegen;
 	};
-	off_t		f_nextoff[2];	/* next expected read/write offset. */
+	off_t		f_nextoff;	/* next expected read/write offset. */
 	union {
 		struct cdev_privdata *fvn_cdevpriv;
 					/* (d) Private data for the cdev. */
@@ -201,6 +200,10 @@ struct file {
 	 *  DFLAG_SEEKABLE specific fields
 	 */
 	off_t		f_offset;
+	/*
+	 * Mandatory Access control information.
+	 */
+	void		*f_label;	/* Place-holder for MAC label. */
 };
 
 #define	f_cdevpriv	f_vnun.fvn_cdevpriv

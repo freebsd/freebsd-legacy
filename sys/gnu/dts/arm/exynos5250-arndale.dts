@@ -93,23 +93,22 @@
 			compatible = "regulator-fixed";
 			reg = <0>;
 			regulator-name = "MAIN_DC";
-			regulator-always-on;
 		};
 
 		mmc_reg: regulator@1 {
 			compatible = "regulator-fixed";
 			reg = <1>;
-			regulator-name = "VDD_MMC";
+			regulator-name = "VDD_33ON_2.8V";
 			regulator-min-microvolt = <2800000>;
 			regulator-max-microvolt = <2800000>;
-			regulator-always-on;
+			gpio = <&gpx1 1 GPIO_ACTIVE_HIGH>;
+			enable-active-high;
 		};
 
 		reg_hdmi_en: regulator@2 {
 			compatible = "regulator-fixed";
 			reg = <2>;
 			regulator-name = "hdmi-en";
-			regulator-always-on;
 		};
 
 		vcc_1v2_reg: regulator@3 {
@@ -118,7 +117,6 @@
 			regulator-name = "VCC_1V2";
 			regulator-min-microvolt = <1200000>;
 			regulator-max-microvolt = <1200000>;
-			regulator-always-on;
 		};
 
 		vcc_1v8_reg: regulator@4 {
@@ -127,7 +125,6 @@
 			regulator-name = "VCC_1V8";
 			regulator-min-microvolt = <1800000>;
 			regulator-max-microvolt = <1800000>;
-			regulator-always-on;
 		};
 
 		vcc_3v3_reg: regulator@5 {
@@ -136,7 +133,6 @@
 			regulator-name = "VCC_3V3";
 			regulator-min-microvolt = <3300000>;
 			regulator-max-microvolt = <3300000>;
-			regulator-always-on;
 		};
 	};
 

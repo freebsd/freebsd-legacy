@@ -66,98 +66,13 @@ __FBSDID("$FreeBSD$");
 
 #include <vm/vm.h>
 #include <vm/pmap.h>
-#include <vm/vm_extern.h>
 #include <vm/vm_map.h>
 
-#include <machine/mmuvar.h>
 #include <machine/pcb.h>
 #include <machine/vmparam.h>
-#include <machine/ifunc.h>
-
-/*
- * On powerpc64 (AIM only) the copy functions are IFUNCs, selecting the best
- * option based on the PMAP in use.
- *
- * There are two options for copy functions on powerpc64:
- * - 'remap' copies, which remap userspace segments into kernel space for
- *   copying.  This is used by the 'oea64' pmap.
- * - 'direct' copies, which copy directly from userspace.  This does not require
- *   remapping user segments into kernel.  This is used by the 'radix' pmap for
- *   performance.
- *
- * Book-E does not use the C 'remap' functions, opting instead to use the
- * 'direct' copies, directly, avoiding the IFUNC overhead.
- *
- * On 32-bit AIM these functions bypass the IFUNC machinery for performance.
- */
-#ifdef __powerpc64__
-int subyte_remap(volatile void *addr, int byte);
-int subyte_direct(volatile void *addr, int byte);
-int copyinstr_remap(const void *udaddr, void *kaddr, size_t len, size_t *done);
-int copyinstr_direct(const void *udaddr, void *kaddr, size_t len, size_t *done);
-int copyout_remap(const void *kaddr, void *udaddr, size_t len);
-int copyout_direct(const void *kaddr, void *udaddr, size_t len);
-int copyin_remap(const void *uaddr, void *kaddr, size_t len);
-int copyin_direct(const void *uaddr, void *kaddr, size_t len);
-int suword32_remap(volatile void *addr, int word);
-int suword32_direct(volatile void *addr, int word);
-int suword_remap(volatile void *addr, long word);
-int suword_direct(volatile void *addr, long word);
-int suword64_remap(volatile void *addr, int64_t word);
-int suword64_direct(volatile void *addr, int64_t word);
-int fubyte_remap(volatile const void *addr);
-int fubyte_direct(volatile const void *addr);
-int fuword16_remap(volatile const void *addr);
-int fuword16_direct(volatile const void *addr);
-int fueword32_remap(volatile const void *addr, int32_t *val);
-int fueword32_direct(volatile const void *addr, int32_t *val);
-int fueword64_remap(volatile const void *addr, int64_t *val);
-int fueword64_direct(volatile const void *addr, int64_t *val);
-int fueword_remap(volatile const void *addr, long *val);
-int fueword_direct(volatile const void *addr, long *val);
-int casueword32_remap(volatile uint32_t *addr, uint32_t old, uint32_t *oldvalp,
-	uint32_t new);
-int casueword32_direct(volatile uint32_t *addr, uint32_t old, uint32_t *oldvalp,
-	uint32_t new);
-int casueword_remap(volatile u_long *addr, u_long old, u_long *oldvalp,
-	u_long new);
-int casueword_direct(volatile u_long *addr, u_long old, u_long *oldvalp,
-	u_long new);
-
-/*
- * The IFUNC resolver determines the copy based on whether the PMAP
- * implementation includes a pmap_map_user_ptr function.
- */
-#define DEFINE_COPY_FUNC(ret, func, args)			\
-	DEFINE_IFUNC(, ret, func, args)				\
-	{							\
-		return (PMAP_RESOLVE_FUNC(map_user_ptr) ?	\
-		    func##_remap : func##_direct);		\
-	}
-DEFINE_COPY_FUNC(int, subyte, (volatile void *, int))
-DEFINE_COPY_FUNC(int, copyinstr, (const void *, void *, size_t, size_t *))
-DEFINE_COPY_FUNC(int, copyin, (const void *, void *, size_t))
-DEFINE_COPY_FUNC(int, copyout, (const void *, void *, size_t))
-DEFINE_COPY_FUNC(int, suword, (volatile void *, long))
-DEFINE_COPY_FUNC(int, suword32, (volatile void *, int))
-DEFINE_COPY_FUNC(int, suword64, (volatile void *, int64_t))
-DEFINE_COPY_FUNC(int, fubyte, (volatile const void *))
-DEFINE_COPY_FUNC(int, fuword16, (volatile const void *))
-DEFINE_COPY_FUNC(int, fueword32, (volatile const void *, int32_t *))
-DEFINE_COPY_FUNC(int, fueword64, (volatile const void *, int64_t *))
-DEFINE_COPY_FUNC(int, fueword, (volatile const void *, long *))
-DEFINE_COPY_FUNC(int, casueword32,
-    (volatile uint32_t *, uint32_t, uint32_t *, uint32_t))
-DEFINE_COPY_FUNC(int, casueword, (volatile u_long *, u_long, u_long *, u_long))
-
-#define REMAP(x)	x##_remap
-#else
-#define	REMAP(x)	x
-#endif
-
 
 int
-REMAP(copyout)(const void *kaddr, void *udaddr, size_t len)
+copyout(const void *kaddr, void *udaddr, size_t len)
 {
 	struct		thread *td;
 	pmap_t		pm;
@@ -196,7 +111,7 @@ REMAP(copyout)(const void *kaddr, void *udaddr, size_t len)
 }
 
 int
-REMAP(copyin)(const void *udaddr, void *kaddr, size_t len)
+copyin(const void *udaddr, void *kaddr, size_t len)
 {
 	struct		thread *td;
 	pmap_t		pm;
@@ -235,7 +150,7 @@ REMAP(copyin)(const void *udaddr, void *kaddr, size_t len)
 }
 
 int
-REMAP(copyinstr)(const void *udaddr, void *kaddr, size_t len, size_t *done)
+copyinstr(const void *udaddr, void *kaddr, size_t len, size_t *done)
 {
 	const char	*up;
 	char		*kp;
@@ -268,7 +183,7 @@ REMAP(copyinstr)(const void *udaddr, void *kaddr, size_t len, size_t *done)
 }
 
 int
-REMAP(subyte)(volatile void *addr, int byte)
+subyte(volatile void *addr, int byte)
 {
 	struct		thread *td;
 	pmap_t		pm;
@@ -297,7 +212,7 @@ REMAP(subyte)(volatile void *addr, int byte)
 
 #ifdef __powerpc64__
 int
-REMAP(suword32)(volatile void *addr, int word)
+suword32(volatile void *addr, int word)
 {
 	struct		thread *td;
 	pmap_t		pm;
@@ -323,16 +238,10 @@ REMAP(suword32)(volatile void *addr, int word)
 	td->td_pcb->pcb_onfault = NULL;
 	return (0);
 }
-#else
-int
-REMAP(suword32)(volatile void *addr, int32_t word)
-{
-REMAP(	return (suword)(addr, (long)word));
-}
 #endif
 
 int
-REMAP(suword)(volatile void *addr, long word)
+suword(volatile void *addr, long word)
 {
 	struct		thread *td;
 	pmap_t		pm;
@@ -361,14 +270,20 @@ REMAP(suword)(volatile void *addr, long word)
 
 #ifdef __powerpc64__
 int
-REMAP(suword64)(volatile void *addr, int64_t word)
+suword64(volatile void *addr, int64_t word)
 {
-	return (REMAP(suword)(addr, (long)word));
+	return (suword(addr, (long)word));
+}
+#else
+int
+suword32(volatile void *addr, int32_t word)
+{
+	return (suword(addr, (long)word));
 }
 #endif
 
 int
-REMAP(fubyte)(volatile const void *addr)
+fubyte(volatile const void *addr)
 {
 	struct		thread *td;
 	pmap_t		pm;
@@ -397,7 +312,7 @@ REMAP(fubyte)(volatile const void *addr)
 }
 
 int
-REMAP(fuword16)(volatile const void *addr)
+fuword16(volatile const void *addr)
 {
 	struct		thread *td;
 	pmap_t		pm;
@@ -425,7 +340,7 @@ REMAP(fuword16)(volatile const void *addr)
 }
 
 int
-REMAP(fueword32)(volatile const void *addr, int32_t *val)
+fueword32(volatile const void *addr, int32_t *val)
 {
 	struct		thread *td;
 	pmap_t		pm;
@@ -454,7 +369,7 @@ REMAP(fueword32)(volatile const void *addr, int32_t *val)
 
 #ifdef __powerpc64__
 int
-REMAP(fueword64)(volatile const void *addr, int64_t *val)
+fueword64(volatile const void *addr, int64_t *val)
 {
 	struct		thread *td;
 	pmap_t		pm;
@@ -483,7 +398,7 @@ REMAP(fueword64)(volatile const void *addr, int64_t *val)
 #endif
 
 int
-REMAP(fueword)(volatile const void *addr, long *val)
+fueword(volatile const void *addr, long *val)
 {
 	struct		thread *td;
 	pmap_t		pm;
@@ -511,7 +426,7 @@ REMAP(fueword)(volatile const void *addr, long *val)
 }
 
 int
-REMAP(casueword32)(volatile uint32_t *addr, uint32_t old, uint32_t *oldvalp,
+casueword32(volatile uint32_t *addr, uint32_t old, uint32_t *oldvalp,
     uint32_t new)
 {
 	struct thread *td;
@@ -559,7 +474,7 @@ REMAP(casueword32)(volatile uint32_t *addr, uint32_t old, uint32_t *oldvalp,
 
 #ifndef __powerpc64__
 int
-REMAP(casueword)(volatile u_long *addr, u_long old, u_long *oldvalp, u_long new)
+casueword(volatile u_long *addr, u_long old, u_long *oldvalp, u_long new)
 {
 
 	return (casueword32((volatile uint32_t *)addr, old,
@@ -567,7 +482,7 @@ REMAP(casueword)(volatile u_long *addr, u_long old, u_long *oldvalp, u_long new)
 }
 #else
 int
-REMAP(casueword)(volatile u_long *addr, u_long old, u_long *oldvalp, u_long new)
+casueword(volatile u_long *addr, u_long old, u_long *oldvalp, u_long new)
 {
 	struct thread *td;
 	pmap_t pm;

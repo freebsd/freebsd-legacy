@@ -72,6 +72,10 @@ SYSCTL_DECL(_debug_ddb);
 #define	DB_MAXSCRIPTRECURSION	3
 #endif
 
+#ifndef DB_STOFFS
+#define DB_STOFFS(offs)		(offs)
+#endif
+
 #ifndef DB_CALL
 #define	DB_CALL	db_fncall_generic
 #else
@@ -83,7 +87,7 @@ int	DB_CALL(db_expr_t, db_expr_t *, int, db_expr_t[]);
  * Most users should use db_fetch_symtab in order to set them from the
  * boot loader provided values.
  */
-extern vm_offset_t ksymtab, kstrtab, ksymtab_size, ksymtab_relbase;
+extern vm_offset_t ksymtab, kstrtab, ksymtab_size;
 
 /*
  * There are three "command tables":
@@ -228,8 +232,7 @@ bool		db_value_of_name_vnet(const char *name, db_expr_t *valuep);
 int		db_write_bytes(vm_offset_t addr, size_t size, char *data);
 void		db_command_register(struct command_table *, struct command *);
 void		db_command_unregister(struct command_table *, struct command *);
-int		db_fetch_ksymtab(vm_offset_t ksym_start, vm_offset_t ksym_end,
-		    vm_offset_t relbase);
+int		db_fetch_ksymtab(vm_offset_t ksym_start, vm_offset_t ksym_end);
 
 db_cmdfcn_t	db_breakpoint_cmd;
 db_cmdfcn_t	db_capture_cmd;

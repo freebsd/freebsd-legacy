@@ -1122,6 +1122,7 @@ SYSCTL_DECL(_dev);
 SYSCTL_DECL(_hw);
 SYSCTL_DECL(_hw_bus);
 SYSCTL_DECL(_hw_bus_devices);
+SYSCTL_DECL(_hw_bus_info);
 SYSCTL_DECL(_machdep);
 SYSCTL_DECL(_machdep_mitigations);
 SYSCTL_DECL(_user);

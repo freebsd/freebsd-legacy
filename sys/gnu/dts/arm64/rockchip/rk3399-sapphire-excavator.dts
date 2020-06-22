@@ -230,5 +230,7 @@
 };
 
 &spdif {
+	i2c-scl-rising-time-ns = <450>;
+	i2c-scl-falling-time-ns = <15>;
 	status = "okay";
 };

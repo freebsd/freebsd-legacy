@@ -239,8 +239,6 @@ retry:
 		}
 		BO_UNLOCK(bo);
 	}
-	if (ffs_fsfail_cleanup(VFSTOUFS(vp->v_mount), 0))
-		return (ENXIO);
 	return (0);
 }
 
@@ -249,7 +247,6 @@ ffs_syncvnode(struct vnode *vp, int waitfor, int flags)
 {
 	struct inode *ip;
 	struct bufobj *bo;
-	struct ufsmount *ump;
 	struct buf *bp, *nbp;
 	ufs_lbn_t lbn;
 	int error, passes;
@@ -258,18 +255,14 @@ ffs_syncvnode(struct vnode *vp, int waitfor, int flags)
 	ip = VTOI(vp);
 	ip->i_flag &= ~IN_NEEDSYNC;
 	bo = &vp->v_bufobj;
-	ump = VFSTOUFS(vp->v_mount);
 
 	/*
 	 * When doing MNT_WAIT we must first flush all dependencies
 	 * on the inode.
 	 */
 	if (DOINGSOFTDEP(vp) && waitfor == MNT_WAIT &&
-	    (error = softdep_sync_metadata(vp)) != 0) {
-		if (ffs_fsfail_cleanup(ump, error))
-			error = 0;
+	    (error = softdep_sync_metadata(vp)) != 0)
 		return (error);
-	}
 
 	/*
 	 * Flush all dirty buffers associated with a vnode.
@@ -339,10 +332,7 @@ loop:
 		}
 		if (wait) {
 			bremfree(bp);
-			error = bwrite(bp);
-			if (ffs_fsfail_cleanup(ump, error))
-				error = 0;
-			if (error != 0)
+			if ((error = bwrite(bp)) != 0)
 				return (error);
 		} else if ((bp->b_flags & B_CLUSTEROK)) {
 			(void) vfs_bio_awrite(bp);
@@ -416,8 +406,6 @@ next:
 			error = ffs_update(vp, 1);
 		if (DOINGSUJ(vp))
 			softdep_journal_fsync(VTOI(vp));
-	} else if ((ip->i_flags & (IN_SIZEMOD | IN_IBLKDATA)) != 0) {
-		error = ffs_update(vp, 1);
 	}
 	return (error);
 }
@@ -825,7 +813,6 @@ ffs_write(ap)
 		if (uio->uio_offset + xfersize > ip->i_size) {
 			ip->i_size = uio->uio_offset + xfersize;
 			DIP_SET(ip, i_size, ip->i_size);
-			UFS_INODE_SET_FLAG(ip, IN_SIZEMOD | IN_CHANGE);
 		}
 
 		size = blksize(fs, ip, lbn) - bp->b_resid;
@@ -914,11 +901,8 @@ ffs_write(ap)
 			uio->uio_offset -= resid - uio->uio_resid;
 			uio->uio_resid = resid;
 		}
-	} else if (resid > uio->uio_resid && (ioflag & IO_SYNC)) {
+	} else if (resid > uio->uio_resid && (ioflag & IO_SYNC))
 		error = ffs_update(vp, 1);
-		if (ffs_fsfail_cleanup(VFSTOUFS(vp->v_mount), error))
-			error = ENXIO;
-	}
 	return (error);
 }
 
@@ -1109,10 +1093,8 @@ ffs_extwrite(struct vnode *vp, struct uio *uio, int ioflag, struct ucred *ucred)
 		if ((bp->b_flags & B_CACHE) == 0 && fs->fs_bsize <= xfersize)
 			vfs_bio_clrbuf(bp);
 
-		if (uio->uio_offset + xfersize > dp->di_extsize) {
+		if (uio->uio_offset + xfersize > dp->di_extsize)
 			dp->di_extsize = uio->uio_offset + xfersize;
-			UFS_INODE_SET_FLAG(ip, IN_SIZEMOD | IN_CHANGE);
-		}
 
 		size = sblksize(fs, dp->di_extsize, lbn) - bp->b_resid;
 		if (size < xfersize)

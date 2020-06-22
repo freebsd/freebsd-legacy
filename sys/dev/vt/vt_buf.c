@@ -416,41 +416,30 @@ vtbuf_init_rows(struct vt_buf *vb)
 		vb->vb_rows[r] = &vb->vb_buffer[r * vb->vb_scr_size.tp_col];
 }
 
-static void
-vtbuf_do_clearhistory(struct vt_buf *vb)
+void
+vtbuf_init_early(struct vt_buf *vb)
 {
 	term_rect_t rect;
 	const teken_attr_t *a;
-	term_char_t ch;
+	term_char_t c;
 
-	a = teken_get_curattr(&vb->vb_terminal->tm_emulator);
-	ch = TCOLOR_FG(a->ta_fgcolor) | TCOLOR_BG(a->ta_bgcolor);
-
-	rect.tr_begin.tp_row = rect.tr_begin.tp_col = 0;
-	rect.tr_end.tp_col = vb->vb_scr_size.tp_col;
-	rect.tr_end.tp_row = vb->vb_history_size;
-
-	vtbuf_do_fill(vb, &rect, VTBUF_SPACE_CHAR(ch));
-}
-
-static void
-vtbuf_reset_scrollback(struct vt_buf *vb)
-{
+	vb->vb_flags |= VBF_CURSOR;
 	vb->vb_roffset = 0;
 	vb->vb_curroffset = 0;
 	vb->vb_mark_start.tp_row = 0;
 	vb->vb_mark_start.tp_col = 0;
 	vb->vb_mark_end.tp_row = 0;
 	vb->vb_mark_end.tp_col = 0;
-}
 
-void
-vtbuf_init_early(struct vt_buf *vb)
-{
-	vb->vb_flags |= VBF_CURSOR;
-	vtbuf_reset_scrollback(vb);
 	vtbuf_init_rows(vb);
-	vtbuf_do_clearhistory(vb);
+	rect.tr_begin.tp_row = rect.tr_begin.tp_col = 0;
+	rect.tr_end.tp_col = vb->vb_scr_size.tp_col;
+	rect.tr_end.tp_row = vb->vb_history_size;
+
+	a = teken_get_curattr(&vb->vb_terminal->tm_emulator);
+	c = TCOLOR_FG((term_char_t)a->ta_fgcolor) | 
+	    TCOLOR_BG((term_char_t)a->ta_bgcolor);
+	vtbuf_do_fill(vb, &rect, VTBUF_SPACE_CHAR(c));
 	vtbuf_make_undirty(vb);
 	if ((vb->vb_flags & VBF_MTX_INIT) == 0) {
 		mtx_init(&vb->vb_lock, "vtbuf", NULL, MTX_SPIN);
@@ -475,16 +464,6 @@ vtbuf_init(struct vt_buf *vb, const term_pos_t *p)
 	}
 
 	vtbuf_init_early(vb);
-}
-
-void
-vtbuf_clearhistory(struct vt_buf *vb)
-{
-	VTBUF_LOCK(vb);
-	vtbuf_do_clearhistory(vb);
-	vtbuf_reset_scrollback(vb);
-	vb->vb_flags &= ~VBF_HISTORY_FULL;
-	VTBUF_UNLOCK(vb);
 }
 
 void

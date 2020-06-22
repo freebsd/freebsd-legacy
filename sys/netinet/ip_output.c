@@ -86,7 +86,7 @@ __FBSDID("$FreeBSD$");
 #include <netinet/udp.h>
 #include <netinet/udp_var.h>
 
-#if defined(SCTP) || defined(SCTP_SUPPORT)
+#ifdef SCTP
 #include <netinet/sctp.h>
 #include <netinet/sctp_crc32.h>
 #endif
@@ -154,7 +154,7 @@ ip_output_pfil(struct mbuf **mp, struct ifnet *ifp, int flags,
 			}
 			m->m_pkthdr.csum_flags |=
 				CSUM_IP_CHECKED | CSUM_IP_VALID;
-#if defined(SCTP) || defined(SCTP_SUPPORT)
+#ifdef SCTP
 			if (m->m_pkthdr.csum_flags & CSUM_SCTP)
 				m->m_pkthdr.csum_flags |= CSUM_SCTP_VALID;
 #endif
@@ -185,7 +185,7 @@ ip_output_pfil(struct mbuf **mp, struct ifnet *ifp, int flags,
 				CSUM_DATA_VALID | CSUM_PSEUDO_HDR;
 			m->m_pkthdr.csum_data = 0xffff;
 		}
-#if defined(SCTP) || defined(SCTP_SUPPORT)
+#ifdef SCTP
 		if (m->m_pkthdr.csum_flags & CSUM_SCTP)
 			m->m_pkthdr.csum_flags |= CSUM_SCTP_VALID;
 #endif
@@ -512,10 +512,11 @@ again:
 			mtu = ifp->if_mtu;
 		src = IA_SIN(ia)->sin_addr;
 	} else {
-		struct nhop_object *nh;
+		struct nhop4_extended nh;
 
-		nh = fib4_lookup(M_GETFIB(m), ip->ip_dst, 0, NHR_NONE, 0);
-		if (nh == NULL) {
+		bzero(&nh, sizeof(nh));
+		if (fib4_lookup_nh_ext(M_GETFIB(m), ip->ip_dst, 0, 0, &nh) !=
+		    0) {
 #if defined(IPSEC) || defined(IPSEC_SUPPORT)
 			/*
 			 * There is no route for this packet, but it is
@@ -529,8 +530,8 @@ again:
 			error = EHOSTUNREACH;
 			goto bad;
 		}
-		ifp = nh->nh_ifp;
-		mtu = nh->nh_mtu;
+		ifp = nh.nh_ifp;
+		mtu = nh.nh_mtu;
 		/*
 		 * We are rewriting here dst to be gw actually, contradicting
 		 * comment at the beginning of the function. However, in this
@@ -539,11 +540,10 @@ again:
 		 * function, the dst would be rewritten by ip_output_pfil().
 		 */
 		MPASS(dst == &sin);
-		if (nh->nh_flags & NHF_GATEWAY)
-			dst->sin_addr = nh->gw4_sa.sin_addr;
-		ia = ifatoia(nh->nh_ifa);
-		src = IA_SIN(ia)->sin_addr;
-		isbroadcast = (((nh->nh_flags & (NHF_HOST | NHF_BROADCAST)) ==
+		dst->sin_addr = nh.nh_addr;
+		ia = nh.nh_ia;
+		src = nh.nh_src;
+		isbroadcast = (((nh.nh_flags & (NHF_HOST | NHF_BROADCAST)) ==
 		    (NHF_HOST | NHF_BROADCAST)) ||
 		    ((ifp->if_flags & IFF_BROADCAST) &&
 		    in_ifaddr_broadcast(dst->sin_addr, ia)));
@@ -753,7 +753,7 @@ sendit:
 			goto bad;
 		}
 	}
-#if defined(SCTP) || defined(SCTP_SUPPORT)
+#ifdef SCTP
 	if (m->m_pkthdr.csum_flags & CSUM_SCTP & ~ifp->if_hwassist) {
 		m = mb_unmapped_to_ext(m);
 		if (m == NULL) {
@@ -905,7 +905,7 @@ ip_fragment(struct ip *ip, struct mbuf **m_frag, int mtu,
 		in_delayed_cksum(m0);
 		m0->m_pkthdr.csum_flags &= ~CSUM_DELAY_DATA;
 	}
-#if defined(SCTP) || defined(SCTP_SUPPORT)
+#ifdef SCTP
 	if (m0->m_pkthdr.csum_flags & CSUM_SCTP) {
 		m0 = mb_unmapped_to_ext(m0);
 		if (m0 == NULL) {

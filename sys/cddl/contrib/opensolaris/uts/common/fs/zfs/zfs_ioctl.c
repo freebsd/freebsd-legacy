@@ -1642,10 +1642,8 @@ zfs_ioc_pool_destroy(zfs_cmd_t *zc)
 	int error;
 	zfs_log_history(zc);
 	error = spa_destroy(zc->zc_name);
-#ifndef __FreeBSD__
 	if (error == 0)
 		zvol_remove_minors(zc->zc_name);
-#endif
 	return (error);
 }
 
@@ -1696,10 +1694,8 @@ zfs_ioc_pool_export(zfs_cmd_t *zc)
 
 	zfs_log_history(zc);
 	error = spa_export(zc->zc_name, NULL, force, hardforce);
-#ifndef __FreeBSD__
 	if (error == 0)
 		zvol_remove_minors(zc->zc_name);
-#endif
 	return (error);
 }
 
@@ -3399,23 +3395,13 @@ zfs_ioc_create(const char *fsname, nvlist_t *innvl, nvlist_t *outnvl)
 	if (error == 0) {
 		error = zfs_set_prop_nvlist(fsname, ZPROP_SRC_LOCAL,
 		    nvprops, outnvl);
-#if defined(__FreeBSD__) && defined(_KERNEL)
-		/*
-		 * Wait for ZVOL operations to settle down before destroying.
-		 */
-		if (error != 0) {
-			spa_t *spa;
-
-			if (spa_open(fsname, &spa, FTAG) == 0) {
-				taskqueue_drain_all(
-				    spa->spa_zvol_taskq->tq_queue);
-				spa_close(spa, FTAG);
-			}
-		}
-#endif
 		if (error != 0)
 			(void) dsl_destroy_head(fsname);
 	}
+#ifdef __FreeBSD__
+	if (error == 0 && type == DMU_OST_ZVOL)
+		zvol_create_minors(fsname);
+#endif
 	return (error);
 }
 
@@ -3457,6 +3443,10 @@ zfs_ioc_clone(const char *fsname, nvlist_t *innvl, nvlist_t *outnvl)
 		if (error != 0)
 			(void) dsl_destroy_head(fsname);
 	}
+#ifdef __FreeBSD__
+	if (error == 0)
+		zvol_create_minors(fsname);
+#endif
 	return (error);
 }
 
@@ -3748,6 +3738,9 @@ zfs_ioc_destroy_snaps(const char *poolname, nvlist_t *innvl, nvlist_t *outnvl)
 			return (SET_ERROR(EXDEV));
 
 		zfs_unmount_snap(nvpair_name(pair));
+#if defined(__FreeBSD__)
+		zvol_remove_minors(name);
+#endif
 	}
 
 	return (dsl_destroy_snapshots_nvl(snaps, defer, outnvl));
@@ -3931,8 +3924,10 @@ zfs_ioc_destroy(zfs_cmd_t *zc)
 		err = dsl_destroy_snapshot(zc->zc_name, zc->zc_defer_destroy);
 	else
 		err = dsl_destroy_head(zc->zc_name);
-#ifndef __FreeBSD__
 	if (ost == DMU_OST_ZVOL && err == 0)
+#ifdef __FreeBSD__
+		zvol_remove_minors(zc->zc_name);
+#else
 		(void) zvol_remove_minor(zc->zc_name);
 #endif
 	return (err);
@@ -4373,7 +4368,16 @@ zfs_check_settable(const char *dsname, nvpair_t *pair, cred_t *cr)
 
 		if ((err = spa_open(dsname, &spa, FTAG)) != 0)
 			return (err);
-
+		/*
+		 * Salted checksums are not supported on root pools.
+		 */
+		if (spa_bootfs(spa) != 0 &&
+		    intval < ZIO_CHECKSUM_FUNCTIONS &&
+		    (zio_checksum_table[intval].ci_flags &
+		    ZCHECKSUM_FLAG_SALTED)) {
+			spa_close(spa, FTAG);
+			return (SET_ERROR(ERANGE));
+		}
 		if (!spa_feature_is_enabled(spa, feature)) {
 			spa_close(spa, FTAG);
 			return (SET_ERROR(ENOTSUP));
@@ -4816,6 +4820,11 @@ zfs_ioc_recv(zfs_cmd_t *zc)
 		zfs_ioc_recv_inject_err = B_FALSE;
 		error = 1;
 	}
+#endif
+
+#ifdef __FreeBSD__
+	if (error == 0)
+		zvol_create_minors(tofs);
 #endif
 
 	/*
@@ -6958,24 +6967,6 @@ zfsdev_ioctl(struct cdev *dev, u_long zcmd, caddr_t arg, int flag,
 
 out:
 	nvlist_free(innvl);
-
-#if defined(__FreeBSD__) && defined(_KERNEL)
-	/*
-	 * Wait for ZVOL changes to get applied.
-	 * NB: taskqueue_drain_all() does less than taskq_wait(),
-	 * but enough for what we want.
-	 * And there is no equivalent illumos API.
-	 */
-	if (error == 0) {
-		spa_t *spa;
-
-		if (spa_open(saved_poolname, &spa, FTAG) == 0) {
-			taskqueue_drain_all(
-			    spa->spa_zvol_taskq->tq_queue);
-			spa_close(spa, FTAG);
-		}
-	}
-#endif
 
 #ifdef illumos
 	rc = ddi_copyout(zc, (void *)arg, sizeof (zfs_cmd_t), flag);

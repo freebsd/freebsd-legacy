@@ -119,7 +119,7 @@ mlx5e_tls_init(struct mlx5e_priv *priv)
 	struct sysctl_oid *node;
 	uint32_t x;
 
-	if (MLX5_CAP_GEN(priv->mdev, tls_tx) == 0)
+	if (MLX5_CAP_GEN(priv->mdev, tls) == 0)
 		return (0);
 
 	ptls->wq = create_singlethread_workqueue("mlx5-tls-wq");
@@ -161,7 +161,7 @@ mlx5e_tls_cleanup(struct mlx5e_priv *priv)
 	struct mlx5e_tls *ptls = &priv->tls;
 	uint32_t x;
 
-	if (MLX5_CAP_GEN(priv->mdev, tls_tx) == 0)
+	if (MLX5_CAP_GEN(priv->mdev, tls) == 0)
 		return;
 
 	ptls->init = 0;
@@ -251,14 +251,18 @@ mlx5e_tls_set_params(void *ctx, const struct tls_session_params *en)
 	MLX5_SET(sw_tls_cntx, ctx, param.encryption_standard, 1); /* TLS */
 
 	/* copy the initial vector in place */
-	switch (en->iv_len) {
-	case MLX5_FLD_SZ_BYTES(sw_tls_cntx, param.gcm_iv):
-	case MLX5_FLD_SZ_BYTES(sw_tls_cntx, param.gcm_iv) +
-	     MLX5_FLD_SZ_BYTES(sw_tls_cntx, param.implicit_iv):
+	if (en->iv_len == MLX5_FLD_SZ_BYTES(sw_tls_cntx, param.gcm_iv)) {
 		memcpy(MLX5_ADDR_OF(sw_tls_cntx, ctx, param.gcm_iv),
-		    en->iv, en->iv_len);
-		break;
-	default:
+		    en->iv, MLX5_FLD_SZ_BYTES(sw_tls_cntx, param.gcm_iv));
+	} else if (en->iv_len == (MLX5_FLD_SZ_BYTES(sw_tls_cntx, param.gcm_iv) +
+				  MLX5_FLD_SZ_BYTES(sw_tls_cntx, param.implicit_iv))) {
+		memcpy(MLX5_ADDR_OF(sw_tls_cntx, ctx, param.gcm_iv),
+		    (char *)en->iv + MLX5_FLD_SZ_BYTES(sw_tls_cntx, param.implicit_iv),
+		    MLX5_FLD_SZ_BYTES(sw_tls_cntx, param.gcm_iv));
+		memcpy(MLX5_ADDR_OF(sw_tls_cntx, ctx, param.implicit_iv),
+		    en->iv,
+		    MLX5_FLD_SZ_BYTES(sw_tls_cntx, param.implicit_iv));
+	} else {
 		return (EINVAL);
 	}
 
@@ -560,7 +564,9 @@ mlx5e_tls_send_progress_parameters(struct mlx5e_sq *sq, struct mlx5e_tls_tag *pt
 	wqe->ctrl.qpn_ds = cpu_to_be32((sq->sqn << 8) | ds_cnt);
 
 	if (mlx5e_do_send_cqe(sq))
-		wqe->ctrl.fm_ce_se = MLX5_WQE_CTRL_CQ_UPDATE;
+		wqe->ctrl.fm_ce_se = MLX5_WQE_CTRL_CQ_UPDATE | MLX5_FENCE_MODE_INITIATOR_SMALL;
+	else
+		wqe->ctrl.fm_ce_se = MLX5_FENCE_MODE_INITIATOR_SMALL;
 
 	/* copy in the PSV control segment */
 	memcpy(&wqe->psv, MLX5_ADDR_OF(sw_tls_cntx, ptag->crypto_params, progress),
@@ -610,7 +616,7 @@ mlx5e_tls_send_nop(struct mlx5e_sq *sq, struct mlx5e_tls_tag *ptag)
 #define	SBTLS_MBUF_NO_DATA ((struct mbuf *)1)
 
 static struct mbuf *
-sbtls_recover_record(struct mbuf *mb, int wait, uint32_t tcp_old, uint32_t *ptcp_seq, bool *pis_start)
+sbtls_recover_record(struct mbuf *mb, int wait, uint32_t tcp_old, uint32_t *ptcp_seq)
 {
 	struct mbuf *mr, *top;
 	uint32_t offset;
@@ -629,7 +635,6 @@ sbtls_recover_record(struct mbuf *mb, int wait, uint32_t tcp_old, uint32_t *ptcp
 	/* check if we don't need to re-transmit anything */
 	if (offset == 0) {
 		top = SBTLS_MBUF_NO_DATA;
-		*pis_start = true;
 		goto done;
 	}
 
@@ -654,19 +659,13 @@ sbtls_recover_record(struct mbuf *mb, int wait, uint32_t tcp_old, uint32_t *ptcp
 
 	/* setup packet header length */
 	top->m_pkthdr.len = mr->m_len = offset;
-	top->m_len = 0;
 
 	/* check for partial re-transmit */
 	delta = *ptcp_seq - tcp_old;
 
 	if (delta < offset) {
-		m_adj(top, offset - delta);
+		m_adj(mr, offset - delta);
 		offset = delta;
-
-		/* continue where we left off */
-		*pis_start = false;
-	} else {
-		*pis_start = true;
 	}
 
 	/*
@@ -696,7 +695,7 @@ mlx5e_sq_tls_xmit(struct mlx5e_sq *sq, struct mlx5e_xmit_args *parg, struct mbuf
 {
 	struct mlx5e_tls_tag *ptls_tag;
 	struct mlx5e_snd_tag *ptag;
-	const struct tcphdr *th;
+	struct tcphdr *th;
 	struct mbuf *mb = *ppmb;
 	u64 rcd_sn;
 	u32 header_size;
@@ -752,11 +751,10 @@ mlx5e_sq_tls_xmit(struct mlx5e_sq *sq, struct mlx5e_xmit_args *parg, struct mbuf
 	}
 
 	if (unlikely(ptls_tag->expected_seq != mb_seq)) {
-		bool is_start;
 		struct mbuf *r_mb;
 		uint32_t tcp_seq = mb_seq;
 
-		r_mb = sbtls_recover_record(mb, M_NOWAIT, ptls_tag->expected_seq, &tcp_seq, &is_start);
+		r_mb = sbtls_recover_record(mb, M_NOWAIT, ptls_tag->expected_seq, &tcp_seq);
 		if (r_mb == NULL) {
 			MLX5E_TLS_STAT_INC(ptls_tag, tx_error, 1);
 			return (MLX5E_TLS_FAILURE);
@@ -765,10 +763,14 @@ mlx5e_sq_tls_xmit(struct mlx5e_sq *sq, struct mlx5e_xmit_args *parg, struct mbuf
 		MLX5E_TLS_STAT_INC(ptls_tag, tx_packets_ooo, 1);
 
 		/* check if this is the first fragment of a TLS record */
-		if (is_start) {
+		if (r_mb == SBTLS_MBUF_NO_DATA || r_mb->m_data == NULL) {
 			/* setup TLS static parameters */
 			MLX5_SET64(sw_tls_cntx, ptls_tag->crypto_params,
 			    param.initial_record_number, rcd_sn);
+
+			/* setup TLS progress parameters */
+			MLX5_SET(sw_tls_cntx, ptls_tag->crypto_params,
+			    progress.next_record_tcp_sn, tcp_seq);
 
 			/*
 			 * NOTE: The sendqueue should have enough room to

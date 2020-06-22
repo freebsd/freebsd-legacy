@@ -299,7 +299,9 @@ static int
 vm_fault_soft_fast(struct faultstate *fs)
 {
 	vm_page_t m, m_map;
-#if VM_NRESERVLEVEL > 0
+#if (defined(__aarch64__) || defined(__amd64__) || defined(__powerpc64__) || (defined(__arm__) && \
+    __ARM_ARCH >= 6) || defined(__i386__) || defined(__riscv)) && \
+    VM_NRESERVLEVEL > 0
 	vm_page_t m_super;
 	int flags;
 #endif
@@ -318,7 +320,9 @@ vm_fault_soft_fast(struct faultstate *fs)
 	}
 	m_map = m;
 	psind = 0;
-#if VM_NRESERVLEVEL > 0
+#if (defined(__aarch64__) || defined(__amd64__) || defined(__powerpc64__) || (defined(__arm__) && \
+    __ARM_ARCH >= 6) || defined(__i386__) || defined(__riscv)) && \
+    VM_NRESERVLEVEL > 0
 	if ((m->flags & PG_FICTITIOUS) == 0 &&
 	    (m_super = vm_reserv_to_superpage(m)) != NULL &&
 	    rounddown2(vaddr, pagesizes[m_super->psind]) >= fs->entry->start &&
@@ -1713,7 +1717,10 @@ vm_fault_quick_hold_pages(vm_map_t map, vm_offset_t addr, vm_size_t len,
 	end = round_page(addr + len);
 	addr = trunc_page(addr);
 
-	if (!vm_map_range_valid(map, addr, end))
+	/*
+	 * Check for illegal addresses.
+	 */
+	if (addr < vm_map_min(map) || addr > end || end > vm_map_max(map))
 		return (-1);
 
 	if (atop(end - addr) > max_count)

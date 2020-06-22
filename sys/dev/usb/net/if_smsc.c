@@ -955,7 +955,7 @@ smsc_bulk_read_callback(struct usb_xfer *xfer, usb_error_t error)
 	struct mbuf *m;
 	struct usb_page_cache *pc;
 	uint32_t rxhdr;
-	int pktlen;
+	uint16_t pktlen;
 	int off;
 	int actlen;
 
@@ -980,9 +980,6 @@ smsc_bulk_read_callback(struct usb_xfer *xfer, usb_error_t error)
 		
 			/* The frame header is always aligned on a 4 byte boundary */
 			off = ((off + 0x3) & ~0x3);
-
-			if ((off + sizeof(rxhdr)) > actlen)
-				goto tr_setup;
 
 			usbd_copy_out(pc, off, &rxhdr, sizeof(rxhdr));
 			off += (sizeof(rxhdr) + ETHER_ALIGN);
@@ -1012,13 +1009,7 @@ smsc_bulk_read_callback(struct usb_xfer *xfer, usb_error_t error)
 					if_inc_counter(ifp, IFCOUNTER_IQDROPS, 1);
 					goto tr_setup;
 				}
-				if (pktlen > m->m_len) {
-					smsc_dbg_printf(sc, "buffer too small %d vs %d bytes",
-					    pktlen, m->m_len);
-					if_inc_counter(ifp, IFCOUNTER_IQDROPS, 1);
-					m_freem(m);
-					goto tr_setup;
-				}
+				
 				usbd_copy_out(pc, off, mtod(m, uint8_t *), pktlen);
 
 				/* Check if RX TCP/UDP checksumming is being offloaded */

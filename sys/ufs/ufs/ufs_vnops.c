@@ -1426,7 +1426,6 @@ relock:
 				if (DOINGSOFTDEP(tvp))
 					softdep_change_linkcnt(tip);
 			}
-			goto bad;
 		}
 		if (doingdirectory && !DOINGSOFTDEP(tvp)) {
 			/*
@@ -1524,13 +1523,11 @@ unlockout:
 	if (error == 0 && endoff != 0) {
 		error = UFS_TRUNCATE(tdvp, endoff, IO_NORMAL |
 		    (DOINGASYNC(tdvp) ? 0 : IO_SYNC), tcnp->cn_cred);
-		if (error != 0 && !ffs_fsfail_cleanup(VFSTOUFS(mp), error))
+		if (error != 0)
 			vn_printf(tdvp,
 			    "ufs_rename: failed to truncate, error %d\n",
 			    error);
 #ifdef UFS_DIRHASH
-		if (error != 0)
-			ufsdirhash_free(tdp);
 		else if (tdp->i_dirhash != NULL)
 			ufsdirhash_dirtrunc(tdp, endoff);
 #endif
@@ -1932,7 +1929,7 @@ ufs_mkdir(ap)
 		goto bad;
 	ip->i_size = DIRBLKSIZ;
 	DIP_SET(ip, i_size, DIRBLKSIZ);
-	UFS_INODE_SET_FLAG(ip, IN_SIZEMOD | IN_CHANGE | IN_UPDATE);
+	UFS_INODE_SET_FLAG(ip, IN_CHANGE | IN_UPDATE);
 	bcopy((caddr_t)&dirtemplate, (caddr_t)bp->b_data, sizeof dirtemplate);
 	if (DOINGSOFTDEP(tvp)) {
 		/*
@@ -2119,7 +2116,7 @@ ufs_symlink(ap)
 		bcopy(ap->a_target, SHORTLINK(ip), len);
 		ip->i_size = len;
 		DIP_SET(ip, i_size, len);
-		UFS_INODE_SET_FLAG(ip, IN_SIZEMOD | IN_CHANGE | IN_UPDATE);
+		UFS_INODE_SET_FLAG(ip, IN_CHANGE | IN_UPDATE);
 		error = UFS_UPDATE(vp, 0);
 	} else
 		error = vn_rdwr(UIO_WRITE, vp, __DECONST(void *, ap->a_target),
@@ -2184,7 +2181,7 @@ ufs_readdir(ap)
 	error = 0;
 	while (error == 0 && uio->uio_resid > 0 &&
 	    uio->uio_offset < ip->i_size) {
-		error = UFS_BLKATOFF(vp, uio->uio_offset, NULL, &bp);
+		error = ffs_blkatoff(vp, uio->uio_offset, NULL, &bp);
 		if (error)
 			break;
 		if (bp->b_offset + bp->b_bcount > ip->i_size)

@@ -55,7 +55,6 @@ struct g_vfs_softc {
 	struct bufobj	*sc_bo;
 	int		 sc_active;
 	int		 sc_orphaned;
-	int		 sc_enxio_active;
 };
 
 static struct buf_ops __g_vfs_bufops = {
@@ -140,14 +139,9 @@ g_vfs_done(struct bio *bip)
 
 	cp = bip->bio_from;
 	sc = cp->geom->softc;
-	if (bip->bio_error != 0 && bip->bio_error != EOPNOTSUPP) {
-		if ((bp->b_xflags & BX_CVTENXIO) != 0)
-			sc->sc_enxio_active = 1;
-		if (sc->sc_enxio_active)
-			bip->bio_error = ENXIO;
+	if (bip->bio_error && bip->bio_error != EOPNOTSUPP)
 		g_print_bio("g_vfs_done():", bip, "error = %d",
 		    bip->bio_error);
-	}
 	bp->b_error = bip->bio_error;
 	bp->b_ioflags = bip->bio_flags;
 	if (bip->bio_error)
@@ -178,7 +172,7 @@ g_vfs_strategy(struct bufobj *bo, struct buf *bp)
 	 * If the provider has orphaned us, just return ENXIO.
 	 */
 	mtx_lock(&sc->sc_mtx);
-	if (sc->sc_orphaned || sc->sc_enxio_active) {
+	if (sc->sc_orphaned) {
 		mtx_unlock(&sc->sc_mtx);
 		bp->b_error = ENXIO;
 		bp->b_ioflags |= BIO_ERROR;

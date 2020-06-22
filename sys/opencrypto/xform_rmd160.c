@@ -53,9 +53,7 @@ __FBSDID("$FreeBSD$");
 #include <opencrypto/rmd160.h>
 #include <opencrypto/xform_auth.h>
 
-static	void RMD160Init_int(void *);
-static	int RMD160Update_int(void *, const void *, u_int);
-static	void RMD160Final_int(uint8_t *, void *);
+static	int RMD160Update_int(void *, const u_int8_t *, u_int16_t);
 
 /* Authentication instances */
 struct auth_hash auth_hash_hmac_ripemd_160 = {
@@ -65,26 +63,17 @@ struct auth_hash auth_hash_hmac_ripemd_160 = {
 	.hashsize = RIPEMD160_HASH_LEN,
 	.ctxsize = sizeof(RMD160_CTX),
 	.blocksize = RIPEMD160_BLOCK_LEN,
-	.Init = RMD160Init_int,
+	.Init = (void (*)(void *)) RMD160Init,
 	.Update = RMD160Update_int,
-	.Final = RMD160Final_int,
+	.Final = (void (*)(u_int8_t *, void *)) RMD160Final,
 };
 
-static void
-RMD160Init_int(void *ctx)
-{
-	RMD160Init(ctx);
-}
-
+/*
+ * And now for auth.
+ */
 static int
-RMD160Update_int(void *ctx, const void *buf, u_int len)
+RMD160Update_int(void *ctx, const u_int8_t *buf, u_int16_t len)
 {
 	RMD160Update(ctx, buf, len);
 	return 0;
-}
-
-static void
-RMD160Final_int(uint8_t *digest, void *ctx)
-{
-	RMD160Final(digest, ctx);
 }

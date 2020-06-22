@@ -114,7 +114,6 @@
 			compatible = "atmel,24c02";
 			reg = <0x50>;
 
-			vcc-supply = <&vdd_1v8>;
 			address-bits = <8>;
 			page-size = <8>;
 			size = <256>;
@@ -125,7 +124,6 @@
 			compatible = "atmel,24c02";
 			reg = <0x57>;
 
-			vcc-supply = <&vdd_1v8>;
 			address-bits = <8>;
 			page-size = <8>;
 			size = <256>;
@@ -445,7 +443,7 @@
 				status = "okay";
 
 				lanes {
-					micro_b: usb2-0 {
+					usb2-0 {
 						nvidia,function = "xusb";
 						status = "okay";
 					};
@@ -507,17 +505,7 @@
 		ports {
 			usb2-0 {
 				status = "okay";
-				mode = "peripheral";
-
-				usb-role-switch;
-				connector {
-					compatible = "usb-b-connector",
-						     "gpio-usb-b-connector";
-					label = "micro-USB";
-					type = "micro";
-					vbus-gpio = <&gpio TEGRA_GPIO(CC, 4)
-						     GPIO_ACTIVE_LOW>;
-				};
+				mode = "otg";
 			};
 
 			usb2-1 {
@@ -546,14 +534,6 @@
 
 		vqmmc-supply = <&vddio_sdmmc>;
 		vmmc-supply = <&vdd_3v3_sd>;
-	};
-
-	usb@700d0000 {
-		status = "okay";
-		phys = <&micro_b>;
-		phy-names = "usb2-0";
-		avddio-usb-supply = <&vdd_3v3_sys>;
-		hvdd-usb-supply = <&vdd_1v8>;
 	};
 
 	sdhci@700b0400 {

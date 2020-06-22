@@ -637,9 +637,8 @@ bus_dmamap_load_mem(bus_dma_tag_t dmat, bus_dmamap_t map,
 }
 
 int
-bus_dmamap_load_crp_buffer(bus_dma_tag_t dmat, bus_dmamap_t map,
-    struct crypto_buffer *cb, bus_dmamap_callback_t *callback,
-    void *callback_arg, int flags)
+bus_dmamap_load_crp(bus_dma_tag_t dmat, bus_dmamap_t map, struct cryptop *crp,
+    bus_dmamap_callback_t *callback, void *callback_arg, int flags)
 {
 	bus_dma_segment_t *segs;
 	int error;
@@ -648,21 +647,19 @@ bus_dmamap_load_crp_buffer(bus_dma_tag_t dmat, bus_dmamap_t map,
 	flags |= BUS_DMA_NOWAIT;
 	nsegs = -1;
 	error = 0;
-	switch (cb->cb_type) {
+	switch (crp->crp_buf_type) {
 	case CRYPTO_BUF_CONTIG:
-		error = _bus_dmamap_load_buffer(dmat, map, cb->cb_buf,
-		    cb->cb_buf_len, kernel_pmap, flags, NULL, &nsegs);
+		error = _bus_dmamap_load_buffer(dmat, map, crp->crp_buf,
+		    crp->crp_ilen, kernel_pmap, flags, NULL, &nsegs);
 		break;
 	case CRYPTO_BUF_MBUF:
-		error = _bus_dmamap_load_mbuf_sg(dmat, map, cb->cb_mbuf,
+		error = _bus_dmamap_load_mbuf_sg(dmat, map, crp->crp_mbuf,
 		    NULL, &nsegs, flags);
 		break;
 	case CRYPTO_BUF_UIO:
-		error = _bus_dmamap_load_uio(dmat, map, cb->cb_uio, &nsegs,
+		error = _bus_dmamap_load_uio(dmat, map, crp->crp_uio, &nsegs,
 		    flags);
 		break;
-	default:
-		error = EINVAL;
 	}
 	nsegs++;
 
@@ -686,12 +683,4 @@ bus_dmamap_load_crp_buffer(bus_dma_tag_t dmat, bus_dmamap_t map,
 		return (error);
 
 	return (0);
-}
-
-int
-bus_dmamap_load_crp(bus_dma_tag_t dmat, bus_dmamap_t map, struct cryptop *crp,
-    bus_dmamap_callback_t *callback, void *callback_arg, int flags)
-{
-	return (bus_dmamap_load_crp_buffer(dmat, map, &crp->crp_buf, callback,
-	    callback_arg, flags));
 }

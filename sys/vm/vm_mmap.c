@@ -106,7 +106,7 @@ SYSCTL_INT(_vm, OID_AUTO, mincore_mapped, CTLFLAG_RWTUN, &mincore_mapped, 0,
     "mincore reports mappings, not residency");
 static int imply_prot_max = 0;
 SYSCTL_INT(_vm, OID_AUTO, imply_prot_max, CTLFLAG_RWTUN, &imply_prot_max, 0,
-    "Imply maximum page protections in mmap() when none are specified");
+    "Imply maximum page permissions in mmap() when none are specified");
 
 #ifdef MAP_32BIT
 #define	MAP_32BIT_MAX_ADDR	((vm_offset_t)1 << 31)
@@ -342,7 +342,10 @@ kern_mmap_req(struct thread *td, const struct mmap_req *mrp)
 			return (EINVAL);
 
 		/* Address range must be all in user VM space. */
-		if (!vm_map_range_valid(&vms->vm_map, addr, addr + size))
+		if (addr < vm_map_min(&vms->vm_map) ||
+		    addr + size > vm_map_max(&vms->vm_map))
+			return (EINVAL);
+		if (addr + size < addr)
 			return (EINVAL);
 #ifdef MAP_32BIT
 		if (flags & MAP_32BIT && addr + size > MAP_32BIT_MAX_ADDR)
@@ -574,7 +577,7 @@ kern_munmap(struct thread *td, uintptr_t addr0, size_t size)
 	vm_map_entry_t entry;
 	bool pmc_handled;
 #endif
-	vm_offset_t addr, end;
+	vm_offset_t addr;
 	vm_size_t pageoff;
 	vm_map_t map;
 
@@ -586,11 +589,15 @@ kern_munmap(struct thread *td, uintptr_t addr0, size_t size)
 	addr -= pageoff;
 	size += pageoff;
 	size = (vm_size_t) round_page(size);
-	end = addr + size;
-	map = &td->td_proc->p_vmspace->vm_map;
-	if (!vm_map_range_valid(map, addr, end))
+	if (addr + size < addr)
 		return (EINVAL);
 
+	/*
+	 * Check for illegal addresses.  Watch out for address wrap...
+	 */
+	map = &td->td_proc->p_vmspace->vm_map;
+	if (addr < vm_map_min(map) || addr + size > vm_map_max(map))
+		return (EINVAL);
 	vm_map_lock(map);
 #ifdef HWPMC_HOOKS
 	pmc_handled = false;
@@ -602,7 +609,7 @@ kern_munmap(struct thread *td, uintptr_t addr0, size_t size)
 		 */
 		pkm.pm_address = (uintptr_t) NULL;
 		if (vm_map_lookup_entry(map, addr, &entry)) {
-			for (; entry->start < end;
+			for (; entry->start < addr + size;
 			    entry = vm_map_entry_succ(entry)) {
 				if (vm_map_check_protection(map, entry->start,
 					entry->end, VM_PROT_EXECUTE) == TRUE) {
@@ -614,7 +621,7 @@ kern_munmap(struct thread *td, uintptr_t addr0, size_t size)
 		}
 	}
 #endif
-	vm_map_delete(map, addr, end);
+	vm_map_delete(map, addr, addr + size);
 
 #ifdef HWPMC_HOOKS
 	if (__predict_false(pmc_handled)) {
@@ -702,21 +709,13 @@ struct minherit_args {
 int
 sys_minherit(struct thread *td, struct minherit_args *uap)
 {
-
-	return (kern_minherit(td, (uintptr_t)uap->addr, uap->len,
-	    uap->inherit));
-}
-
-int
-kern_minherit(struct thread *td, uintptr_t addr0, size_t len, int inherit0)
-{
 	vm_offset_t addr;
 	vm_size_t size, pageoff;
 	vm_inherit_t inherit;
 
-	addr = (vm_offset_t)addr0;
-	size = len;
-	inherit = inherit0;
+	addr = (vm_offset_t)uap->addr;
+	size = uap->len;
+	inherit = uap->inherit;
 
 	pageoff = (addr & PAGE_MASK);
 	addr -= pageoff;
@@ -773,7 +772,9 @@ kern_madvise(struct thread *td, uintptr_t addr0, size_t len, int behav)
 	 */
 	map = &td->td_proc->p_vmspace->vm_map;
 	addr = addr0;
-	if (!vm_map_range_valid(map, addr, addr + len))
+	if (addr < vm_map_min(map) || addr + len > vm_map_max(map))
+		return (EINVAL);
+	if ((addr + len) < addr)
 		return (EINVAL);
 
 	/*

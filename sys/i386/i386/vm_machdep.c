@@ -578,12 +578,6 @@ sf_buf_map(struct sf_buf *sf, int flags)
 }
 
 #ifdef SMP
-static void
-sf_buf_shootdown_curcpu_cb(pmap_t pmap __unused,
-    vm_offset_t addr1 __unused, vm_offset_t addr2 __unused)
-{
-}
-
 void
 sf_buf_shootdown(struct sf_buf *sf, int flags)
 {
@@ -602,8 +596,7 @@ sf_buf_shootdown(struct sf_buf *sf, int flags)
 		CPU_ANDNOT(&other_cpus, &sf->cpumask);
 		if (!CPU_EMPTY(&other_cpus)) {
 			CPU_OR(&sf->cpumask, &other_cpus);
-			smp_masked_invlpg(other_cpus, sf->kva, kernel_pmap,
-			    sf_buf_shootdown_curcpu_cb);
+			smp_masked_invlpg(other_cpus, sf->kva, kernel_pmap);
 		}
 	}
 	sched_unpin();

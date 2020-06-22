@@ -4588,7 +4588,7 @@ activate_rxt:
 		goto activate_rxt;
 	}
 	/* Convert from ms to usecs */
-	if ((rsm->r_flags & RACK_SACK_PASSED) || (rsm->r_dupack >= DUP_ACK_THRESHOLD)) {
+	if (rsm->r_flags & RACK_SACK_PASSED) {
 		if ((tp->t_flags & TF_SENTFIN) &&
 		    ((tp->snd_max - tp->snd_una) == 1) &&
 		    (rsm->r_flags & RACK_HAS_FIN)) {
@@ -6237,7 +6237,7 @@ rack_log_output(struct tcpcb *tp, struct tcpopt *to, int32_t len,
 		 * or FIN if seq_out is adding more on and a FIN is present
 		 * (and we are not resending).
 		 */
-		if ((th_flags & TH_SYN) && (seq_out == tp->iss))
+		if (th_flags & TH_SYN)
 			len++;
 		if (th_flags & TH_FIN)
 			len++;
@@ -6280,7 +6280,6 @@ again:
 		rsm->usec_orig_send = us_cts;
 		if (th_flags & TH_SYN) {
 			/* The data space is one beyond snd_una */
-			rsm->r_flags |= RACK_HAS_SIN;
 			rsm->r_start = seq_out + 1;
 			rsm->r_end = rsm->r_start + (len - 1);
 		} else {
@@ -8190,7 +8189,6 @@ rack_strike_dupack(struct tcp_rack *rack)
 		rsm->r_dupack++;
 		if (rsm->r_dupack >= DUP_ACK_THRESHOLD) {
 			rack->r_wanted_output = 1;
-			rack->r_timer_override = 1;
 			rack_log_retran_reason(rack, rsm, __LINE__, 1, 3);
 		} else {
 			rack_log_retran_reason(rack, rsm, __LINE__, 0, 3);
@@ -8726,7 +8724,7 @@ rack_process_data(struct mbuf *m, struct tcphdr *th, struct socket *so,
 	 */
 	tfo_syn = ((tp->t_state == TCPS_SYN_RECEIVED) &&
 		   IS_FASTOPEN(tp->t_flags));
-	if ((tlen || (thflags & TH_FIN) || (tfo_syn && tlen > 0)) &&
+	if ((tlen || (thflags & TH_FIN) || tfo_syn) &&
 	    TCPS_HAVERCVDFIN(tp->t_state) == 0) {
 		tcp_seq save_start = th->th_seq;
 		tcp_seq save_rnxt  = tp->rcv_nxt;
@@ -8764,15 +8762,6 @@ rack_process_data(struct mbuf *m, struct tcphdr *th, struct socket *so,
 #endif
 			rack_handle_delayed_ack(tp, rack, tlen, tfo_syn);
 			tp->rcv_nxt += tlen;
-			if (tlen &&
-			    ((tp->t_flags2 & TF2_FBYTES_COMPLETE) == 0) &&
-			    (tp->t_fbyte_in == 0)) {
-				tp->t_fbyte_in = ticks;
-				if (tp->t_fbyte_in == 0)
-					tp->t_fbyte_in = 1;
-				if (tp->t_fbyte_out && tp->t_fbyte_in)
-					tp->t_flags2 |= TF2_FBYTES_COMPLETE;
-			}
 			thflags = th->th_flags & TH_FIN;
 			KMOD_TCPSTAT_ADD(tcps_rcvpack, nsegs);
 			KMOD_TCPSTAT_ADD(tcps_rcvbyte, tlen);
@@ -8996,15 +8985,6 @@ rack_do_fastnewdata(struct mbuf *m, struct tcphdr *th, struct socket *so,
 		tcp_clean_sackreport(tp);
 	KMOD_TCPSTAT_INC(tcps_preddat);
 	tp->rcv_nxt += tlen;
-	if (tlen &&
-	    ((tp->t_flags2 & TF2_FBYTES_COMPLETE) == 0) &&
-	    (tp->t_fbyte_in == 0)) {
-		tp->t_fbyte_in = ticks;
-		if (tp->t_fbyte_in == 0)
-			tp->t_fbyte_in = 1;
-		if (tp->t_fbyte_out && tp->t_fbyte_in)
-			tp->t_flags2 |= TF2_FBYTES_COMPLETE;
-	}
 	/*
 	 * Pull snd_wl1 up to prevent seq wrap relative to th_seq.
 	 */
@@ -11360,8 +11340,7 @@ check_it:
 	if (rsm->r_flags & RACK_ACKED) {
 		return (NULL);
 	}
-	if (((rsm->r_flags & RACK_SACK_PASSED) == 0) &&
-	    (rsm->r_dupack < DUP_ACK_THRESHOLD)) {
+	if ((rsm->r_flags & RACK_SACK_PASSED) == 0) {
 		/* Its not yet ready */
 		return (NULL);
 	}
@@ -12584,10 +12563,8 @@ again:
 		len = 0;
 	}
 	/* Without fast-open there should never be data sent on a SYN */
-	if ((flags & TH_SYN) && (!IS_FASTOPEN(tp->t_flags))) {
-		tp->snd_nxt = tp->iss;
+	if ((flags & TH_SYN) && (!IS_FASTOPEN(tp->t_flags)))
 		len = 0;
-	}
 	orig_len = len;
 	if (len <= 0) {
 		/*
@@ -12750,8 +12727,7 @@ again:
 				flags &= ~TH_FIN;
 		}
 	}
-	recwin = lmin(lmax(sbspace(&so->so_rcv), 0),
-	    (long)TCP_MAXWIN << tp->rcv_scale);
+	recwin = sbspace(&so->so_rcv);
 
 	/*
 	 * Sender silly window avoidance.   We transmit under the following
@@ -12848,24 +12824,18 @@ again:
 		int32_t adv;
 		int oldwin;
 
-		adv = recwin;
+		adv = min(recwin, (long)TCP_MAXWIN << tp->rcv_scale);
 		if (SEQ_GT(tp->rcv_adv, tp->rcv_nxt)) {
 			oldwin = (tp->rcv_adv - tp->rcv_nxt);
-			if (adv > oldwin)
-			    adv -= oldwin;
-			else {
-				/* We can't increase the window */
-				adv = 0;
-			}
+			adv -= oldwin;
 		} else
 			oldwin = 0;
 
 		/*
-		 * If the new window size ends up being the same as or less
-		 * than the old size when it is scaled, then don't force
-		 * a window update.
+		 * If the new window size ends up being the same as the old
+		 * size when it is scaled, then don't force a window update.
 		 */
-		if (oldwin >> tp->rcv_scale >= (adv + oldwin) >> tp->rcv_scale)
+		if (oldwin >> tp->rcv_scale == (adv + oldwin) >> tp->rcv_scale)
 			goto dontupdate;
 
 		if (adv >= (int32_t)(2 * segsiz) &&
@@ -13657,6 +13627,8 @@ send:
 		if (SEQ_GT(tp->rcv_adv, tp->rcv_nxt) &&
 		    recwin < (long)(tp->rcv_adv - tp->rcv_nxt))
 			recwin = (long)(tp->rcv_adv - tp->rcv_nxt);
+		if (recwin > (long)TCP_MAXWIN << tp->rcv_scale)
+			recwin = (long)TCP_MAXWIN << tp->rcv_scale;
 	}
 
 	/*

@@ -91,9 +91,6 @@ linux_msg(const struct thread *td, const char *fmt, ...)
 	va_list ap;
 	struct proc *p;
 
-	if (linux_debug == 0)
-		return;
-
 	p = td->td_proc;
 	printf("linux: pid %d (%s): ", (int)p->p_pid, p->p_comm);
 	va_start(ap, fmt);

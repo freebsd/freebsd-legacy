@@ -222,10 +222,6 @@ nospace:
 		softdep_request_cleanup(fs, ITOV(ip), cred, FLUSH_BLOCKS_WAIT);
 		goto retry;
 	}
-	if (ffs_fsfail_cleanup_locked(ump, 0)) {
-		UFS_UNLOCK(ump);
-		return (ENXIO);
-	}
 	if (reclaimed > 0 &&
 	    ppsratecheck(&ump->um_last_fullmsg, &ump->um_secs_fullmsg, 1)) {
 		UFS_UNLOCK(ump);
@@ -451,12 +447,6 @@ nospace:
 		softdep_request_cleanup(fs, vp, cred, FLUSH_BLOCKS_WAIT);
 		goto retry;
 	}
-	if (bp)
-		brelse(bp);
-	if (ffs_fsfail_cleanup_locked(ump, 0)) {
-		UFS_UNLOCK(ump);
-		return (ENXIO);
-	}
 	if (reclaimed > 0 &&
 	    ppsratecheck(&ump->um_last_fullmsg, &ump->um_secs_fullmsg, 1)) {
 		UFS_UNLOCK(ump);
@@ -466,6 +456,8 @@ nospace:
 	} else {
 		UFS_UNLOCK(ump);
 	}
+	if (bp)
+		brelse(bp);
 	return (ENOSPC);
 }
 
@@ -1110,7 +1102,7 @@ ffs_valloc(pvp, mode, cred, vpp)
 	struct ufsmount *ump;
 	ino_t ino, ipref;
 	u_int cg;
-	int error, reclaimed;
+	int error, error1, reclaimed;
 
 	*vpp = NULL;
 	pip = VTOI(pvp);
@@ -1145,21 +1137,28 @@ retry:
 					(allocfcn_t *)ffs_nodealloccg);
 	if (ino == 0)
 		goto noinodes;
+
 	/*
 	 * Get rid of the cached old vnode, force allocation of a new vnode
-	 * for this inode. If this fails, release the allocated ino and
-	 * return the error.
+	 * for this inode.
 	 */
-	if ((error = ffs_vgetf(pvp->v_mount, ino, LK_EXCLUSIVE, vpp,
-	    FFSV_FORCEINSMQ | FFSV_REPLACE)) != 0) {
+	error = ffs_vgetf(pvp->v_mount, ino, LK_EXCLUSIVE, vpp, FFSV_REPLACE);
+	if (error) {
+		error1 = ffs_vgetf(pvp->v_mount, ino, LK_EXCLUSIVE, vpp,
+		    FFSV_FORCEINSMQ | FFSV_REPLACE);
 		ffs_vfree(pvp, ino, mode);
+		if (error1 == 0) {
+			ip = VTOI(*vpp);
+			if (ip->i_mode)
+				goto dup_alloc;
+			UFS_INODE_SET_FLAG(ip, IN_MODIFIED);
+			vput(*vpp);
+		}
 		return (error);
 	}
-	/*
-	 * We got an inode, so check mode and panic if it is already allocated.
-	 */
 	ip = VTOI(*vpp);
 	if (ip->i_mode) {
+dup_alloc:
 		printf("mode = 0%o, inum = %ju, fs = %s\n",
 		    ip->i_mode, (uintmax_t)ip->i_number, fs->fs_fsmnt);
 		panic("ffs_valloc: dup alloc");
@@ -1197,10 +1196,6 @@ noinodes:
 		reclaimed = 1;
 		softdep_request_cleanup(fs, pvp, cred, FLUSH_INODES_WAIT);
 		goto retry;
-	}
-	if (ffs_fsfail_cleanup_locked(ump, 0)) {
-		UFS_UNLOCK(ump);
-		return (ENXIO);
 	}
 	if (ppsratecheck(&ump->um_last_fullmsg, &ump->um_secs_fullmsg, 1)) {
 		UFS_UNLOCK(ump);
@@ -2235,7 +2230,6 @@ ffs_blkfree_cg(ump, fs, devvp, bno, size, inum, dephd)
 	struct mount *mp;
 	struct cg *cgp;
 	struct buf *bp;
-	daddr_t dbn;
 	ufs1_daddr_t fragno, cgbno;
 	int i, blk, frags, bbase, error;
 	u_int cg;
@@ -2268,23 +2262,8 @@ ffs_blkfree_cg(ump, fs, devvp, bno, size, inum, dephd)
 		ffs_fserr(fs, inum, "bad block");
 		return;
 	}
-	if ((error = ffs_getcg(fs, devvp, cg, GB_CVTENXIO, &bp, &cgp)) != 0) {
-		if (!ffs_fsfail_cleanup(ump, error) ||
-		    !MOUNTEDSOFTDEP(UFSTOVFS(ump)) || devvp->v_type != VCHR)
-			return;
-		if (devvp->v_type == VREG)
-			dbn = fragstoblks(fs, cgtod(fs, cg));
-		else
-			dbn = fsbtodb(fs, cgtod(fs, cg));
-		error = getblkx(devvp, dbn, dbn, fs->fs_cgsize, 0, 0, 0, &bp);
-		KASSERT(error == 0, ("getblkx failed"));
-		softdep_setup_blkfree(UFSTOVFS(ump), bp, bno,
-		    numfrags(fs, size), dephd);
-		bp->b_flags |= B_RELBUF | B_NOCACHE;
-		bp->b_flags &= ~B_CACHE;
-		bawrite(bp);
+	if ((error = ffs_getcg(fs, devvp, cg, 0, &bp, &cgp)) != 0)
 		return;
-	}
 	cgbno = dtogd(fs, bno);
 	blksfree = cg_blksfree(cgp);
 	UFS_LOCK(ump);
@@ -2804,7 +2783,6 @@ ffs_freefile(ump, fs, devvp, ino, mode, wkhd)
 {
 	struct cg *cgp;
 	struct buf *bp;
-	daddr_t dbn;
 	int error;
 	u_int cg;
 	u_int8_t *inosused;
@@ -2826,22 +2804,8 @@ ffs_freefile(ump, fs, devvp, ino, mode, wkhd)
 	if (ino >= fs->fs_ipg * fs->fs_ncg)
 		panic("ffs_freefile: range: dev = %s, ino = %ju, fs = %s",
 		    devtoname(dev), (uintmax_t)ino, fs->fs_fsmnt);
-	if ((error = ffs_getcg(fs, devvp, cg, GB_CVTENXIO, &bp, &cgp)) != 0) {
-		if (!ffs_fsfail_cleanup(ump, error) ||
-		    !MOUNTEDSOFTDEP(UFSTOVFS(ump)) || devvp->v_type != VCHR)
-			return (error);
-		if (devvp->v_type == VREG)
-			dbn = fragstoblks(fs, cgtod(fs, cg));
-		else
-			dbn = fsbtodb(fs, cgtod(fs, cg));
-		error = getblkx(devvp, dbn, dbn, fs->fs_cgsize, 0, 0, 0, &bp);
-		KASSERT(error == 0, ("getblkx failed"));
-		softdep_setup_inofree(UFSTOVFS(ump), bp, ino, wkhd);
-		bp->b_flags |= B_RELBUF | B_NOCACHE;
-		bp->b_flags &= ~B_CACHE;
-		bawrite(bp);
+	if ((error = ffs_getcg(fs, devvp, cg, 0, &bp, &cgp)) != 0)
 		return (error);
-	}
 	inosused = cg_inosused(cgp);
 	cgino = ino % fs->fs_ipg;
 	if (isclr(inosused, cgino)) {
@@ -3306,7 +3270,7 @@ sysctl_ffs_fsck(SYSCTL_HANDLER_ARGS)
 			break;
 		ip = VTOI(vp);
 		DIP_SET(ip, i_size, cmd.size);
-		UFS_INODE_SET_FLAG(ip, IN_SIZEMOD | IN_CHANGE | IN_MODIFIED);
+		UFS_INODE_SET_FLAG(ip, IN_CHANGE | IN_MODIFIED);
 		error = ffs_update(vp, 1);
 		vput(vp);
 		break;

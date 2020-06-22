@@ -196,11 +196,9 @@ ctl_ha_lclose(struct ha_softc *softc)
 {
 
 	if (softc->ha_lso) {
-		if (SOLISTENING(softc->ha_lso)) {
-			SOLISTEN_LOCK(softc->ha_lso);
-			solisten_upcall_set(softc->ha_lso, NULL, NULL);
-			SOLISTEN_UNLOCK(softc->ha_lso);
-		}
+		SOCKBUF_LOCK(&softc->ha_lso->so_rcv);
+		soupcall_clear(softc->ha_lso, SO_RCV);
+		SOCKBUF_UNLOCK(&softc->ha_lso->so_rcv);
 		soclose(softc->ha_lso);
 		softc->ha_lso = NULL;
 	}

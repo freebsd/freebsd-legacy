@@ -95,15 +95,11 @@
 };
 
 &funnel4 {
-	// FIXME: Figure out why clock late_initcall crashes the board with
-	// this enabled.
-	// status = "okay";
+	status = "okay";
 };
 
 &funnel5 {
-	// FIXME: Figure out why clock late_initcall crashes the board with
-	// this enabled.
-	// status = "okay";
+	status = "okay";
 };
 
 &pm8005_lsid1 {

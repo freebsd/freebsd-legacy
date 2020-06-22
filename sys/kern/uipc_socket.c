@@ -793,7 +793,7 @@ sonewconn(struct socket *head, int connstatus)
 	return (so);
 }
 
-#if defined(SCTP) || defined(SCTP_SUPPORT)
+#ifdef SCTP
 /*
  * Socket part of sctp_peeloff().  Detach a new socket from an
  * association.  The new socket is returned with a reference.

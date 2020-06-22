@@ -1903,19 +1903,14 @@ linux_timer_callback_wrapper(void *context)
 	timer->function(timer->data);
 }
 
-int
+void
 mod_timer(struct timer_list *timer, int expires)
 {
-	int ret;
 
 	timer->expires = expires;
-	ret = callout_reset(&timer->callout,
+	callout_reset(&timer->callout,
 	    linux_timer_jiffies_until(expires),
 	    &linux_timer_callback_wrapper, timer);
-
-	MPASS(ret == 0 || ret == 1);
-
-	return (ret == 1);
 }
 
 void
@@ -1941,15 +1936,6 @@ del_timer(struct timer_list *timer)
 {
 
 	if (callout_stop(&(timer)->callout) == -1)
-		return (0);
-	return (1);
-}
-
-int
-del_timer_sync(struct timer_list *timer)
-{
-
-	if (callout_drain(&(timer)->callout) == -1)
 		return (0);
 	return (1);
 }

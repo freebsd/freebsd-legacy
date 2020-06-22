@@ -86,8 +86,7 @@ cryptocteon_attach(device_t dev)
 	sc = device_get_softc(dev);
 
 	sc->sc_cid = crypto_get_driverid(dev, sizeof(struct octo_sess),
-	    CRYPTOCAP_F_SOFTWARE | CRYPTOCAP_F_SYNC |
-	    CRYPTOCAP_F_ACCEL_SOFTWARE);
+	    CRYPTOCAP_F_HARDWARE | CRYPTOCAP_F_SYNC);
 	if (sc->sc_cid < 0) {
 		device_printf(dev, "crypto_get_driverid ret %d\n", sc->sc_cid);
 		return (ENXIO);
@@ -296,12 +295,12 @@ cryptocteon_process(device_t dev, struct cryptop *crp, int hint)
 	 * do some error checking outside of the loop for m and IOV processing
 	 * this leaves us with valid m or uiop pointers for later
 	 */
-	switch (crp->crp_buf.cb_type) {
+	switch (crp->crp_buf_type) {
 	case CRYPTO_BUF_MBUF:
 	{
 		unsigned frags;
 
-		m = crp->crp_buf.cb_mbuf;
+		m = crp->crp_mbuf;
 		for (frags = 0; m != NULL; frags++)
 			m = m->m_next;
 
@@ -311,19 +310,17 @@ cryptocteon_process(device_t dev, struct cryptop *crp, int hint)
 			goto done;
 		}
 
-		m = crp->crp_buf.cb_mbuf;
+		m = crp->crp_mbuf;
 		break;
 	}
 	case CRYPTO_BUF_UIO:
-		uiop = crp->crp_buf.cb_uio;
+		uiop = crp->crp_uio;
 		if (uiop->uio_iovcnt > UIO_MAXIOV) {
 			printf("%s,%d: %d uio_iovcnt > UIO_MAXIOV", __FILE__, __LINE__,
 			       uiop->uio_iovcnt);
 			crp->crp_etype = EFBIG;
 			goto done;
 		}
-		break;
-	default:
 		break;
 	}
 
@@ -340,7 +337,7 @@ cryptocteon_process(device_t dev, struct cryptop *crp, int hint)
 	/*
 	 * setup the I/O vector to cover the buffer
 	 */
-	switch (crp->crp_buf.cb_type) {
+	switch (crp->crp_buf_type) {
 	case CRYPTO_BUF_MBUF:
 		iovcnt = 0;
 		iovlen = 0;
@@ -363,9 +360,9 @@ cryptocteon_process(device_t dev, struct cryptop *crp, int hint)
 		}
 		break;
 	case CRYPTO_BUF_CONTIG:
-		iovlen = crp->crp_buf.cb_buf_len;
-		od->octo_iov[0].iov_base = crp->crp_buf.cb_buf;
-		od->octo_iov[0].iov_len = crp->crp_buf.cb_buf_len;
+		iovlen = crp->crp_ilen;
+		od->octo_iov[0].iov_base = crp->crp_buf;
+		od->octo_iov[0].iov_len = crp->crp_ilen;
 		iovcnt = 1;
 		break;
 	default:

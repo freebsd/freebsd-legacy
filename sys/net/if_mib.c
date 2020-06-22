@@ -122,6 +122,10 @@ sysctl_ifdata(SYSCTL_HANDLER_ARGS) /* XXX bad syntax! */
 		error = SYSCTL_OUT(req, ifp->if_linkmib, ifp->if_linkmiblen);
 		if (error || !req->newptr)
 			goto out;
+
+		error = SYSCTL_IN(req, ifp->if_linkmib, ifp->if_linkmiblen);
+		if (error)
+			goto out;
 		break;
 
 	case IFDATA_DRIVERNAME:
@@ -148,6 +152,6 @@ out:
 }
 
 static SYSCTL_NODE(_net_link_generic, IFMIB_IFDATA, ifdata,
-    CTLFLAG_RD | CTLFLAG_MPSAFE, sysctl_ifdata,
+    CTLFLAG_RW | CTLFLAG_NEEDGIANT, sysctl_ifdata,
     "Interface table");
 

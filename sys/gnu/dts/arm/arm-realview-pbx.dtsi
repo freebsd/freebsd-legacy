@@ -210,7 +210,7 @@
 		};
 	};
 
-	soc: soc {
+	soc: soc@0 {
 		compatible = "arm,realview-pbx-soc", "simple-bus";
 		#address-cells = <1>;
 		#size-cells = <1>;

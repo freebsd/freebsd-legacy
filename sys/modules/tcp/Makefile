@@ -2,7 +2,8 @@
 # $FreeBSD$
 #
 
-.include <kmod.opts.mk>
+SYSDIR?=${SRCTOP}/sys
+.include "${SYSDIR}/conf/kern.opts.mk"
 
 SUBDIR=	\
         ${_tcp_bbr} \
@@ -16,7 +17,7 @@ _tcp_rack= 	rack
 
 .if (${MK_INET_SUPPORT} != "no" || ${MK_INET6_SUPPORT} != "no") || \
 	defined(ALL_MODULES)
-.if ${KERN_OPTS:MIPSEC_SUPPORT} && !${KERN_OPTS:MTCP_SIGNATURE}
+.if ${MK_IPSEC_SUPPORT} != "no"
 _tcpmd5=	tcpmd5
 .endif
 .endif

@@ -892,11 +892,12 @@ ixl_add_sysctls_eth_stats(struct sysctl_ctx_list *ctx,
 }
 
 void
-ixl_vsi_add_queues_stats(struct ixl_vsi *vsi, struct sysctl_ctx_list *ctx)
+ixl_add_queues_sysctls(device_t dev, struct ixl_vsi *vsi)
 {
+	struct sysctl_ctx_list *ctx = device_get_sysctl_ctx(dev);
 	struct sysctl_oid_list *vsi_list, *queue_list;
 	struct sysctl_oid *queue_node;
-	char queue_namebuf[IXL_QUEUE_NAME_LEN];
+	char queue_namebuf[32];
 
 	struct ixl_rx_queue *rx_que;
 	struct ixl_tx_queue *tx_que;
@@ -908,7 +909,7 @@ ixl_vsi_add_queues_stats(struct ixl_vsi *vsi, struct sysctl_ctx_list *ctx)
 	/* Queue statistics */
 	for (int q = 0; q < vsi->num_rx_queues; q++) {
 		bzero(queue_namebuf, sizeof(queue_namebuf));
-		snprintf(queue_namebuf, sizeof(queue_namebuf), "rxq%02d", q);
+		snprintf(queue_namebuf, QUEUE_NAME_LEN, "rxq%02d", q);
 		queue_node = SYSCTL_ADD_NODE(ctx, vsi_list,
 		    OID_AUTO, queue_namebuf, CTLFLAG_RD | CTLFLAG_MPSAFE,
 		    NULL, "RX Queue #");
@@ -936,7 +937,7 @@ ixl_vsi_add_queues_stats(struct ixl_vsi *vsi, struct sysctl_ctx_list *ctx)
 	}
 	for (int q = 0; q < vsi->num_tx_queues; q++) {
 		bzero(queue_namebuf, sizeof(queue_namebuf));
-		snprintf(queue_namebuf, sizeof(queue_namebuf), "txq%02d", q);
+		snprintf(queue_namebuf, QUEUE_NAME_LEN, "txq%02d", q);
 		queue_node = SYSCTL_ADD_NODE(ctx, vsi_list,
 		    OID_AUTO, queue_namebuf, CTLFLAG_RD | CTLFLAG_MPSAFE,
 		    NULL, "TX Queue #");

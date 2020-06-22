@@ -15,8 +15,7 @@
 #define GPU_CC_CXO_CLK			6
 #define GPU_CC_GMU_CLK_SRC		7
 
-/* GPU_CC GDSCRs */
+/* CAM_CC GDSCRs */
 #define CX_GDSC				0
-#define GX_GDSC				1
 
 #endif

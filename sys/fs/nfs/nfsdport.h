@@ -54,7 +54,7 @@
  * needs to be returned by nfsd_fhtovp().
  */
 struct nfsexstuff {
-	uint64_t nes_exflag;			/* export flags */
+	int	nes_exflag;			/* export flags */
 	int	nes_numsecflavor;		/* # of security flavors */
 	int	nes_secflavors[MAXSECFLAVORS];	/* and the flavors */
 };
@@ -103,6 +103,12 @@ struct nfsexstuff {
 	(n)->cn_nameiop = (o);						\
 	(n)->cn_flags = (f);						\
     } while (0)
+
+/*
+ * A little bit of Darwin vfs kpi.
+ */
+#define	vnode_mount(v)	((v)->v_mount)
+#define	vfs_statfs(m)	(&((m)->mnt_stat))
 
 #define	NFSPATHLEN_T	size_t
 

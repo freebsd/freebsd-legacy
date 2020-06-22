@@ -225,7 +225,6 @@
 &enetc_port1 {
 	phy-handle = <&qds_phy1>;
 	phy-connection-type = "rgmii-id";
-	status = "okay";
 };
 
 &sai1 {

@@ -655,10 +655,7 @@ after_sack_rexmit:
 		adv = recwin;
 		if (SEQ_GT(tp->rcv_adv, tp->rcv_nxt)) {
 			oldwin = (tp->rcv_adv - tp->rcv_nxt);
-			if (adv > oldwin)
-				adv -= oldwin;
-			else
-				adv = 0;
+			adv -= oldwin;
 		} else
 			oldwin = 0;
 

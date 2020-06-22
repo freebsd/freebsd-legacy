@@ -416,5 +416,4 @@ MIASM =  \
 	shm_rename.o \
 	sigfastblock.o \
 	__realpathat.o \
-	close_range.o \
-	rpctls_syscall.o
+	close_range.o

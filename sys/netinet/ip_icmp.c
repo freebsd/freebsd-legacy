@@ -52,7 +52,6 @@ __FBSDID("$FreeBSD$");
 #include <net/if_var.h>
 #include <net/if_types.h>
 #include <net/route.h>
-#include <net/route/route_ctl.h>
 #include <net/route/nhop.h>
 #include <net/vnet.h>
 
@@ -765,7 +764,7 @@ icmp_reflect(struct mbuf *m)
 	struct ifnet *ifp;
 	struct in_ifaddr *ia;
 	struct in_addr t;
-	struct nhop_object *nh;
+	struct nhop4_extended nh_ext;
 	struct mbuf *opts = NULL;
 	int optlen = (ip->ip_hl << 2) - sizeof(struct ip);
 
@@ -852,13 +851,12 @@ icmp_reflect(struct mbuf *m)
 	 * When we don't have a route back to the packet source, stop here
 	 * and drop the packet.
 	 */
-	nh = fib4_lookup(M_GETFIB(m), ip->ip_dst, 0, NHR_NONE, 0);
-	if (nh == NULL) {
+	if (fib4_lookup_nh_ext(M_GETFIB(m), ip->ip_dst, 0, 0, &nh_ext) != 0) {
 		m_freem(m);
 		ICMPSTAT_INC(icps_noroute);
 		goto done;
 	}
-	t = IA_SIN(ifatoia(nh->nh_ifa))->sin_addr;
+	t = nh_ext.nh_src;
 match:
 #ifdef MAC
 	mac_netinet_icmp_replyinplace(m);

@@ -86,7 +86,6 @@ ffs_update(vp, waitfor)
 	struct fs *fs;
 	struct buf *bp;
 	struct inode *ip;
-	daddr_t bn;
 	int flags, error;
 
 	ASSERT_VOP_ELOCKED(vp, "ffs_update");
@@ -95,26 +94,6 @@ ffs_update(vp, waitfor)
 	if ((ip->i_flag & IN_MODIFIED) == 0 && waitfor == 0)
 		return (0);
 	ip->i_flag &= ~(IN_LAZYACCESS | IN_LAZYMOD | IN_MODIFIED);
-	/*
-	 * The IN_SIZEMOD and IN_IBLKDATA flags indicate changes to the
-	 * file size and block pointer fields in the inode. When these
-	 * fields have been changed, the fsync() and fsyncdata() system 
-	 * calls must write the inode to ensure their semantics that the 
-	 * file is on stable store.
-	 *
-	 * The IN_SIZEMOD and IN_IBLKDATA flags cannot be cleared until
-	 * a synchronous write of the inode is done. If they are cleared
-	 * on an asynchronous write, then the inode may not yet have been
-	 * written to the disk when an fsync() or fsyncdata() call is done.
-	 * Absent these flags, these calls would not know that they needed
-	 * to write the inode. Thus, these flags only can be cleared on
-	 * synchronous writes of the inode. Since the inode will be locked
-	 * for the duration of the I/O that writes it to disk, no fsync()
-	 * or fsyncdata() will be able to run before the on-disk inode
-	 * is complete.
-	 */
-	if (waitfor)
-		ip->i_flag &= ~(IN_SIZEMOD | IN_IBLKDATA);
 	fs = ITOFS(ip);
 	if (fs->fs_ronly && ITOUMP(ip)->um_fsckpid == 0)
 		return (0);
@@ -133,9 +112,9 @@ ffs_update(vp, waitfor)
 	if (IS_SNAPSHOT(ip))
 		flags = GB_LOCK_NOWAIT;
 loop:
-	bn = fsbtodb(fs, ino_to_fsba(fs, ip->i_number));
-	error = ffs_breadz(VFSTOUFS(vp->v_mount), ITODEVVP(ip), bn, bn,
-	     (int) fs->fs_bsize, NULL, NULL, 0, NOCRED, flags, NULL, &bp);
+	error = bread_gb(ITODEVVP(ip),
+	     fsbtodb(fs, ino_to_fsba(fs, ip->i_number)),
+	     (int) fs->fs_bsize, NOCRED, flags, &bp);
 	if (error != 0) {
 		if (error != EBUSY)
 			return (error);
@@ -184,11 +163,9 @@ loop:
 		 */
 		random_harvest_queue(&(ip->i_din2), sizeof(ip->i_din2), RANDOM_FS_ATIME);
 	}
-	if (waitfor) {
+	if (waitfor)
 		error = bwrite(bp);
-		if (ffs_fsfail_cleanup(VFSTOUFS(vp->v_mount), error))
-			error = 0;
-	} else if (vm_page_count_severe() || buf_dirty_count_severe()) {
+	else if (vm_page_count_severe() || buf_dirty_count_severe()) {
 		bawrite(bp);
 		error = 0;
 	} else {
@@ -299,7 +276,7 @@ ffs_truncate(vp, length, flags, cred)
 				oldblks[i] = ip->i_din2->di_extb[i];
 				ip->i_din2->di_extb[i] = 0;
 			}
-			UFS_INODE_SET_FLAG(ip, IN_SIZEMOD | IN_CHANGE);
+			UFS_INODE_SET_FLAG(ip, IN_CHANGE);
 			if ((error = ffs_update(vp, waitforupdate)))
 				return (error);
 			for (i = 0; i < UFS_NXADDR; i++) {
@@ -323,7 +300,7 @@ ffs_truncate(vp, length, flags, cred)
 		bzero(SHORTLINK(ip), (u_int)ip->i_size);
 		ip->i_size = 0;
 		DIP_SET(ip, i_size, 0);
-		UFS_INODE_SET_FLAG(ip, IN_SIZEMOD | IN_CHANGE | IN_UPDATE);
+		UFS_INODE_SET_FLAG(ip, IN_CHANGE | IN_UPDATE);
 		if (needextclean)
 			goto extclean;
 		return (ffs_update(vp, waitforupdate));
@@ -363,7 +340,7 @@ ffs_truncate(vp, length, flags, cred)
 			bdwrite(bp);
 		else
 			bawrite(bp);
-		UFS_INODE_SET_FLAG(ip, IN_SIZEMOD | IN_CHANGE | IN_UPDATE);
+		UFS_INODE_SET_FLAG(ip, IN_CHANGE | IN_UPDATE);
 		return (ffs_update(vp, waitforupdate));
 	}
 	/*
@@ -449,7 +426,6 @@ ffs_truncate(vp, length, flags, cred)
 	if (blkno != 0 && offset == 0) {
 		ip->i_size = length;
 		DIP_SET(ip, i_size, length);
-		UFS_INODE_SET_FLAG(ip, IN_SIZEMOD | IN_CHANGE | IN_UPDATE);
 	} else {
 		lbn = lblkno(fs, length);
 		flags |= BA_CLRBUF;
@@ -484,7 +460,6 @@ ffs_truncate(vp, length, flags, cred)
 			bdwrite(bp);
 		else
 			bawrite(bp);
-		UFS_INODE_SET_FLAG(ip, IN_SIZEMOD | IN_CHANGE | IN_UPDATE);
 	}
 	/*
 	 * Calculate index into inode's block list of
@@ -534,7 +509,6 @@ ffs_truncate(vp, length, flags, cred)
 	}
 	ip->i_size = osize;
 	DIP_SET(ip, i_size, osize);
-	UFS_INODE_SET_FLAG(ip, IN_SIZEMOD | IN_CHANGE | IN_UPDATE);
 
 	error = vtruncbuf(vp, length, fs->fs_bsize);
 	if (error && (allerror == 0))
@@ -601,7 +575,6 @@ ffs_truncate(vp, length, flags, cred)
 		oldspace = blksize(fs, ip, lastblock);
 		ip->i_size = length;
 		DIP_SET(ip, i_size, length);
-		UFS_INODE_SET_FLAG(ip, IN_SIZEMOD | IN_CHANGE | IN_UPDATE);
 		newspace = blksize(fs, ip, lastblock);
 		if (newspace == 0)
 			panic("ffs_truncate: newspace");
@@ -647,7 +620,7 @@ done:
 		DIP_SET(ip, i_blocks, DIP(ip, i_blocks) - blocksreleased);
 	else	/* sanity */
 		DIP_SET(ip, i_blocks, 0);
-	UFS_INODE_SET_FLAG(ip, IN_SIZEMOD | IN_CHANGE);
+	UFS_INODE_SET_FLAG(ip, IN_CHANGE);
 #ifdef QUOTA
 	(void) chkdq(ip, -blocksreleased, NOCRED, FORCE);
 #endif
@@ -711,7 +684,7 @@ ffs_indirtrunc(ip, lbn, dbn, lastbn, level, countp)
 	 * of having bread() attempt to calculate it using VOP_BMAP().
 	 */
 	vp = ITOV(ip);
-	error = ffs_breadz(ump, vp, lbn, dbn, (int)fs->fs_bsize, NULL, NULL, 0,
+	error = breadn_flags(vp, lbn, dbn, (int)fs->fs_bsize, NULL, NULL, 0,
 	    NOCRED, 0, NULL, &bp);
 	if (error) {
 		*countp = 0;

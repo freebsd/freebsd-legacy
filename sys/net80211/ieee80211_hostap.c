@@ -65,7 +65,6 @@ __FBSDID("$FreeBSD$");
 #endif
 #include <net80211/ieee80211_wds.h>
 #include <net80211/ieee80211_vht.h>
-#include <net80211/ieee80211_sta.h> /* for parse_wmeie */
 
 #define	IEEE80211_RATE2MBS(r)	(((r) & IEEE80211_RATE_VAL) / 2)
 
@@ -2254,18 +2253,8 @@ hostap_recv_mgmt(struct ieee80211_node *ni, struct mbuf *m0,
 				 * Mark node as capable of QoS.
 				 */
 				ni->ni_flags |= IEEE80211_NODE_QOS;
-				if (ieee80211_parse_wmeie(wme, wh, ni) > 0) {
-					if (ni->ni_uapsd != 0)
-						ni->ni_flags |=
-						    IEEE80211_NODE_UAPSD;
-					else
-						ni->ni_flags &=
-						    ~IEEE80211_NODE_UAPSD;
-				}
 			} else
-				ni->ni_flags &=
-				    ~(IEEE80211_NODE_QOS |
-				      IEEE80211_NODE_UAPSD);
+				ni->ni_flags &= ~IEEE80211_NODE_QOS;
 #ifdef IEEE80211_SUPPORT_SUPERG
 			if (ath != NULL) {
 				setie(ath_ie, ath - sfrm);
@@ -2279,7 +2268,6 @@ hostap_recv_mgmt(struct ieee80211_node *ni, struct mbuf *m0,
 #undef setie
 		} else {
 			ni->ni_flags &= ~IEEE80211_NODE_QOS;
-			ni->ni_flags &= ~IEEE80211_NODE_UAPSD;
 			ni->ni_ath_flags = 0;
 		}
 		ieee80211_node_join(ni, resp);

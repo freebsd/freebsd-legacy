@@ -55,6 +55,7 @@ __FBSDID("$FreeBSD$");
 #include <netinet/udp.h>
 #endif
 
+
 void
 sctp_audit_retranmission_queue(struct sctp_association *asoc)
 {

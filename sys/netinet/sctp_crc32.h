@@ -40,7 +40,7 @@ __FBSDID("$FreeBSD$");
 
 #if defined(_KERNEL)
 uint32_t sctp_calculate_cksum(struct mbuf *, uint32_t);
-#if defined(SCTP) || defined(SCTP_SUPPORT)
+#ifdef SCTP
 void sctp_delayed_cksum(struct mbuf *, uint32_t offset);
 #endif
 #endif				/* _KERNEL */

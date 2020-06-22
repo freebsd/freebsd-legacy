@@ -27,7 +27,6 @@
  * Copyright 2013 Saso Kiselkov. All rights reserved.
  * Copyright (c) 2017 Datto Inc.
  * Copyright (c) 2017, Intel Corporation.
- * Copyright (c) 2016 Actifio, Inc. All rights reserved.
  */
 
 #ifndef _SYS_SPA_IMPL_H
@@ -399,8 +398,6 @@ struct spa {
 	uint64_t	spa_lowmem_last_txg;	/* txg window start */
 
 	hrtime_t	spa_ccw_fail_time;	/* Conf cache write fail time */
-
-	taskq_t		*spa_zvol_taskq;	/* Taskq for minor management */
 
 	uint64_t	spa_multihost;		/* multihost aware (mmp) */
 	mmp_thread_t	spa_mmp;		/* multihost mmp thread */

@@ -63,9 +63,6 @@ static MALLOC_DEFINE(M_KENV, "kenv", "kernel environment");
 
 #define KENV_SIZE	512	/* Maximum number of environment strings */
 
-static uma_zone_t kenv_zone;
-static int	kenv_mvallen = KENV_MVALLEN;
-
 /* pointer to the config-generated static environment */
 char		*kern_envp;
 
@@ -87,8 +84,6 @@ bool	dynamic_kenv;
 
 #define KENV_CHECK	if (!dynamic_kenv) \
 			    panic("%s: called before SI_SUB_KMEM", __func__)
-
-static char	*getenv_string_buffer(const char *);
 
 int
 sys_kenv(td, uap)
@@ -115,9 +110,9 @@ sys_kenv(td, uap)
 #endif
 		done = needed = 0;
 		buflen = uap->len;
-		if (buflen > KENV_SIZE * (KENV_MNAMELEN + kenv_mvallen + 2))
+		if (buflen > KENV_SIZE * (KENV_MNAMELEN + KENV_MVALLEN + 2))
 			buflen = KENV_SIZE * (KENV_MNAMELEN +
-			    kenv_mvallen + 2);
+			    KENV_MVALLEN + 2);
 		if (uap->len > 0 && uap->value != NULL)
 			buffer = malloc(buflen, M_TEMP, M_WAITOK|M_ZERO);
 		mtx_lock(&kenv_lock);
@@ -190,8 +185,8 @@ sys_kenv(td, uap)
 			error = EINVAL;
 			goto done;
 		}
-		if (len > kenv_mvallen + 1)
-			len = kenv_mvallen + 1;
+		if (len > KENV_MVALLEN + 1)
+			len = KENV_MVALLEN + 1;
 		value = malloc(len, M_TEMP, M_WAITOK);
 		error = copyinstr(uap->value, value, len, NULL);
 		if (error) {
@@ -332,7 +327,7 @@ init_dynamic_kenv_from(char *init_env, int *curpos)
 		for (cp = init_env; cp != NULL; cp = cpnext) {
 			cpnext = kernenv_next(cp);
 			len = strlen(cp) + 1;
-			if (len > KENV_MNAMELEN + 1 + kenv_mvallen + 1) {
+			if (len > KENV_MNAMELEN + 1 + KENV_MVALLEN + 1) {
 				printf(
 				"WARNING: too long kenv string, ignoring %s\n",
 				    cp);
@@ -380,13 +375,6 @@ static void
 init_dynamic_kenv(void *data __unused)
 {
 	int dynamic_envpos;
-	int size;
-
-	TUNABLE_INT_FETCH("kenv_mvallen", &kenv_mvallen);
-	size = KENV_MNAMELEN + 1 + kenv_mvallen + 1;
-
-	kenv_zone = uma_zcreate("kenv", size, NULL, NULL, NULL, NULL,
-	    UMA_ALIGN_PTR, 0);
 
 	kenvp = malloc((KENV_SIZE + 1) * sizeof(char *), M_KENV,
 		M_WAITOK | M_ZERO);
@@ -407,7 +395,7 @@ freeenv(char *env)
 
 	if (dynamic_kenv && env != NULL) {
 		explicit_bzero(env, strlen(env));
-		uma_zfree(kenv_zone, env);
+		free(env, M_KENV);
 	}
 }
 
@@ -482,11 +470,14 @@ _getenv_static(const char *name)
 char *
 kern_getenv(const char *name)
 {
+	char buf[KENV_MNAMELEN + 1 + KENV_MVALLEN + 1];
 	char *ret;
 
 	if (dynamic_kenv) {
-		ret = getenv_string_buffer(name);
-		if (ret == NULL) {
+		if (getenv_string(name, buf, sizeof(buf))) {
+			ret = strdup(buf, M_KENV);
+		} else {
+			ret = NULL;
 			WITNESS_WARN(WARN_GIANTOK | WARN_SLEEPOK, NULL,
 			    "getenv");
 		}
@@ -557,7 +548,7 @@ kern_setenv(const char *name, const char *value)
 	if (namelen > KENV_MNAMELEN + 1)
 		return (-1);
 	vallen = strlen(value) + 1;
-	if (vallen > kenv_mvallen + 1)
+	if (vallen > KENV_MVALLEN + 1)
 		return (-1);
 	buf = malloc(namelen + vallen, M_KENV, M_WAITOK);
 	sprintf(buf, "%s=%s", name, value);
@@ -616,33 +607,6 @@ kern_unsetenv(const char *name)
 }
 
 /*
- * Return a buffer containing the string value from an environment variable
- */
-static char *
-getenv_string_buffer(const char *name)
-{
-	char *cp, *ret;
-	int len;
-
-	if (dynamic_kenv) {
-		len = KENV_MNAMELEN + 1 + kenv_mvallen + 1;
-		ret = uma_zalloc(kenv_zone, M_WAITOK | M_ZERO);
-		mtx_lock(&kenv_lock);
-		cp = _getenv_dynamic(name, NULL);
-		if (cp != NULL)
-			strlcpy(ret, cp, len);
-		mtx_unlock(&kenv_lock);
-		if (cp == NULL) {
-			uma_zfree(kenv_zone, ret);
-			ret = NULL;
-		}
-	} else
-		ret = _getenv_static(name);
-
-	return (ret);
-}
-
-/*
  * Return a string value from an environment variable.
  */
 int
@@ -671,19 +635,17 @@ int
 getenv_array(const char *name, void *pdata, int size, int *psize,
     int type_size, bool allow_signed)
 {
+	char buf[KENV_MNAMELEN + 1 + KENV_MVALLEN + 1];
 	uint8_t shift;
 	int64_t value;
 	int64_t old;
-	char *buf;
 	char *end;
 	char *ptr;
 	int n;
-	int rc;
 
-	if ((buf = getenv_string_buffer(name)) == NULL)
+	if (getenv_string(name, buf, sizeof(buf)) == 0)
 		return (0);
 
-	rc = 0;			  /* assume failure */
 	/* get maximum number of elements */
 	size /= type_size;
 
@@ -796,11 +758,9 @@ getenv_array(const char *name, void *pdata, int size, int *psize,
 	*psize = n * type_size;
 
 	if (n != 0)
-		rc = 1;	/* success */
+		return (1);	/* success */
 error:
-	if (dynamic_kenv)
-		uma_zfree(kenv_zone, buf);
-	return (rc);
+	return (0);	/* failure */
 }
 
 /*
@@ -899,17 +859,15 @@ getenv_ulong(const char *name, unsigned long *data)
 int
 getenv_quad(const char *name, quad_t *data)
 {
-	char	*value, *vtp;
+	char	value[KENV_MNAMELEN + 1 + KENV_MVALLEN + 1];
+	char	*vtp;
 	quad_t	iv;
 
-	value = getenv_string_buffer(name);
-	if (value == NULL)
+	if (!getenv_string(name, value, sizeof(value)))
 		return (0);
 	iv = strtoq(value, &vtp, 0);
-	if (vtp == value || (vtp[0] != '\0' && vtp[1] != '\0')) {
-		freeenv(value);
+	if (vtp == value || (vtp[0] != '\0' && vtp[1] != '\0'))
 		return (0);
-	}
 	switch (vtp[0]) {
 	case 't': case 'T':
 		iv *= 1024;
@@ -925,10 +883,8 @@ getenv_quad(const char *name, quad_t *data)
 	case '\0':
 		break;
 	default:
-		freeenv(value);
 		return (0);
 	}
-	freeenv(value);
 	*data = iv;
 	return (1);
 }

@@ -48,14 +48,6 @@ __FBSDID("$FreeBSD$");
 #include <ddb/db_command.h>
 #include <ddb/db_sym.h>
 
-struct db_private {
-	char*		strtab;
-	vm_offset_t	relbase;
-};
-typedef struct db_private *db_private_t;
-
-#define DB_PRIVATE(x) ((db_private_t)(x->private))
-
 SYSCTL_NODE(_debug, OID_AUTO, ddb, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
     "DDB settings");
 
@@ -72,8 +64,7 @@ KDB_BACKEND(ddb, db_init, db_trace_self_wrapper, db_trace_thread_wrapper,
  * the symtab and strtab in memory. This is used when loaded from
  * boot loaders different than the native one (like Xen).
  */
-vm_offset_t ksymtab, kstrtab, ksymtab_size, ksymtab_relbase;
-static struct db_private ksymtab_private;
+vm_offset_t ksymtab, kstrtab, ksymtab_size;
 
 bool
 X_db_line_at_pc(db_symtab_t *symtab, c_db_sym_t sym, char **file, int *line,
@@ -95,8 +86,7 @@ X_db_lookup(db_symtab_t *symtab, const char *symbol)
 		sym = (Elf_Sym *)symtab->start;
 		while ((char *)sym < symtab->end) {
 			if (sym->st_name != 0 &&
-			    !strcmp(DB_PRIVATE(symtab)->strtab +
-			    sym->st_name, symbol))
+			    !strcmp(symtab->private + sym->st_name, symbol))
 				return ((c_db_sym_t)sym);
 			sym++;
 		}
@@ -111,7 +101,7 @@ X_db_search_symbol(db_symtab_t *symtab, db_addr_t off, db_strategy_t strat,
 	c_linker_sym_t lsym;
 	Elf_Sym *sym, *match;
 	unsigned long diff;
-	db_addr_t stoffs = off;
+	db_addr_t stoffs;
 
 	if (symtab->private == NULL) {
 		if (!linker_ddb_search_symbol((caddr_t)off, &lsym, &diff)) {
@@ -120,11 +110,10 @@ X_db_search_symbol(db_symtab_t *symtab, db_addr_t off, db_strategy_t strat,
 		}
 		return (NULL);
 	}
-	else
-		stoffs -= DB_PRIVATE(symtab)->relbase;
 
 	diff = ~0UL;
 	match = NULL;
+	stoffs = DB_STOFFS(off);
 	for (sym = (Elf_Sym*)symtab->start; (char*)sym < symtab->end; sym++) {
 		if (sym->st_name == 0 || sym->st_shndx == SHN_UNDEF)
 			continue;
@@ -182,17 +171,15 @@ X_db_symbol_values(db_symtab_t *symtab, c_db_sym_t sym, const char **namep,
 			*valp = (db_expr_t)lval.value;
 	} else {
 		if (namep != NULL)
-			*namep = (const char *)DB_PRIVATE(symtab)->strtab +
+			*namep = (const char *)symtab->private +
 			    ((const Elf_Sym *)sym)->st_name;
 		if (valp != NULL)
-			*valp = (db_expr_t)((const Elf_Sym *)sym)->st_value +
-			    DB_PRIVATE(symtab)->relbase;
+			*valp = (db_expr_t)((const Elf_Sym *)sym)->st_value;
 	}
 }
 
 int
-db_fetch_ksymtab(vm_offset_t ksym_start, vm_offset_t ksym_end,
-    vm_offset_t relbase)
+db_fetch_ksymtab(vm_offset_t ksym_start, vm_offset_t ksym_end)
 {
 	Elf_Size strsz;
 
@@ -203,11 +190,9 @@ db_fetch_ksymtab(vm_offset_t ksym_start, vm_offset_t ksym_end,
 		kstrtab = ksymtab + ksymtab_size;
 		strsz = *(Elf_Size*)kstrtab;
 		kstrtab += sizeof(Elf_Size);
-		ksymtab_relbase = relbase;
 		if (kstrtab + strsz > ksym_end) {
 			/* Sizes doesn't match, unset everything. */
-			ksymtab = ksymtab_size = kstrtab = ksymtab_relbase
-			    = 0;
+			ksymtab = ksymtab_size = kstrtab = 0;
 		}
 	}
 
@@ -224,10 +209,8 @@ db_init(void)
 	db_command_init();
 
 	if (ksymtab != 0 && kstrtab != 0 && ksymtab_size != 0) {
-		ksymtab_private.strtab = (char *)kstrtab;
-		ksymtab_private.relbase = ksymtab_relbase;
 		db_add_symbol_table((char *)ksymtab,
-		    (char *)(ksymtab + ksymtab_size), "elf", (char *)&ksymtab_private);
+		    (char *)(ksymtab + ksymtab_size), "elf", (char *)kstrtab);
 	}
 	db_add_symbol_table(NULL, NULL, "kld", NULL);
 	return (1);	/* We're the default debugger. */

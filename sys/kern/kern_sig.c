@@ -3454,9 +3454,8 @@ corefile_open_last(struct thread *td, char *name, int indexpos,
 		    (lasttime.tv_sec == vattr.va_mtime.tv_sec &&
 		    lasttime.tv_nsec >= vattr.va_mtime.tv_nsec)) {
 			if (oldvp != NULL)
-				vn_close(oldvp, FWRITE, td->td_ucred, td);
+				vnode_close_locked(td, oldvp);
 			oldvp = vp;
-			VOP_UNLOCK(oldvp);
 			lasttime = vattr.va_mtime;
 		} else {
 			vnode_close_locked(td, vp);
@@ -3467,18 +3466,12 @@ corefile_open_last(struct thread *td, char *name, int indexpos,
 		if (nextvp == NULL) {
 			if ((td->td_proc->p_flag & P_SUGID) != 0) {
 				error = EFAULT;
-				vn_close(oldvp, FWRITE, td->td_ucred, td);
+				vnode_close_locked(td, oldvp);
 			} else {
 				nextvp = oldvp;
-				error = vn_lock(nextvp, LK_EXCLUSIVE);
-				if (error != 0) {
-					vn_close(nextvp, FWRITE, td->td_ucred,
-					    td);
-					nextvp = NULL;
-				}
 			}
 		} else {
-			vn_close(oldvp, FWRITE, td->td_ucred, td);
+			vnode_close_locked(td, oldvp);
 		}
 	}
 	if (error != 0) {

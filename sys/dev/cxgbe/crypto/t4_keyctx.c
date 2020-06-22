@@ -75,7 +75,6 @@ t4_init_gmac_hash(const char *key, int klen, char *ghash)
 
 	rounds = rijndaelKeySetupEnc(keysched, key, klen * 8);
 	rijndaelEncrypt(keysched, rounds, zeroes, ghash);
-	explicit_bzero(keysched, sizeof(keysched));
 }
 
 /* Copy out the partial hash state from a software hash implementation. */
@@ -170,5 +169,4 @@ t4_aes_getdeckey(void *dec_key, const void *enc_key, unsigned int kbits)
 		break;
 	}
 	MPASS(dkey == dec_key);
-	explicit_bzero(ek, sizeof(ek));
 }

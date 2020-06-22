@@ -566,29 +566,24 @@ static int
 tmpfs_fhtovp(struct mount *mp, struct fid *fhp, int flags,
     struct vnode **vpp)
 {
-	struct tmpfs_fid_data tfd;
+	struct tmpfs_fid *tfhp;
 	struct tmpfs_mount *tmp;
 	struct tmpfs_node *node;
 	int error;
 
-	if (fhp->fid_len != sizeof(tfd))
-		return (EINVAL);
-
-	/*
-	 * Copy from fid_data onto the stack to avoid unaligned pointer use.
-	 * See the comment in sys/mount.h on struct fid for details.
-	 */
-	memcpy(&tfd, fhp->fid_data, fhp->fid_len);
-
 	tmp = VFS_TO_TMPFS(mp);
 
-	if (tfd.tfd_id >= tmp->tm_nodes_max)
+	tfhp = (struct tmpfs_fid *)fhp;
+	if (tfhp->tf_len != sizeof(struct tmpfs_fid))
+		return (EINVAL);
+
+	if (tfhp->tf_id >= tmp->tm_nodes_max)
 		return (EINVAL);
 
 	TMPFS_LOCK(tmp);
 	LIST_FOREACH(node, &tmp->tm_nodes_used, tn_entries) {
-		if (node->tn_id == tfd.tfd_id &&
-		    node->tn_gen == tfd.tfd_gen) {
+		if (node->tn_id == tfhp->tf_id &&
+		    node->tn_gen == tfhp->tf_gen) {
 			tmpfs_ref_node(node);
 			break;
 		}

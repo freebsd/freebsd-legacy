@@ -41,7 +41,7 @@ CODE {
 	static int
 	if_dwc_default_mac_type(device_t dev)
 	{
-		return (DWC_GMAC_EXT_DESC);
+		return (DWC_GMAC);
 	}
 
 	static int

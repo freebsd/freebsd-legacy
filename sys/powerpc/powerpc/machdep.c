@@ -251,6 +251,7 @@ void booke_cpu_init(void);
 
 #ifdef DDB
 static void	load_external_symtab(void);
+static void	displace_symbol_table(vm_offset_t, vm_offset_t, vm_offset_t);
 #endif
 
 uintptr_t
@@ -359,8 +360,16 @@ powerpc_init(vm_offset_t fdt, vm_offset_t toc, vm_offset_t ofentry, void *mdp,
 			ksym_end = MD_FETCH(kmdp, MODINFOMD_ESYM, uintptr_t);
 			ksym_sz = *(Elf_Size*)ksym_start;
 
-			db_fetch_ksymtab(ksym_start, ksym_end, md_offset);
-			/* Symbols provided by loader. */
+			/*
+			 * Loader already handled displacing to the load
+			 * address, but we still need to displace it to the
+			 * DMAP.
+			 */
+			displace_symbol_table(
+			    (vm_offset_t)(ksym_start + sizeof(Elf_Size)),
+			    ksym_sz, md_offset);
+
+			db_fetch_ksymtab(ksym_start, ksym_end);
 			symbols_provided = true;
 #endif
 		}
@@ -457,10 +466,9 @@ powerpc_init(vm_offset_t fdt, vm_offset_t toc, vm_offset_t ofentry, void *mdp,
 	/*
 	 * Bring up MMU
 	 */
-	pmap_mmu_init();
-	link_elf_ireloc(kmdp);
 	pmap_bootstrap(startkernel, endkernel);
 	mtmsr(psl_kernset & ~PSL_EE);
+	link_elf_ireloc(kmdp);
 
 	/*
 	 * Initialize params/tunables that are derived from memsize
@@ -500,13 +508,37 @@ powerpc_init(vm_offset_t fdt, vm_offset_t toc, vm_offset_t ofentry, void *mdp,
 
 #ifdef DDB
 /*
- * On powernv and some booke systems, we might not have symbols loaded via
- * loader. However, if the user passed the kernel in as the initrd as well,
- * we can manually load it via reinterpreting the initrd copy of the kernel.
- *
- * In the BOOKE case, we don't actually have a DMAP yet, so we have to use
- * temporary maps to inspect the memory, but write DMAP addresses to the
- * configuration variables.
+ * XXX Figure out where to move this.
+ */
+static void
+displace_symbol_table(vm_offset_t ksym_start,
+    vm_offset_t ksym_sz, vm_offset_t displacement) {
+	Elf_Sym *sym;
+
+	/*
+	 * Relocate the symbol table to our final load address.
+	 */
+	for (sym = (Elf_Sym *)ksym_start;
+	    (vm_paddr_t)sym < (ksym_start + ksym_sz);
+	    sym++) {
+		if (sym->st_name == 0 ||
+		    sym->st_shndx == SHN_UNDEF ||
+		    sym->st_value == 0)
+			continue;
+		if (ELF_ST_TYPE(sym->st_info) != STT_OBJECT &&
+		    ELF_ST_TYPE(sym->st_info) != STT_FUNC &&
+		    ELF_ST_TYPE(sym->st_info) != STT_NOTYPE)
+			continue;
+		/* Skip relocating any implausible symbols */
+		if (sym->st_value > KERNBASE)
+			sym->st_value += displacement;
+	}
+}
+
+/*
+ * On powernv, we might not have symbols loaded via loader. However, if the
+ * user passed the kernel in as the initrd as well, we can manually load it
+ * via reinterpreting the initrd copy of the kernel.
  */
 static void
 load_external_symtab(void) {
@@ -514,8 +546,7 @@ load_external_symtab(void) {
 	vm_paddr_t start, end;
 	pcell_t cell[2];
 	ssize_t size;
-	u_char *kernelimg;		/* Temporary map */
-	u_char *kernelimg_final;	/* Final location */
+	u_char *kernelimg;
 
 	int i;
 
@@ -523,8 +554,7 @@ load_external_symtab(void) {
 	Elf_Phdr *phdr;
 	Elf_Shdr *shdr;
 
-	vm_offset_t ksym_start, ksym_sz, kstr_start, kstr_sz,
-	    ksym_start_final, kstr_start_final;
+        vm_offset_t ksym_start, ksym_sz, kstr_start, kstr_sz;
 
 	if (!hw_direct_map)
 		return;
@@ -556,48 +586,27 @@ load_external_symtab(void) {
 	if (!(end - start > 0))
 		return;
 
-	kernelimg_final = (u_char *) PHYS_TO_DMAP(start);
-#ifdef	AIM
-	kernelimg = kernelimg_final;
-#else	/* BOOKE */
-	kernelimg = (u_char *)pmap_early_io_map(start, PAGE_SIZE);
-#endif
+	kernelimg = (u_char *) PHYS_TO_DMAP(start);
+
 	ehdr = (Elf_Ehdr *)kernelimg;
 
-	if (!IS_ELF(*ehdr)) {
-#ifdef	BOOKE
-		pmap_early_io_unmap(start, PAGE_SIZE);
-#endif
+	if (!IS_ELF(*ehdr))
 		return;
-	}
-
-#ifdef	BOOKE
-	pmap_early_io_unmap(start, PAGE_SIZE);
-	kernelimg = (u_char *)pmap_early_io_map(start, (end - start));
-#endif
 
 	phdr = (Elf_Phdr *)(kernelimg + ehdr->e_phoff);
 	shdr = (Elf_Shdr *)(kernelimg + ehdr->e_shoff);
 
 	ksym_start = 0;
 	ksym_sz = 0;
-	ksym_start_final = 0;
 	kstr_start = 0;
 	kstr_sz = 0;
-	kstr_start_final = 0;
 	for (i = 0; i < ehdr->e_shnum; i++) {
 		if (shdr[i].sh_type == SHT_SYMTAB) {
 			ksym_start = (vm_offset_t)(kernelimg +
 			    shdr[i].sh_offset);
-			ksym_start_final = (vm_offset_t)
-			    (kernelimg_final + shdr[i].sh_offset);
 			ksym_sz = (vm_offset_t)(shdr[i].sh_size);
 			kstr_start = (vm_offset_t)(kernelimg +
 			    shdr[shdr[i].sh_link].sh_offset);
-			kstr_start_final = (vm_offset_t)
-			    (kernelimg_final +
-			    shdr[shdr[i].sh_link].sh_offset);
-
 			kstr_sz = (vm_offset_t)
 			    (shdr[shdr[i].sh_link].sh_size);
 		}
@@ -605,22 +614,13 @@ load_external_symtab(void) {
 
 	if (ksym_start != 0 && kstr_start != 0 && ksym_sz != 0 &&
 	    kstr_sz != 0 && ksym_start < kstr_start) {
-		/*
-		 * We can't use db_fetch_ksymtab() here, because we need to
-		 * feed in DMAP addresses that are not mapped yet on booke.
-		 *
-		 * Write the variables directly, where db_init() will pick
-		 * them up later, after the DMAP is up.
-		 */
-		ksymtab = ksym_start_final;
-		ksymtab_size = ksym_sz;
-		kstrtab = kstr_start_final;
-		ksymtab_relbase = (__startkernel - KERNBASE);
-	}
 
-#ifdef	BOOKE
-	pmap_early_io_unmap(start, (end - start));
-#endif
+		displace_symbol_table(ksym_start, ksym_sz,
+		    (__startkernel - KERNBASE));
+		ksymtab = ksym_start;
+		ksymtab_size = ksym_sz;
+		kstrtab = kstr_start;
+	}
 
 };
 #endif

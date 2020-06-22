@@ -54,14 +54,12 @@ __FBSDID("$FreeBSD$");
  * prevent clashes with MMIO/ACPI regions.
  *
  * Since this is not possible on i386 just use any available memory
- * chunk above 1MB and hope we don't clash with anything else.
+ * chunk and hope we don't clash with anything else.
  */
 #ifdef __amd64__
 #define LOW_MEM_LIMIT	0x100000000ul
-#elif defined(__i386__)
-#define LOW_MEM_LIMIT	0x100000ul
 #else
-#error "Unsupported architecture"
+#define LOW_MEM_LIMIT	0
 #endif
 
 static devclass_t xenpv_devclass;

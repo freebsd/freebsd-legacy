@@ -215,7 +215,7 @@ mac_veriexec_fingerprint_check_vnode(struct vnode *vp,
 	int error;
 
 	/* reject fingerprint if writers are active */
-	if (vp->v_writecount > 0)
+	if (vp->v_writecount)
 		return (ETXTBSY);
 
 	if ((vp->v_mount->mnt_flag & MNT_VERIFIED) != 0) {
