@@ -37,6 +37,12 @@ Use "svn" to download the modified sources into /usr/nfs-over-tls.
 
 Now, you can build/install the modified kernel. Here's the "cheater" way
 I do it.
+
+If the src.*.mk files are missing from /usr/share/mk...
+# cd /usr/share/mk
+# tar xf /usr/nfs-over-tls/sharemk.tar
+
+Set up the kernel source tree.
 # cd /usr/src
 # mv sys sys.old
 # ln -s /usr/nfs-over-tls/sys sys
