@@ -89,9 +89,11 @@ And now you should be able to build/install the utilities.
 # make SRCTOP=/usr/nfs-over-tls
 # cp rpctlscd /usr/sbin
 # cp rpctlscd.8.gz /usr/share/man/man8
-# cd ..
-# ln -s /usr/src/usr.sbin/mount mount
-# cd mountd
+# cd /usr/nfs-over-tls
+# mkdir sbin
+# cd sbin
+# ln -s /usr/src/sbin/mount mount
+# cd /usr/nfs-over-tls/usr.sbin/mountd
 # make SRCTOP=/usr/nfs-over-tls
 # cp mountd /usr/sbin
 # cp exports.5.gz /usr/share/man/man5
