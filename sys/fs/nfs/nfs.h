@@ -646,9 +646,6 @@ struct nfsrv_descript {
 	NFSSOCKADDR_T		nd_nam2;	/* return socket addr */
 	caddr_t			nd_dpos;	/* Current dissect pos */
 	caddr_t			nd_bpos;	/* Current build pos */
-	int			nd_bextpg;	/* Current ext_pgs page */
-	int			nd_bextpgsiz;	/* Bytes left in page */
-	int			nd_maxextsiz;	/* Max ext_pgs mbuf size */
 	u_int64_t		nd_flag;	/* nd_flag */
 	u_int16_t		nd_procnum;	/* RPC # */
 	u_int32_t		nd_repstat;	/* Reply status */
@@ -673,6 +670,9 @@ struct nfsrv_descript {
 	nfsv4stateid_t		nd_savedcurstateid; /* Saved Current StateID */
 	uint32_t		nd_maxreq;	/* Max. request (session). */
 	uint32_t		nd_maxresp;	/* Max. reply (session). */
+	int			nd_bextpg;	/* Current ext_pgs page */
+	int			nd_bextpgsiz;	/* Bytes left in page */
+	int			nd_maxextsiz;	/* Max ext_pgs mbuf size */
 };
 
 #define	nd_princlen	nd_gssnamelen
