@@ -2174,3 +2174,41 @@ nfsmout:
 	*taglenp = taglen;
 }
 
+/*
+ * Trim trailing data off the mbuf list being built.
+ */
+void
+nfsm_trimtrailing(struct nfsrv_descript *nd, struct mbuf *mb, char *bpos,
+    int bextpg, int bextpgsiz)
+{
+	vm_page_t pg;
+	int fullpgsiz, i;
+
+	if (mb->m_next != NULL) {
+		m_freem(mb->m_next);
+		mb->m_next = NULL;
+	}
+	if ((mb->m_flags & M_EXTPG) != 0) {
+		/* First, get rid of any pages after this position. */
+		for (i = mb->m_epg_npgs - 1; i > bextpg; i--) {
+			pg = PHYS_TO_VM_PAGE(mb->m_epg_pa[i]);
+			vm_page_unwire_noq(pg);
+			vm_page_free(pg);
+		}
+		mb->m_epg_npgs = bextpg + 1;
+		if (bextpg == 0)
+			fullpgsiz = PAGE_SIZE - mb->m_epg_1st_off;
+		else
+			fullpgsiz = PAGE_SIZE;
+		mb->m_epg_last_len = fullpgsiz - bextpgsiz;
+		mb->m_len = m_epg_pagelen(mb, 0, mb->m_epg_1st_off);
+		for (i = 1; i < mb->m_epg_npgs; i++)
+			mb->m_len += m_epg_pagelen(mb, i, 0);
+		nd->nd_bextpgsiz = bextpgsiz;
+		nd->nd_bextpg = bextpg;
+	} else
+		mb->m_len = bpos - mtod(mb, char *);
+	nd->nd_mb = mb;
+	nd->nd_bpos = bpos;
+}
+

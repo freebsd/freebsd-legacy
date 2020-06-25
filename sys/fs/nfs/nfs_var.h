@@ -325,10 +325,6 @@ int nfsm_mbufuio(struct nfsrv_descript *, struct uio *, int);
 int nfsm_fhtom(struct nfsrv_descript *, u_int8_t *, int, int);
 int nfsm_advance(struct nfsrv_descript *, int, int);
 void *nfsm_dissct(struct nfsrv_descript *, int, int);
-void nfsm_trimtrailing(struct nfsrv_descript *, struct mbuf *,
-    caddr_t, int, int);
-void newnfs_trimtrailing(struct nfsrv_descript *, struct mbuf *,
-    caddr_t);
 void newnfs_copycred(struct nfscred *, struct ucred *);
 void newnfs_copyincred(struct ucred *, struct nfscred *);
 int nfsrv_dissectacl(struct nfsrv_descript *, NFSACL_T *, int *,
@@ -413,6 +409,8 @@ void nfsd_init(void);
 int nfsd_checkrootexp(struct nfsrv_descript *);
 void nfsd_getminorvers(struct nfsrv_descript *, u_char *, u_char **, int *,
     u_int32_t *);
+void nfsm_trimtrailing(struct nfsrv_descript *, struct mbuf *,
+    caddr_t, int, int);
 
 /* nfs_clvfsops.c */
 void nfscl_retopts(struct nfsmount *, char *, size_t);
