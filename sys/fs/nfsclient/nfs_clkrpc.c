@@ -116,17 +116,13 @@ printf("cbreq nd_md=%p\n", nd.nd_md);
 		mac_cred_associate_nfsd(nd.nd_cred);
 #endif
 #endif
-		if (((xprt->xp_tls & RPCTLS_FLAGS_HANDSHAKE) != 0 ||
-		    nfs_use_ext_pgs) && PMAP_HAS_DMAP != 0) {
-			nd.nd_flag |= ND_EXTPG;
-			nd.nd_maxextsiz = 16384;
 #ifdef KERN_TLS
-			if ((xprt->xp_tls & RPCTLS_FLAGS_HANDSHAKE) != 0 &&
-			    rpctls_getinfo(&maxlen))
-				nd.nd_maxextsiz = min(TLS_MAX_MSG_SIZE_V10_2,
-				    maxlen);
-#endif
+		if ((xprt->xp_tls & RPCTLS_FLAGS_HANDSHAKE) != 0 &&
+		    rpctls_getinfo(&maxlen, false, false)) {
+			nd.nd_flag |= ND_EXTPG;
+			nd.nd_maxextsiz = maxlen;
 		}
+#endif
 		cacherep = nfs_cbproc(&nd, rqst->rq_xid);
 	} else {
 		NFSMGET(nd.nd_mreq);

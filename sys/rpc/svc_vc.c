@@ -968,7 +968,7 @@ svc_vc_reply(SVCXPRT *xprt, struct rpc_msg *msg,
 			 */
 			maxextsiz = TLS_MAX_MSG_SIZE_V10_2;
 #ifdef KERN_TLS
-			if (rpctls_getinfo(&maxlen))
+			if (rpctls_getinfo(&maxlen, false, false))
 				maxextsiz = min(maxextsiz, maxlen);
 #endif
 			mrep = _rpc_copym_into_ext_pgs(mrep, maxextsiz);
@@ -1045,7 +1045,7 @@ svc_vc_backchannel_reply(SVCXPRT *xprt, struct rpc_msg *msg,
 			 */
 			maxextsiz = TLS_MAX_MSG_SIZE_V10_2;
 #ifdef KERN_TLS
-			if (rpctls_getinfo(&maxlen))
+			if (rpctls_getinfo(&maxlen, false, false))
 				maxextsiz = min(maxextsiz, maxlen);
 #endif
 			mrep = _rpc_copym_into_ext_pgs(mrep, maxextsiz);

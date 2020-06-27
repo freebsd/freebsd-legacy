@@ -283,9 +283,8 @@ nfssvc_program(struct svc_req *rqst, SVCXPRT *xprt)
 
 #ifdef KERN_TLS
 		if ((xprt->xp_tls & RPCTLS_FLAGS_HANDSHAKE) != 0 &&
-		    rpctls_getinfo(&maxlen))
-			nd.nd_maxextsiz = min(TLS_MAX_MSG_SIZE_V10_2,
-			    maxlen);
+		    rpctls_getinfo(&maxlen, false, false))
+			nd.nd_maxextsiz = maxlen;
 #endif
 		cacherep = nfs_proc(&nd, rqst->rq_xid, xprt, &rp);
 		NFSLOCKV4ROOTMUTEX();

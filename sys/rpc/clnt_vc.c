@@ -434,7 +434,7 @@ call_again:
 		 */
 		maxextsiz = TLS_MAX_MSG_SIZE_V10_2;
 #ifdef KERN_TLS
-		if (rpctls_getinfo(&maxlen))
+		if (rpctls_getinfo(&maxlen, false, false))
 			maxextsiz = min(maxextsiz, maxlen);
 #endif
 		mreq = _rpc_copym_into_ext_pgs(mreq, maxextsiz);

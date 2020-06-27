@@ -77,6 +77,8 @@ __FBSDID("$FreeBSD$");
 #include <fs/nfsclient/nfs.h>
 #include <nfs/nfsdiskless.h>
 
+#include <rpc/rpcsec_tls.h>
+
 FEATURE(nfscl, "NFSv4 client");
 
 extern int nfscl_ticks;
@@ -1394,6 +1396,9 @@ mountnfs(struct nfs_args *argp, struct mount *mp, struct sockaddr *nam,
 	struct nfsclds *dsp, *tdsp;
 	uint32_t lease;
 	static u_int64_t clval = 0;
+#ifdef KERN_TLS
+	u_int maxlen;
+#endif
 
 	NFSCL_DEBUG(3, "in mnt\n");
 	clp = NULL;
@@ -1403,11 +1408,11 @@ mountnfs(struct nfs_args *argp, struct mount *mp, struct sockaddr *nam,
 		free(nam, M_SONAME);
 		return (0);
 	} else {
-		/* NFS-over-TLS requires "options KERN_TLS" and a DMAP. */
+		/* NFS-over-TLS requires that rpctls be functioning. */
 		if ((newflag & NFSMNT_TLS) != 0) {
 			error = EINVAL;
 #ifdef KERN_TLS
-			if (PMAP_HAS_DMAP != 0)
+			if (rpctls_getinfo(&maxlen, true, false))
 				error = 0;
 #endif
 			if (error != 0) {

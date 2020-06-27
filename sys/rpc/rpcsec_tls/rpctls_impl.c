@@ -133,8 +133,7 @@ printf("setting err=%d path=%s\n", error, path);
 		if (error == 0) {
 			error = ENXIO;
 #ifdef KERN_TLS
-			if (PMAP_HAS_DMAP != 0 && mb_use_ext_pgs &&
-			    rpctls_getinfo(&maxlen))
+			if (rpctls_getinfo(&maxlen, false, false))
 				error = 0;
 #endif
 		}
@@ -182,8 +181,7 @@ printf("setting err=%d path=%s\n", error, path);
 		if (error == 0) {
 			error = ENXIO;
 #ifdef KERN_TLS
-			if (PMAP_HAS_DMAP != 0 && mb_use_ext_pgs &&
-			    rpctls_getinfo(&maxlen))
+			if (rpctls_getinfo(&maxlen, false, false))
 				error = 0;
 #endif
 		}
@@ -592,6 +590,9 @@ _svcauth_rpcsec_tls(struct svc_req *rqst, struct rpc_msg *msg)
 	int ngrps;
 	uid_t uid;
 	gid_t *gidp;
+#ifdef KERN_TLS
+	u_int maxlen;
+#endif
 	
 	/* Initialize reply. */
 	rqst->rq_verf = rpctls_null_verf;
@@ -607,12 +608,13 @@ printf("authtls proc=%d\n", rqst->rq_proc);
 	if (rqst->rq_proc != NULLPROC)
 		return (AUTH_REJECTEDCRED);
 
-	if (PMAP_HAS_DMAP == 0 || !mb_use_ext_pgs)
-		return (AUTH_REJECTEDCRED);
-
-#ifndef KERN_TLS
-	return (AUTH_REJECTEDCRED);
+	call_stat = FALSE;
+#ifdef KERN_TLS
+	if (rpctls_getinfo(&maxlen, false, true))
+		call_stat = TRUE;
 #endif
+	if (!call_stat)
+		return (AUTH_REJECTEDCRED);
 
 	/*
 	 * Disable reception for the krpc so that the TLS handshake can
@@ -668,13 +670,15 @@ printf("authtls: aft handshake stat=%d\n", stat);
  * Get kern.ipc.tls.enable and kern.ipc.tls.maxlen.
  */
 bool
-rpctls_getinfo(u_int *maxlenp)
+rpctls_getinfo(u_int *maxlenp, bool rpctlscd_run, bool rpctlssd_run)
 {
 	u_int maxlen;
 	bool enable;
 	int error;
 	size_t siz;
 
+	if (PMAP_HAS_DMAP == 0 || !mb_use_ext_pgs)
+		return (false);
 	siz = sizeof(enable);
 	error = kernel_sysctlbyname(curthread, "kern.ipc.tls.enable",
 	    &enable, &siz, NULL, 0, NULL, 0);
@@ -684,6 +688,10 @@ rpctls_getinfo(u_int *maxlenp)
 	error = kernel_sysctlbyname(curthread, "kern.ipc.tls.maxlen",
 	    &maxlen, &siz, NULL, 0, NULL, 0);
 	if (error != 0)
+		return (false);
+	if (rpctlscd_run && rpctls_connect_handle == NULL)
+		return (false);
+	if (rpctlssd_run && rpctls_server_handle == NULL)
 		return (false);
 	*maxlenp = maxlen;
 	return (enable);

@@ -5877,19 +5877,14 @@ nfscl_doiods(vnode_t vp, struct uio *uiop, int *iomode, int *must_commit,
 						iovlen = uiop->uio_iov->iov_len;
 						doextpgs = false;
 						maxextsiz = 0;
-						if ((NFSHASTLS(nmp) ||
-						    (nfs_use_ext_pgs &&
-						    xfer > MCLBYTES)) &&
-						    PMAP_HAS_DMAP != 0) {
-							doextpgs = true;
-							maxextsiz = 16384;
 #ifdef KERN_TLS
-							if (rpctls_getinfo(&maxlen))
-								maxextsiz = min(
-								    TLS_MAX_MSG_SIZE_V10_2,
-								    maxlen);
-#endif
+						if (NFSHASTLS(nmp) &&
+						    rpctls_getinfo(&maxlen,
+						    false, false)) {
+							doextpgs = true;
+							maxextsiz = maxlen;
 						}
+#endif
 						m = nfsm_uiombuflist(doextpgs,
 						    maxextsiz, uiop, len, NULL,
 						    NULL);

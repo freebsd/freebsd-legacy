@@ -361,15 +361,13 @@ nfscl_reqstart(struct nfsrv_descript *nd, int procnum, struct nfsmount *nmp,
 	}
 	nd->nd_procnum = procnum;
 	nd->nd_repstat = 0;
-	nd->nd_maxextsiz = 16384;
-	if (use_ext && PMAP_HAS_DMAP != 0) {
-		nd->nd_flag |= ND_EXTPG;
+	nd->nd_maxextsiz = 0;
 #ifdef KERN_TLS
-		if (rpctls_getinfo(&maxlen))
-			nd->nd_maxextsiz = min(TLS_MAX_MSG_SIZE_V10_2,
-			    maxlen);
-#endif
+	if (use_ext && rpctls_getinfo(&maxlen, false, false)) {
+		nd->nd_flag |= ND_EXTPG;
+		nd->nd_maxextsiz = maxlen;
 	}
+#endif
 
 	/*
 	 * Get the first mbuf for the request.
