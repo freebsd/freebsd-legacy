@@ -56,7 +56,6 @@ static int nfs_cbproc(struct nfsrv_descript *, u_int32_t);
 extern u_long sb_max_adj;
 extern int nfs_numnfscbd;
 extern int nfscl_debuglevel;
-extern bool nfs_use_ext_pgs;
 
 /*
  * NFS client system calls for handling callbacks.

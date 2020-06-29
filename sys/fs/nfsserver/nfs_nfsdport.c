@@ -77,7 +77,6 @@ extern struct nfsdontlisthead nfsrv_dontlisthead;
 extern volatile int nfsrv_dontlistlen;
 extern volatile int nfsrv_devidcnt;
 extern int nfsrv_maxpnfsmirror;
-extern bool nfs_use_ext_pgs;
 struct vfsoptlist nfsv4root_opt, nfsv4root_newopt;
 NFSDLOCKMUTEX;
 NFSSTATESPINLOCK;
@@ -2115,6 +2114,13 @@ again:
 	vput(vp);
 
 	/*
+	 * If the siz and cnt are larger than MCLBYTES, use ext_pgs for TLS.
+	 */
+	if ((nd->nd_flag & (ND_EXTPG | ND_TLS)) == ND_TLS && siz > MCLBYTES &&
+	    cnt > MCLBYTES)
+		nd->nd_flag |= ND_EXTPG;
+
+	/*
 	 * dirlen is the size of the reply, including all XDR and must
 	 * not exceed cnt. For NFSv2, RFC1094 didn't clearly indicate
 	 * if the XDR should be included in "count", but to be safe, we do.
@@ -2430,6 +2436,16 @@ again:
 		} else if (r == 0)
 			vput(nvp);
 	}
+
+	/*
+	 * If the reply is likely to exceed MCLBYTES, then use TLS.
+	 * It is difficult to predict how large each entry will be and
+	 * how many entries have been read, so just assume the directory
+	 * entries grow by a factor of 4 when attributes are included.
+	 */
+	if ((nd->nd_flag & (ND_EXTPG | ND_TLS)) == ND_TLS && cnt > MCLBYTES &&
+	    siz > MCLBYTES / 4)
+		nd->nd_flag |= ND_EXTPG;
 
 	/*
 	 * Save this position, in case there is an error before one entry
@@ -6275,12 +6291,10 @@ nfsvno_getxattr(struct vnode *vp, char *name, uint32_t maxresp,
 	len = siz;
 	tlen = NFSM_RNDUP(len);
 	/*
-	 * If the cnt is larger than MCLBYTES, use ext_pgs if
-	 * possible.
+	 * If the cnt is larger than MCLBYTES, use ext_pgs for TLS.
 	 * Always use ext_pgs if ND_EXTPG is set.
 	 */
-	if ((flag & ND_EXTPG) != 0 || (tlen > MCLBYTES &&
-	    PMAP_HAS_DMAP != 0 && ((flag & ND_TLS) != 0 || nfs_use_ext_pgs)))
+	if ((flag & ND_EXTPG) != 0 || ((flag & ND_TLS) != 0 && tlen > MCLBYTES))
 		uiop->uio_iovcnt = nfsrv_createiovec_extpgs(tlen, maxextsiz,
 		    &m, &m2, &iv);
 	else

@@ -77,7 +77,6 @@ extern int nfscl_debuglevel;
 extern int nfs_pnfsiothreads;
 extern u_long sb_max_adj;
 extern int nfs_maxcopyrange;
-extern bool nfs_use_ext_pgs;
 NFSCLSTATEMUTEX;
 int nfstest_outofseq = 0;
 int nfscl_assumeposixlocks = 1;
@@ -1798,8 +1797,7 @@ nfsrpc_writerpc(vnode_t vp, struct uio *uiop, int *iomode,
 
 	KASSERT(uiop->uio_iovcnt == 1, ("nfs: writerpc iovcnt > 1"));
 	use_ext = false;
-	if ((NFSHASTLS(nmp) || nfs_use_ext_pgs) &&
-	    PMAP_HAS_DMAP != 0)
+	if (NFSHASTLS(nmp))
 		use_ext = true;
 	*attrflagp = 0;
 	tsiz = uiop->uio_resid;
@@ -8495,8 +8493,7 @@ nfsrpc_setextattr(vnode_t vp, const char *name, struct uio *uiop,
 
 	*attrflagp = 0;
 	use_ext = false;
-	if (uiop->uio_resid > MCLBYTES && (NFSHASTLS(nmp) ||
-	    nfs_use_ext_pgs) && PMAP_HAS_DMAP != 0)
+	if (uiop->uio_resid > MCLBYTES && NFSHASTLS(nmp))
 		use_ext = true;
 	nfscl_reqstart(nd, NFSPROC_SETEXTATTR, nmp,
 	    VTONFS(vp)->n_fhp->nfh_fh, VTONFS(vp)->n_fhp->nfh_len, NULL,

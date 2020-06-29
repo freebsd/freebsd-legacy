@@ -67,7 +67,6 @@ extern u_long sb_max_adj;
 extern int nfsrv_pnfsatime;
 extern int nfsrv_maxpnfsmirror;
 extern int nfs_maxcopyrange;
-extern bool nfs_use_ext_pgs;
 
 static int	nfs_async = 0;
 SYSCTL_DECL(_vfs_nfsd);
@@ -857,13 +856,11 @@ nfsrvd_read(struct nfsrv_descript *nd, __unused int isdgram,
 	m3 = NULL;
 	if (cnt > 0) {
 		/*
-		 * If the cnt is larger than MCLBYTES, use ext_pgs if
-		 * possible.
+		 * If the cnt is larger than MCLBYTES, use ext_pgs for TLS.
 		 * Always use ext_pgs if ND_EXTPG is set.
 		 */
-		if ((nd->nd_flag & ND_EXTPG) != 0 || (PMAP_HAS_DMAP != 0 &&
-		    ((nd->nd_flag & ND_TLS) != 0 || (nfs_use_ext_pgs &&
-		    cnt > MCLBYTES))))
+		if ((nd->nd_flag & ND_EXTPG) != 0 ||
+		    ((nd->nd_flag & ND_TLS) != 0 && cnt > MCLBYTES))
 			nd->nd_repstat = nfsvno_read(vp, off, cnt, nd->nd_cred,
 			    nd->nd_maxextsiz, p, &m3, &m2);
 		else

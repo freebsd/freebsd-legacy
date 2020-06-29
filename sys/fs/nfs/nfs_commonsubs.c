@@ -100,10 +100,6 @@ int nfs_maxcopyrange = 10 * 1024 * 1024;
 SYSCTL_INT(_vfs_nfs, OID_AUTO, maxcopyrange, CTLFLAG_RW,
     &nfs_maxcopyrange, 0, "Max size of a Copy so RPC times reasonable");
 
-bool nfs_use_ext_pgs = false;
-SYSCTL_BOOL(_vfs_nfs, OID_AUTO, use_ext_pgs, CTLFLAG_RW, &nfs_use_ext_pgs,
-    0, "Set true to use TCP");
-
 /*
  * This array of structures indicates, for V4:
  * retfh - which of 3 types of calling args are used
