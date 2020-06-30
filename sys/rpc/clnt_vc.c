@@ -895,12 +895,21 @@ clnt_vc_destroy(CLIENT *cl)
 			 * If the upcall fails, the socket has
 			 * probably been closed via the rpctlscd
 			 * daemon having crashed or been
-			 * restarted.
+			 * restarted, so ignore return stat.
 			 */
 			stat = rpctls_cl_disconnect(ct->ct_sslsec,
 			    ct->ct_sslusec, ct->ct_sslrefno,
 			    &reterr);
-		} else {
+		} else if ((ct->ct_rcvstate & RPCRCVSTATE_TLSHANDSHAKE) == 0) {
+			/*
+			 * If the TLS handshake is in progress, leave the
+			 * socket so that it will closed by the daemon.
+			 * This can only occur if the daemon is waiting for
+			 * an openssl call like SSL_connect() for a long
+			 * time.  The call will normally eventually fail and
+			 * then the daemon will close the socket, so do not
+			 * do it here.
+			 */
 			soshutdown(so, SHUT_WR);
 			soclose(so);
 		}
@@ -1278,17 +1287,20 @@ clnt_vc_dotlsupcall(void *data)
 	enum clnt_stat ret;
 	uint32_t reterr;
 
-printf("TLSupcall started\n");
 	mtx_lock(&ct->ct_lock);
 	ct->ct_rcvstate |= RPCRCVSTATE_UPCALLTHREAD;
 	while (!ct->ct_closed) {
 		if ((ct->ct_rcvstate & RPCRCVSTATE_UPCALLNEEDED) != 0) {
 			ct->ct_rcvstate &= ~RPCRCVSTATE_UPCALLNEEDED;
 			ct->ct_rcvstate |= RPCRCVSTATE_UPCALLINPROG;
-			mtx_unlock(&ct->ct_lock);
-			ret = rpctls_cl_handlerecord(ct->ct_sslsec, ct->ct_sslusec,
-			    ct->ct_sslrefno, &reterr);
-			mtx_lock(&ct->ct_lock);
+			if (ct->ct_sslrefno != 0) {
+				mtx_unlock(&ct->ct_lock);
+printf("at handlerecord\n");
+				ret = rpctls_cl_handlerecord(ct->ct_sslsec,
+				    ct->ct_sslusec, ct->ct_sslrefno, &reterr);
+printf("aft handlerecord=%d\n", ret);
+				mtx_lock(&ct->ct_lock);
+			}
 			ct->ct_rcvstate &= ~RPCRCVSTATE_UPCALLINPROG;
 			if (ret == RPC_SUCCESS && reterr == RPCTLSERR_OK)
 				ct->ct_rcvstate |= RPCRCVSTATE_NORMAL;
@@ -1309,6 +1321,5 @@ printf("TLSupcall started\n");
 	ct->ct_rcvstate &= ~RPCRCVSTATE_UPCALLTHREAD;
 	wakeup(&ct->ct_sslrefno);
 	mtx_unlock(&ct->ct_lock);
-printf("TLSupcall exit\n");
 	kthread_exit();
 }

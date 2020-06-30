@@ -114,8 +114,9 @@ sys_rpctls_syscall(struct thread *td, struct rpctls_syscall_args *uap)
 	struct file *fp;
 	struct socket *so;
 	char path[MAXPATHLEN];
-	int fd = -1, error, retry_count = 5;
+	int fd = -1, error, try_count;
 	CLIENT *cl, *oldcl;
+	struct timeval timeo;
 #ifdef KERN_TLS
 	u_int maxlen;
 #endif
@@ -155,12 +156,26 @@ printf("got cl=%p\n", cl);
 			/*
 			 * The number of retries defaults to INT_MAX, which
 			 * effectively means an infinite, uninterruptable loop. 
-			 * Limiting it to five retries keeps it from running
-			 * forever.
+			 * Set the try_count to 1 so that no retries of the
+			 * RPC occur.  Since it is an upcall to a local daemon,
+			 * requests should not be lost and doing one of these
+			 * RPCs multiple times is not correct.
+			 * SSL_connect() in the openssl library has been
+			 * observed to take 6 minutes when the server is not
+			 * responding to the handshake records, so set the
+			 * timeout to 10min.  If it times out before the
+			 * daemon completes the RPC, that should still be ok,
+			 * since the daemon is single threaded and will not
+			 * do further RPCs until the openssl library call
+			 * returns (usually with a failure).
 			 */
-			if (cl != NULL)
-				CLNT_CONTROL(cl, CLSET_RETRIES, &retry_count);
-			else
+			if (cl != NULL) {
+				try_count = 1;
+				CLNT_CONTROL(cl, CLSET_RETRIES, &try_count);
+				timeo.tv_sec = 10 * 60;
+				timeo.tv_usec = 0;
+				CLNT_CONTROL(cl, CLSET_TIMEOUT, &timeo);
+			} else
 				error = EINVAL;
 		}
 	
@@ -203,12 +218,20 @@ printf("got cl=%p\n", cl);
 			/*
 			 * The number of retries defaults to INT_MAX, which
 			 * effectively means an infinite, uninterruptable loop. 
-			 * Limiting it to five retries keeps it from running
-			 * forever.
+			 * Doing even one retry of these upcalls is probably
+			 * not a good plan, since repeating the openssl
+			 * operations are not likely to work.
+			 * The timeout is set fairly large, since some
+			 * openssl operations such as SSL_connect() take a
+			 * long time to return upon failure.
 			 */
-			if (cl != NULL)
-				CLNT_CONTROL(cl, CLSET_RETRIES, &retry_count);
-			else
+			if (cl != NULL) {
+				try_count = 1;
+				CLNT_CONTROL(cl, CLSET_RETRIES, &try_count);
+				timeo.tv_sec = 2 * 60;
+				timeo.tv_usec = 0;
+				CLNT_CONTROL(cl, CLSET_TIMEOUT, &timeo);
+			} else
 				error = EINVAL;
 		}
 	
@@ -249,33 +272,41 @@ printf("srvshutd oldcl=%p\n", oldcl);
 		break;
 	case RPCTLS_SYSC_CLSOCKET:
 printf("In connect\n");
-		error = falloc(td, &fp, &fd, 0);
-		if (error == 0) {
+		mtx_lock(&rpctls_connect_lock);
+		so = rpctls_connect_so;
+		rpctls_connect_so = NULL;
+		mtx_unlock(&rpctls_connect_lock);
+		if (so != NULL) {
+			error = falloc(td, &fp, &fd, 0);
 printf("falloc=%d fd=%d\n", error, fd);
-			mtx_lock(&rpctls_connect_lock);
-			so = rpctls_connect_so;
-			rpctls_connect_so = NULL;
-			mtx_unlock(&rpctls_connect_lock);
-			finit(fp, FREAD | FWRITE, DTYPE_SOCKET, so, &socketops);
-			fdrop(fp, td);	/* Drop fp reference. */
-			td->td_retval[0] = fd;
-		}
-printf("returning=%d\n", fd);
+			if (error == 0) {
+				finit(fp, FREAD | FWRITE, DTYPE_SOCKET, so,
+				    &socketops);
+				fdrop(fp, td);	/* Drop fp reference. */
+				td->td_retval[0] = fd;
+			}
+		} else
+			error = EPERM;
+printf("clsocket err=%d fd=%d\n", error, fd);
 		break;
 	case RPCTLS_SYSC_SRVSOCKET:
 printf("In srvconnect\n");
-		error = falloc(td, &fp, &fd, 0);
-		if (error == 0) {
+		mtx_lock(&rpctls_server_lock);
+		so = rpctls_server_so;
+		rpctls_server_so = NULL;
+		mtx_unlock(&rpctls_server_lock);
+		if (so != NULL) {
+			error = falloc(td, &fp, &fd, 0);
 printf("falloc=%d fd=%d\n", error, fd);
-			mtx_lock(&rpctls_server_lock);
-			so = rpctls_server_so;
-			rpctls_server_so = NULL;
-			mtx_unlock(&rpctls_server_lock);
-			finit(fp, FREAD | FWRITE, DTYPE_SOCKET, so, &socketops);
-			fdrop(fp, td);	/* Drop fp reference. */
-			td->td_retval[0] = fd;
-		}
-printf("srv returning=%d\n", fd);
+			if (error == 0) {
+				finit(fp, FREAD | FWRITE, DTYPE_SOCKET, so,
+				    &socketops);
+				fdrop(fp, td);	/* Drop fp reference. */
+				td->td_retval[0] = fd;
+			}
+		} else
+			error = EPERM;
+printf("srvsocket err=%d fd=%d\n", error, fd);
 		break;
 	default:
 		error = EINVAL;
