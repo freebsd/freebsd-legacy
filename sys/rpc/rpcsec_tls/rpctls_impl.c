@@ -218,17 +218,23 @@ printf("got cl=%p\n", cl);
 			/*
 			 * The number of retries defaults to INT_MAX, which
 			 * effectively means an infinite, uninterruptable loop. 
-			 * Doing even one retry of these upcalls is probably
-			 * not a good plan, since repeating the openssl
-			 * operations are not likely to work.
-			 * The timeout is set fairly large, since some
-			 * openssl operations such as SSL_connect() take a
-			 * long time to return upon failure.
+			 * Set the try_count to 1 so that no retries of the
+			 * RPC occur.  Since it is an upcall to a local daemon,
+			 * requests should not be lost and doing one of these
+			 * RPCs multiple times is not correct.
+			 * SSL_connect() in the openssl library has been
+			 * observed to take 6 minutes when the server is not
+			 * responding to the handshake records, so set the
+			 * timeout to 10min.  If it times out before the
+			 * daemon completes the RPC, that should still be ok,
+			 * since the daemon is single threaded and will not
+			 * do further RPCs until the openssl library call
+			 * returns (usually with a failure).
 			 */
 			if (cl != NULL) {
 				try_count = 1;
 				CLNT_CONTROL(cl, CLSET_RETRIES, &try_count);
-				timeo.tv_sec = 2 * 60;
+				timeo.tv_sec = 10 * 60;
 				timeo.tv_usec = 0;
 				CLNT_CONTROL(cl, CLSET_TIMEOUT, &timeo);
 			} else
