@@ -65,6 +65,8 @@
 # lockf5.sh	Spinning threads seen					20160718
 # ifconfig.sh	WiP							20190211
 # ifconfig2.sh	WiP							20190211
+# marcus5.sh	https://people.freebsd.org/~pho/stress/log/mjguzik028.txt	20200624
+# marcus6.sh	WiP							20200626
 # maxvnodes.sh	Only supposed to work in single user mode		20190412
 # maxvnodes2.sh	Only supposed to work in single user mode		20190412
 # memguard.sh	Waiting for fix commit
@@ -103,6 +105,9 @@
 # syzkaller11.sh	WiP						20200419
 # syzkaller13.sh	WiP						20200607
 # syzkaller15.sh	WiP						20200617
+# syzkaller16.sh	WiP						20200620
+# syzkaller17.sh	WiP						20200630
+# syzkaller18.sh	WiP						20200630
 # ucom.sh	Stuck in tail -F					20180129
 # umountf7.sh	panic: handle_written_inodeblock: live inodedep ...	20190219
 # umountf9.sh	panic: handle_written_inodeblock: live inodedep ...	20170221
