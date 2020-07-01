@@ -704,8 +704,10 @@ printf("authtls: null reply=%d\n", call_stat);
 			xprt->xp_gidp = gidp;
 printf("got uid=%d ngrps=%d gidp=%p\n", uid, ngrps, gidp);
 		}
-	} else if (stat == RPC_TIMEDOUT)
-		xprt->xp_upcallset = 0;	/* upcall cleared by soshutdown(). */
+	} else {
+		/* Mark that TLS handshake failed. */
+		xprt->xp_tls = RPCTLS_FLAGS_HANDSHFAIL;
+	}
 	sx_xunlock(&xprt->xp_lock);
 	xprt_active(xprt);		/* Harmless if already active. */
 printf("authtls: aft handshake stat=%d\n", stat);

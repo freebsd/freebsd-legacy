@@ -48,6 +48,7 @@ int	rpctls_syscall(int, const char *);
 #define	RPCTLS_FLAGS_VERIFIED	0x08
 #define	RPCTLS_FLAGS_DISABLED	0x10
 #define	RPCTLS_FLAGS_CERTUSER	0x20
+#define	RPCTLS_FLAGS_HANDSHFAIL	0x40
 
 /* Error return values for upcall rpcs. */
 #define	RPCTLSERR_OK		0
