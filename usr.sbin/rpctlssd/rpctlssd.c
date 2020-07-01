@@ -382,7 +382,7 @@ rpctlssd_verbose_out("rpctlsd_connect_svc s=%d\n", s);
 		    "accept failed\n");
 		/*
 		 * For RPC-over-TLS, this upcall is expected
-		 * to close off the socket.
+		 * to close off the socket upon handshake failure.
 		 */
 		close(s);
 		return (FALSE);
