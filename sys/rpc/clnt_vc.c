@@ -775,12 +775,15 @@ printf("backch tls=0x%x xprt=%p\n", xprt->xp_tls, xprt);
 		ct->ct_sslsec = *p++;
 		ct->ct_sslusec = *p++;
 		ct->ct_sslrefno = *p;
-		mtx_unlock(&ct->ct_lock);
-		/* Start the kthread that handles upcalls. */
-		error = kthread_add(clnt_vc_dotlsupcall, ct,
-		    NULL, NULL, 0, 0, "krpctls%u", thrdnum++);
-		if (error != 0)
-			panic("Can't add KRPC thread error %d", error);
+		if (ct->ct_sslrefno != RPCTLS_REFNO_HANDSHAKE) {
+			mtx_unlock(&ct->ct_lock);
+			/* Start the kthread that handles upcalls. */
+			error = kthread_add(clnt_vc_dotlsupcall, ct,
+			    NULL, NULL, 0, 0, "krpctls%u", thrdnum++);
+			if (error != 0)
+				panic("Can't add KRPC thread error %d", error);
+		} else
+			mtx_unlock(&ct->ct_lock);
 		return (TRUE);
 
 	case CLSET_BLOCKRCV:
@@ -892,24 +895,22 @@ clnt_vc_destroy(CLIENT *cl)
 	if (so) {
 		if (ct->ct_sslrefno != 0) {
 			/*
-			 * If the upcall fails, the socket has
-			 * probably been closed via the rpctlscd
-			 * daemon having crashed or been
-			 * restarted, so ignore return stat.
+			 * If the TLS handshake is in progress, the upcall
+			 * will fail, but the socket should be closed by the
+			 * daemon, since the connect upcall has just failed.
 			 */
-			stat = rpctls_cl_disconnect(ct->ct_sslsec,
-			    ct->ct_sslusec, ct->ct_sslrefno,
-			    &reterr);
-		} else if ((ct->ct_rcvstate & RPCRCVSTATE_TLSHANDSHAKE) == 0) {
-			/*
-			 * If the TLS handshake is in progress, leave the
-			 * socket so that it will closed by the daemon.
-			 * This can only occur if the daemon is waiting for
-			 * an openssl call like SSL_connect() for a long
-			 * time.  The call will normally eventually fail and
-			 * then the daemon will close the socket, so do not
-			 * do it here.
-			 */
+			if (ct->ct_sslrefno != RPCTLS_REFNO_HANDSHAKE) {
+				/*
+				 * If the upcall fails, the socket has
+				 * probably been closed via the rpctlscd
+				 * daemon having crashed or been
+				 * restarted, so ignore return stat.
+				 */
+				stat = rpctls_cl_disconnect(ct->ct_sslsec,
+				    ct->ct_sslusec, ct->ct_sslrefno,
+				    &reterr);
+			}
+		} else {
 			soshutdown(so, SHUT_WR);
 			soclose(so);
 		}
@@ -1293,7 +1294,8 @@ clnt_vc_dotlsupcall(void *data)
 		if ((ct->ct_rcvstate & RPCRCVSTATE_UPCALLNEEDED) != 0) {
 			ct->ct_rcvstate &= ~RPCRCVSTATE_UPCALLNEEDED;
 			ct->ct_rcvstate |= RPCRCVSTATE_UPCALLINPROG;
-			if (ct->ct_sslrefno != 0) {
+			if (ct->ct_sslrefno != 0 && ct->ct_sslrefno !=
+			    RPCTLS_REFNO_HANDSHAKE) {
 				mtx_unlock(&ct->ct_lock);
 printf("at handlerecord\n");
 				ret = rpctls_cl_handlerecord(ct->ct_sslsec,

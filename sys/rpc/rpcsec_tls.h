@@ -78,6 +78,9 @@ bool		rpctls_getinfo(u_int *maxlen, bool rpctlscd_run,
 /* String for AUTH_TLS reply verifier. */
 #define	RPCTLS_START_STRING	"STARTTLS"
 
+/* ssl refno value to indicate TLS handshake being done. */
+#define	RPCTLS_REFNO_HANDSHAKE	0xFFFFFFFFFFFFFFFFULL
+
 #endif	/* _KERNEL */
 
 #endif	/* _RPC_RPCSEC_TLS_H_ */
