@@ -160,19 +160,16 @@ printf("got cl=%p\n", cl);
 			 * RPC occur.  Since it is an upcall to a local daemon,
 			 * requests should not be lost and doing one of these
 			 * RPCs multiple times is not correct.
-			 * SSL_connect() in the openssl library has been
-			 * observed to take 6 minutes when the server is not
-			 * responding to the handshake records, so set the
-			 * timeout to 10min.  If it times out before the
-			 * daemon completes the RPC, that should still be ok,
-			 * since the daemon is single threaded and will not
-			 * do further RPCs until the openssl library call
-			 * returns (usually with a failure).
+			 * If the server is not working correctly, the
+			 * daemon can get stuck in SSL_connect() trying
+			 * to read data from the socket during the upcall.
+			 * Set a timeout (currently 15sec) and assume the
+			 * daemon is hung when the timeout occurs.
 			 */
 			if (cl != NULL) {
 				try_count = 1;
 				CLNT_CONTROL(cl, CLSET_RETRIES, &try_count);
-				timeo.tv_sec = 10 * 60;
+				timeo.tv_sec = 15;
 				timeo.tv_usec = 0;
 				CLNT_CONTROL(cl, CLSET_TIMEOUT, &timeo);
 			} else
@@ -222,19 +219,13 @@ printf("got cl=%p\n", cl);
 			 * RPC occur.  Since it is an upcall to a local daemon,
 			 * requests should not be lost and doing one of these
 			 * RPCs multiple times is not correct.
-			 * SSL_connect() in the openssl library has been
-			 * observed to take 6 minutes when the server is not
-			 * responding to the handshake records, so set the
-			 * timeout to 10min.  If it times out before the
-			 * daemon completes the RPC, that should still be ok,
-			 * since the daemon is single threaded and will not
-			 * do further RPCs until the openssl library call
-			 * returns (usually with a failure).
+			 * Set a timeout (currently 15sec) and assume that
+			 * the daemon is hung if a timeout occurs.
 			 */
 			if (cl != NULL) {
 				try_count = 1;
 				CLNT_CONTROL(cl, CLSET_RETRIES, &try_count);
-				timeo.tv_sec = 10 * 60;
+				timeo.tv_sec = 15;
 				timeo.tv_usec = 0;
 				CLNT_CONTROL(cl, CLSET_TIMEOUT, &timeo);
 			} else
@@ -413,6 +404,15 @@ printf("aft connect upcall=%d\n", stat);
 			*sslp++ = res.usec;
 			*sslp = res.ssl;
 		}
+	} else if (stat == RPC_TIMEDOUT) {
+		/*
+		 * Do a shutdown on the socket, since the daemon is probably
+		 * stuck in SSL_connect() trying to read the socket.
+		 * Do not soclose() the socket, since the daemon will close()
+		 * the socket after SSL_connect() returns an error.
+		 */
+		soshutdown(so, SHUT_RD);
+printf("did soshutdown rd\n");
 	}
 	CLNT_RELEASE(cl);
 
@@ -595,6 +595,15 @@ printf("got uid=%d ngrps=%d gidv=%p gids=%p\n", *uid, *ngrps, gidv, gids);
 			for (i = 0; i < *ngrps; i++)
 				*gidp++ = *gidv++;
 		}
+	} else if (stat == RPC_TIMEDOUT) {
+		/*
+		 * Do a shutdown on the socket, since the daemon is probably
+		 * stuck in SSL_accept() trying to read the socket.
+		 * Do not soclose() the socket, since the daemon will close()
+		 * the socket after SSL_accept() returns an error.
+		 */
+		soshutdown(so, SHUT_RD);
+printf("did soshutdown rd\n");
 	}
 printf("aft server upcall stat=%d flags=0x%x\n", stat, res.flags);
 	CLNT_RELEASE(cl);
@@ -695,7 +704,8 @@ printf("authtls: null reply=%d\n", call_stat);
 			xprt->xp_gidp = gidp;
 printf("got uid=%d ngrps=%d gidp=%p\n", uid, ngrps, gidp);
 		}
-	}
+	} else if (stat == RPC_TIMEDOUT)
+		xprt->xp_upcallset = 0;	/* upcall cleared by soshutdown(). */
 	sx_xunlock(&xprt->xp_lock);
 	xprt_active(xprt);		/* Harmless if already active. */
 printf("authtls: aft handshake stat=%d\n", stat);

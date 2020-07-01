@@ -831,8 +831,10 @@ clnt_vc_close(CLIENT *cl)
 		mtx_unlock(&ct->ct_lock);
 
 		SOCKBUF_LOCK(&ct->ct_socket->so_rcv);
-		soupcall_clear(ct->ct_socket, SO_RCV);
-		clnt_vc_upcallsdone(ct);
+		if (ct->ct_socket->so_rcv.sb_upcall != NULL) {
+			soupcall_clear(ct->ct_socket, SO_RCV);
+			clnt_vc_upcallsdone(ct);
+		}
 		SOCKBUF_UNLOCK(&ct->ct_socket->so_rcv);
 
 		/*
