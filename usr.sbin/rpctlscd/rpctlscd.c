@@ -318,7 +318,6 @@ rpctlscd_connect_1_svc(void *argp,
 	rpctlscd_verbose_out("rpctlsd_connect: started\n");
 	/* Get the socket fd from the kernel. */
 	s = rpctls_syscall(RPCTLS_SYSC_CLSOCKET, "");
-rpctlscd_verbose_out("rpctlsd_connect s=%d\n", s);
 	if (s < 0) {
 		result->reterr = RPCTLSERR_NOSOCKET;
 		return (TRUE);
@@ -345,7 +344,6 @@ rpctlscd_verbose_out("rpctlsd_connect s=%d\n", s);
 		 * For RPC-over-TLS, this upcall is expected
 		 * to close off the socket.
 		 */
-		shutdown(s, SHUT_WR);
 		close(s);
 		return (TRUE);
 	}
@@ -387,7 +385,6 @@ rpctlscd_handlerecord_1_svc(struct rpctlscd_handlerecord_arg *argp,
 		if (ret <= 0) {
 			/* Check to see if this was a close alert. */
 			ret = SSL_get_shutdown(slp->ssl);
-rpctlscd_verbose_out("get_shutdown2=%d\n", ret);
 			if ((ret & (SSL_SENT_SHUTDOWN |
 			    SSL_RECEIVED_SHUTDOWN)) == SSL_RECEIVED_SHUTDOWN)
 				SSL_shutdown(slp->ssl);
@@ -424,7 +421,6 @@ rpctlscd_disconnect_1_svc(struct rpctlscd_disconnect_arg *argp,
 		    slp->s);
 		LIST_REMOVE(slp, next);
 		ret = SSL_get_shutdown(slp->ssl);
-rpctlscd_verbose_out("get_shutdown0=%d\n", ret);
 		/*
 		 * Do an SSL_shutdown() unless a close alert has
 		 * already been sent.
@@ -660,7 +656,8 @@ rpctls_connect(SSL_CTX *ctx, int s)
 	rpctlscd_verbose_out("rpctls_connect: BIO_get_ktls_send=%d\n", ret);
 	if (ret != 0) {
 		ret = BIO_get_ktls_recv(SSL_get_rbio(ssl));
-		rpctlscd_verbose_out("rpctls_connect: BIO_get_ktls_recv=%d\n", ret);
+		rpctlscd_verbose_out("rpctls_connect: BIO_get_ktls_recv=%d\n",
+		    ret);
 	}
 	if (ret == 0) {
 		if (rpctls_debug_level == 0)
