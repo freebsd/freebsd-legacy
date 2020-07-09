@@ -5759,11 +5759,11 @@ nfscl_doiods(vnode_t vp, struct uio *uiop, int *iomode, int *must_commit,
     uint32_t rwaccess, int docommit, struct ucred *cred, NFSPROC_T *p)
 {
 	struct nfsnode *np = VTONFS(vp);
-	struct nfsmount *nmp = VFSTONFS(vnode_mount(vp));
+	struct nfsmount *nmp = VFSTONFS(vp->v_mount);
 	struct nfscllayout *layp;
 	struct nfscldevinfo *dip;
 	struct nfsclflayout *rflp;
-	struct mbuf *m, *m2;
+	struct mbuf *m;
 	struct nfsclwritedsdorpc *drpc, *tdrpc;
 	nfsv4stateid_t stateid;
 	struct ucred *newcred;
@@ -5775,11 +5775,6 @@ nfscl_doiods(vnode_t vp, struct uio *uiop, int *iomode, int *must_commit,
 	size_t iovlen = 0;
 	off_t offs = 0;
 	ssize_t resid = 0;
-	int maxextsiz;
-	bool doextpgs;
-#ifdef KERN_TLS
-	u_int maxlen;
-#endif
 
 	if (!NFSHASPNFS(nmp) || nfscl_enablecallb == 0 || nfs_numnfscbd == 0 ||
 	    (np->n_flag & NNOLAYOUT) != 0)
@@ -5873,19 +5868,8 @@ nfscl_doiods(vnode_t vp, struct uio *uiop, int *iomode, int *must_commit,
 						iovbase =
 						    uiop->uio_iov->iov_base;
 						iovlen = uiop->uio_iov->iov_len;
-						doextpgs = false;
-						maxextsiz = 0;
-#ifdef KERN_TLS
-						if (NFSHASTLS(nmp) &&
-						    rpctls_getinfo(&maxlen,
-						    false, false)) {
-							doextpgs = true;
-							maxextsiz = maxlen;
-						}
-#endif
-						m = nfsm_uiombuflist(doextpgs,
-						    maxextsiz, uiop, len, NULL,
-						    NULL);
+						m = nfsm_uiombuflist(uiop, len,
+						    NULL, NULL);
 					}
 					tdrpc = drpc = malloc(sizeof(*drpc) *
 					    (mirrorcnt - 1), M_TEMP, M_WAITOK |
@@ -5893,12 +5877,6 @@ nfscl_doiods(vnode_t vp, struct uio *uiop, int *iomode, int *must_commit,
 				}
 			}
 			for (i = firstmirror; i < mirrorcnt && error == 0; i++){
-				if (m != NULL && i < mirrorcnt - 1)
-					m2 = m_copym(m, 0, M_COPYALL, M_WAITOK);
-				else {
-					m2 = m;
-					m = NULL;
-				}
 				if ((layp->nfsly_flags & NFSLY_FLEXFILE) != 0) {
 					dev = rflp->nfsfl_ffm[i].dev;
 					dip = nfscl_getdevinfo(nmp->nm_clp, dev,
@@ -5915,7 +5893,7 @@ nfscl_doiods(vnode_t vp, struct uio *uiop, int *iomode, int *must_commit,
 						    uiop, iomode, must_commit,
 						    &eof, &stateid, rwaccess,
 						    dip, layp, rflp, off, xfer,
-						    i, docommit, m2, tdrpc,
+						    i, docommit, m, tdrpc,
 						    newcred, p);
 					else
 						error = nfscl_doflayoutio(vp,
@@ -5924,13 +5902,12 @@ nfscl_doiods(vnode_t vp, struct uio *uiop, int *iomode, int *must_commit,
 						    dip, layp, rflp, off, xfer,
 						    docommit, newcred, p);
 					nfscl_reldevinfo(dip);
-				} else {
-					m_freem(m2);
+				} else
 					error = EIO;
-				}
 				tdrpc++;
 			}
-			m_freem(m);
+			if (m != NULL)
+				m_freem(m);
 			tdrpc = drpc;
 			timo = hz / 50;		/* Wait for 20msec. */
 			if (timo < 1)

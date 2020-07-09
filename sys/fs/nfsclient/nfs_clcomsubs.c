@@ -156,24 +156,20 @@ nfsm_uiombuf(struct nfsrv_descript *nd, struct uio *uiop, int siz)
 /*
  * copies a uio scatter/gather list to an mbuf chain.
  * This version returns the mbuf list and does not use "nd".
- * It allocates mbuf(s) of NFSM_RNDUP(siz) and ensures that
- * it is nul padded to a multiple of 4 bytes.
- * Since mbufs are allocated by this function, they will
- * always have space for an exact multiple of 4 bytes in
- * each mbuf.  This implies that the nul padding can be
- * safely done without checking for available space in
- * the mbuf data area (or page for M_EXTPG mbufs).
  * NOTE: can ony handle iovcnt == 1
+ * This function is used to create an mbuf list for doing writing to
+ * mirrored flexfile DSs.
+ * It cannot be modified to optionally support ext_pgs mbufs until
+ * nfsm_copym() is converted to work for ext_pgs mbufs.
  */
 struct mbuf *
-nfsm_uiombuflist(bool doextpgs, int maxextsiz, struct uio *uiop, int siz,
-    struct mbuf **mbp, char **cpp)
+nfsm_uiombuflist(struct uio *uiop, int siz, struct mbuf **mbp, char **cpp)
 {
 	char *uiocp;
 	struct mbuf *mp, *mp2, *firstmp;
-	int i, left, mlen, rem, xfer;
-	int uiosiz, clflg, bextpg, bextpgsiz = 0;
-	char *mcp, *tcp;
+	int xfer, left, mlen;
+	int uiosiz, clflg;
+	char *tcp;
 
 	KASSERT(uiop->uio_iovcnt == 1, ("nfsm_uiotombuf: iovcnt != 1"));
 
@@ -181,21 +177,11 @@ nfsm_uiombuflist(bool doextpgs, int maxextsiz, struct uio *uiop, int siz,
 		clflg = 1;
 	else
 		clflg = 0;
-	rem = NFSM_RNDUP(siz) - siz;
-	if (doextpgs) {
-		mp = mb_alloc_ext_plus_pages(PAGE_SIZE, M_WAITOK);
-		mcp = (char *)(void *)
-		    PHYS_TO_DMAP(mp->m_epg_pa[0]);
-		bextpgsiz = PAGE_SIZE;
-		bextpg = 0;
-	} else {
-		if (clflg != 0)
-			NFSMCLGET(mp, M_WAITOK);
-		else
-			NFSMGET(mp);
-		mp->m_len = 0;
-		mcp = mtod(mp, char *);
-	}
+	if (clflg != 0)
+		NFSMCLGET(mp, M_WAITOK);
+	else
+		NFSMGET(mp);
+	mp->m_len = 0;
 	firstmp = mp2 = mp;
 	while (siz > 0) {
 		left = uiop->uio_iov->iov_len;
@@ -204,42 +190,27 @@ nfsm_uiombuflist(bool doextpgs, int maxextsiz, struct uio *uiop, int siz,
 			left = siz;
 		uiosiz = left;
 		while (left > 0) {
-			if (doextpgs)
-				mlen = bextpgsiz;
-			else
-				mlen = M_TRAILINGSPACE(mp);
+			mlen = M_TRAILINGSPACE(mp);
 			if (mlen == 0) {
-				if (doextpgs) {
-					mp = nfsm_add_ext_pgs(mp, maxextsiz,
-					    &bextpg);
-					mcp = (char *)(void *)PHYS_TO_DMAP(
-					    mp->m_epg_pa[bextpg]);
-					mlen = bextpgsiz = PAGE_SIZE;
-				} else {
-					if (clflg)
-						NFSMCLGET(mp, M_WAITOK);
-					else
-						NFSMGET(mp);
-					mp->m_len = 0;
-					mcp = mtod(mp, char *);
-					mlen = M_TRAILINGSPACE(mp);
-					mp2->m_next = mp;
-					mp2 = mp;
-				}
+				if (clflg)
+					NFSMCLGET(mp, M_WAITOK);
+				else
+					NFSMGET(mp);
+				mp->m_len = 0;
+				mp2->m_next = mp;
+				mp2 = mp;
+				mlen = M_TRAILINGSPACE(mp);
 			}
 			xfer = (left > mlen) ? mlen : left;
 			if (uiop->uio_segflg == UIO_SYSSPACE)
-				NFSBCOPY(uiocp, mcp, xfer);
+				NFSBCOPY(uiocp, mtod(mp, caddr_t) +
+				    mp->m_len, xfer);
 			else
-				copyin(uiocp, mcp, xfer);
+				copyin(uiocp, mtod(mp, caddr_t) +
+				    mp->m_len, xfer);
 			mp->m_len += xfer;
 			left -= xfer;
 			uiocp += xfer;
-			mcp += xfer;
-			if (doextpgs) {
-				bextpgsiz -= xfer;
-				mp->m_epg_last_len += xfer;
-			}
 			uiop->uio_offset += xfer;
 			uiop->uio_resid -= xfer;
 		}
@@ -249,14 +220,8 @@ nfsm_uiombuflist(bool doextpgs, int maxextsiz, struct uio *uiop, int siz,
 		uiop->uio_iov->iov_len -= uiosiz;
 		siz -= uiosiz;
 	}
-	for (i = 0; i < rem; i++) {
-		*mcp++ = '\0';
-		mp->m_len++;
-		if (doextpgs)
-			mp->m_epg_last_len++;
-	}
 	if (cpp != NULL)
-		*cpp = mcp;
+		*cpp = mtod(mp, caddr_t) + mp->m_len;
 	if (mbp != NULL)
 		*mbp = mp;
 	return (firstmp);
