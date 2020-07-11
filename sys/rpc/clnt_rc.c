@@ -198,16 +198,6 @@ clnt_reconnect_connect(CLIENT *cl)
 		    (struct sockaddr *) &rc->rc_addr, rc->rc_prog, rc->rc_vers,
 		    rc->rc_sendsz, rc->rc_recvsz, rc->rc_intr);
 		if (rc->rc_tls && newclient != NULL) {
-			/*
-			 * Set ssl refno so that clnt_vc_destroy() will not
-			 * close the socket and will leave that for the
-			 * daemon to do.  It is possible that the upcall
-			 * will time out, so that closing the socket via
-			 * the CLNT_CLOSE() below would happen too soon.
-			 */
-			ssl[0] = ssl[1] = 0;
-			ssl[2] = RPCTLS_REFNO_HANDSHAKE;
-			CLNT_CONTROL(newclient, CLSET_TLS, ssl);
 printf("at rpctls_connect\n");
 			stat = rpctls_connect(newclient, so, ssl, &reterr);
 printf("aft rpctls_connect=%d ssl=%jd\n", stat, (uintmax_t)ssl[2]);

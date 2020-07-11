@@ -75,14 +75,16 @@ static struct syscall_helper_data rpctls_syscalls[] = {
 static CLIENT		*rpctls_connect_handle;
 static struct mtx	rpctls_connect_lock;
 static struct socket	*rpctls_connect_so = NULL;
+static CLIENT		*rpctls_connect_cl = NULL;
 static CLIENT		*rpctls_server_handle;
 static struct mtx	rpctls_server_lock;
 static struct socket	*rpctls_server_so = NULL;
+static SVCXPRT		*rpctls_server_xprt = NULL;
 static struct opaque_auth rpctls_null_verf;
 
 static CLIENT		*rpctls_connect_client(void);
 static CLIENT		*rpctls_server_client(void);
-static enum clnt_stat	rpctls_server(struct socket *so,
+static enum clnt_stat	rpctls_server(SVCXPRT *xprt, struct socket *so,
 			    uint32_t *flags, uint64_t *sslp,
 			    uid_t *uid, int *ngrps, gid_t **gids);
 
@@ -113,9 +115,11 @@ sys_rpctls_syscall(struct thread *td, struct rpctls_syscall_args *uap)
         struct netconfig *nconf;
 	struct file *fp;
 	struct socket *so;
+	SVCXPRT *xprt;
 	char path[MAXPATHLEN];
 	int fd = -1, error, try_count;
-	CLIENT *cl, *oldcl;
+	CLIENT *cl, *oldcl, *concl;
+	uint64_t ssl[3];
 	struct timeval timeo;
 #ifdef KERN_TLS
 	u_int maxlen;
@@ -272,11 +276,21 @@ printf("In connect\n");
 		mtx_lock(&rpctls_connect_lock);
 		so = rpctls_connect_so;
 		rpctls_connect_so = NULL;
+		concl = rpctls_connect_cl;
+		rpctls_connect_cl = NULL;
 		mtx_unlock(&rpctls_connect_lock);
 		if (so != NULL) {
 			error = falloc(td, &fp, &fd, 0);
 printf("falloc=%d fd=%d\n", error, fd);
 			if (error == 0) {
+				/*
+				 * Set ssl refno so that clnt_vc_destroy() will
+				 * not close the socket and will leave that for
+				 * the daemon to do.
+				 */
+				ssl[0] = ssl[1] = 0;
+				ssl[2] = RPCTLS_REFNO_HANDSHAKE;
+				CLNT_CONTROL(concl, CLSET_TLS, ssl);
 				finit(fp, FREAD | FWRITE, DTYPE_SOCKET, so,
 				    &socketops);
 				fdrop(fp, td);	/* Drop fp reference. */
@@ -291,11 +305,21 @@ printf("In srvconnect\n");
 		mtx_lock(&rpctls_server_lock);
 		so = rpctls_server_so;
 		rpctls_server_so = NULL;
+		xprt = rpctls_server_xprt;
+		rpctls_server_xprt = NULL;
 		mtx_unlock(&rpctls_server_lock);
 		if (so != NULL) {
 			error = falloc(td, &fp, &fd, 0);
 printf("falloc=%d fd=%d\n", error, fd);
 			if (error == 0) {
+				/*
+				 * Once this file descriptor is associated
+				 * with the socket, it cannot be closed by
+				 * the server side krpc code (svc_vc.c).
+				 */
+				sx_xlock(&xprt->xp_lock);
+				xprt->xp_tls = RPCTLS_FLAGS_HANDSHFAIL;
+				sx_xunlock(&xprt->xp_lock);
 				finit(fp, FREAD | FWRITE, DTYPE_SOCKET, so,
 				    &socketops);
 				fdrop(fp, td);	/* Drop fp reference. */
@@ -387,6 +411,7 @@ printf("aft NULLRPC=%d\n", stat);
 		    "rtlscn", 0);
 	rpctls_connect_busy = true;
 	rpctls_connect_so = so;
+	rpctls_connect_cl = newclient;
 	mtx_unlock(&rpctls_connect_lock);
 printf("rpctls_conect so=%p\n", so);
 
@@ -423,6 +448,7 @@ printf("did soshutdown rd\n");
 	/* Once the upcall is done, the daemon is done with the fp and so. */
 	mtx_lock(&rpctls_connect_lock);
 	rpctls_connect_so = NULL;
+	rpctls_connect_cl = NULL;
 	rpctls_connect_busy = false;
 	wakeup(&rpctls_connect_busy);
 	mtx_unlock(&rpctls_connect_lock);
@@ -551,7 +577,7 @@ printf("aft srv disconnect upcall=%d\n", stat);
 
 /* Do an upcall for a new server socket using TLS. */
 static enum clnt_stat
-rpctls_server(struct socket *so, uint32_t *flags, uint64_t *sslp,
+rpctls_server(SVCXPRT *xprt, struct socket *so, uint32_t *flags, uint64_t *sslp,
     uid_t *uid, int *ngrps, gid_t **gids)
 {
 	enum clnt_stat stat;
@@ -575,6 +601,7 @@ printf("server_client=%p\n", cl);
 		    "rtlssn", 0);
 	rpctls_server_busy = true;
 	rpctls_server_so = so;
+	rpctls_server_xprt = xprt;
 	mtx_unlock(&rpctls_server_lock);
 printf("rpctls_conect so=%p\n", so);
 
@@ -611,6 +638,7 @@ printf("aft server upcall stat=%d flags=0x%x\n", stat, res.flags);
 	/* Once the upcall is done, the daemon is done with the fp and so. */
 	mtx_lock(&rpctls_server_lock);
 	rpctls_server_so = NULL;
+	rpctls_server_xprt = NULL;
 	rpctls_server_busy = false;
 	wakeup(&rpctls_server_busy);
 	mtx_unlock(&rpctls_server_lock);
@@ -686,7 +714,7 @@ printf("authtls: null reply=%d\n", call_stat);
 	}
 
 	/* Do an upcall to do the TLS handshake. */
-	stat = rpctls_server(rqst->rq_xprt->xp_socket, &flags,
+	stat = rpctls_server(xprt, xprt->xp_socket, &flags,
 	    ssl, &uid, &ngrps, &gidp);
 
 	/* Re-enable reception on the socket within the krpc. */
@@ -704,9 +732,6 @@ printf("authtls: null reply=%d\n", call_stat);
 			xprt->xp_gidp = gidp;
 printf("got uid=%d ngrps=%d gidp=%p\n", uid, ngrps, gidp);
 		}
-	} else {
-		/* Mark that TLS handshake failed. */
-		xprt->xp_tls = RPCTLS_FLAGS_HANDSHFAIL;
 	}
 	sx_xunlock(&xprt->xp_lock);
 	xprt_active(xprt);		/* Harmless if already active. */
