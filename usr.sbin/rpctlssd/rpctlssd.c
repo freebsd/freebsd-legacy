@@ -518,9 +518,17 @@ rpctlssd_1_freeresult(SVCXPRT *transp, xdrproc_t xdr_result, caddr_t result)
 static void
 rpctlssd_terminate(int sig __unused)
 {
+	struct ssl_entry *slp;
 
 	rpctls_syscall(RPCTLS_SYSC_SRVSHUTDOWN, "");
 	pidfile_remove(rpctls_pfh);
+
+	/*
+	 * Shut down all TCP connections, so that any compromised TLS
+	 * connection is no longer usable.
+	 */
+	LIST_FOREACH(slp, &rpctls_ssllist, next)
+		shutdown(slp->s, SHUT_RD);
 	exit(0);
 }
 
