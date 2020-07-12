@@ -912,6 +912,11 @@ clnt_vc_destroy(CLIENT *cl)
 				    ct->ct_sslusec, ct->ct_sslrefno,
 				    &reterr);
 			}
+			/* Must sorele() to get rid of reference. */
+			CURVNET_SET(so->so_vnet);
+			SOCK_LOCK(so);
+			sorele(so);
+			CURVNET_RESTORE();
 		} else {
 			soshutdown(so, SHUT_WR);
 			soclose(so);

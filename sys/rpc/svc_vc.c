@@ -469,6 +469,14 @@ svc_vc_destroy_common(SVCXPRT *xprt)
 			    xprt->xp_sslusec, xprt->xp_sslrefno,
 			    &reterr);
 		}
+		if ((xprt->xp_tls & (RPCTLS_FLAGS_HANDSHAKE |
+		    RPCTLS_FLAGS_HANDSHFAIL)) != 0) {
+			/* Must sorele() to get rid of reference. */
+			CURVNET_SET(xprt->xp_socket->so_vnet);
+			SOCK_LOCK(xprt->xp_socket);
+			sorele(xprt->xp_socket);
+			CURVNET_RESTORE();
+		}
 	}
 
 	if (xprt->xp_netid)
@@ -498,7 +506,8 @@ svc_vc_destroy(SVCXPRT *xprt)
 	SOCKBUF_LOCK(&xprt->xp_socket->so_rcv);
 	if (xprt->xp_upcallset) {
 		xprt->xp_upcallset = 0;
-		soupcall_clear(xprt->xp_socket, SO_RCV);
+		if (xprt->xp_socket->so_rcv.sb_upcall != NULL)
+			soupcall_clear(xprt->xp_socket, SO_RCV);
 	}
 	SOCKBUF_UNLOCK(&xprt->xp_socket->so_rcv);
 

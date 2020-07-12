@@ -288,6 +288,7 @@ printf("falloc=%d fd=%d\n", error, fd);
 				 * not close the socket and will leave that for
 				 * the daemon to do.
 				 */
+				soref(so);
 				ssl[0] = ssl[1] = 0;
 				ssl[2] = RPCTLS_REFNO_HANDSHAKE;
 				CLNT_CONTROL(concl, CLSET_TLS, ssl);
@@ -317,6 +318,7 @@ printf("falloc=%d fd=%d\n", error, fd);
 				 * with the socket, it cannot be closed by
 				 * the server side krpc code (svc_vc.c).
 				 */
+				soref(so);
 				sx_xlock(&xprt->xp_lock);
 				xprt->xp_tls = RPCTLS_FLAGS_HANDSHFAIL;
 				sx_xunlock(&xprt->xp_lock);
