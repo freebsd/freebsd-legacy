@@ -74,6 +74,8 @@ nfsm_uiombuf(struct nfsrv_descript *nd, struct uio *uiop, int siz)
 	mp = mp2 = nd->nd_mb;
 	mcp = nd->nd_bpos;
 	while (siz > 0) {
+		KASSERT((nd->nd_flag & ND_EXTPG) != 0 || mcp ==
+		    mtod(mp, char *) + mp->m_len, ("nfsm_uiombuf: mcp wrong"));
 		left = uiop->uio_iov->iov_len;
 		uiocp = uiop->uio_iov->iov_base;
 		if (left > siz)
@@ -156,10 +158,6 @@ nfsm_uiombuf(struct nfsrv_descript *nd, struct uio *uiop, int siz)
  * copies a uio scatter/gather list to an mbuf chain.
  * This version returns the mbuf list and does not use "nd".
  * NOTE: can ony handle iovcnt == 1
- * This function is used to create an mbuf list for doing writing to
- * mirrored flexfile DSs.
- * It cannot be modified to optionally support ext_pgs mbufs until
- * nfsm_copym() is converted to work for ext_pgs mbufs.
  */
 struct mbuf *
 nfsm_uiombuflist(struct uio *uiop, int siz, struct mbuf **mbp, char **cpp)

@@ -1793,12 +1793,8 @@ nfsrpc_writerpc(vnode_t vp, struct uio *uiop, int *iomode,
 	struct nfsrv_descript *nd = &nfsd;
 	nfsattrbit_t attrbits;
 	off_t tmp_off;
-	bool use_ext;
 
 	KASSERT(uiop->uio_iovcnt == 1, ("nfs: writerpc iovcnt > 1"));
-	use_ext = false;
-	if (NFSHASTLS(nmp))
-		use_ext = true;
 	*attrflagp = 0;
 	tsiz = uiop->uio_resid;
 	tmp_off = uiop->uio_offset + tsiz;
@@ -1815,7 +1811,7 @@ nfsrpc_writerpc(vnode_t vp, struct uio *uiop, int *iomode,
 		*attrflagp = 0;
 		len = (tsiz > wsize) ? wsize : tsiz;
 		nfscl_reqstart(nd, NFSPROC_WRITE, nmp, np->n_fhp->nfh_fh,
-		    np->n_fhp->nfh_len, NULL, NULL, 0, 0, use_ext);
+		    np->n_fhp->nfh_len, NULL, NULL, 0, 0, false);
 		if (nd->nd_flag & ND_NFSV4) {
 			nfsm_stateidtom(nd, stateidp, NFSSTATEID_PUTSTATEID);
 			NFSM_BUILD(tl, u_int32_t *, NFSX_HYPER+2*NFSX_UNSIGNED);
@@ -5624,7 +5620,7 @@ nfsrpc_fillsa(struct nfsmount *nmp, struct sockaddr_in *sin,
 	 * unmount, but I did it anyhow.
 	 */
 	nrp->nr_cred = crhold(nmp->nm_sockreq.nr_cred);
-	error = newnfs_connect(nmp, nrp, NULL, p, 0);
+	error = newnfs_connect(nmp, nrp, NULL, p, 0, false);
 	NFSCL_DEBUG(3, "DS connect=%d\n", error);
 
 	dsp = NULL;

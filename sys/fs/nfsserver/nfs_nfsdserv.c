@@ -51,6 +51,7 @@ __FBSDID("$FreeBSD$");
 #include <fs/nfs/nfsport.h>
 #include <sys/extattr.h>
 #include <sys/filio.h>
+#include <rpc/rpcsec_tls.h>
 
 /* Global vars */
 extern u_int32_t newnfs_false, newnfs_true;
@@ -3812,6 +3813,11 @@ nfsrvd_setclientid(struct nfsrv_descript *nd, __unused int isdgram,
 		clp->lc_uid = nd->nd_cred->cr_uid;
 		clp->lc_gid = nd->nd_cred->cr_gid;
 	}
+
+	/* If the client is using TLS, do so for the callback connection. */
+	if ((nd->nd_xprt->xp_tls & RPCTLS_FLAGS_HANDSHAKE) != 0)
+		clp->lc_flags |= LCL_TLSCB;
+
 	NFSM_DISSECT(tl, u_int32_t *, NFSX_UNSIGNED);
 	clp->lc_program = fxdr_unsigned(u_int32_t, *tl);
 	error = nfsrv_getclientipaddr(nd, clp);
