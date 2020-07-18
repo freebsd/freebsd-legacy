@@ -3815,7 +3815,7 @@ nfsrvd_setclientid(struct nfsrv_descript *nd, __unused int isdgram,
 	}
 
 	/* If the client is using TLS, do so for the callback connection. */
-	if ((nd->nd_xprt->xp_tls & RPCTLS_FLAGS_HANDSHAKE) != 0)
+	if (nd->nd_flag & ND_TLS)
 		clp->lc_flags |= LCL_TLSCB;
 
 	NFSM_DISSECT(tl, u_int32_t *, NFSX_UNSIGNED);
