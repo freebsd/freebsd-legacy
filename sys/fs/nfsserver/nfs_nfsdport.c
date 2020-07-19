@@ -2114,10 +2114,14 @@ again:
 	vput(vp);
 
 	/*
-	 * If the siz and cnt are larger than MCLBYTES, use ext_pgs for TLS.
+	 * If cnt > MCLBYTES and the reply will not be saved, use
+	 * ext_pgs mbufs for TLS.
+	 * For NFSv4.0, we do not know for sure if the reply will
+	 * be saved, so do not use ext_pgs mbufs for NFSv4.0.
 	 */
-	if ((nd->nd_flag & (ND_EXTPG | ND_TLS)) == ND_TLS && siz > MCLBYTES &&
-	    cnt > MCLBYTES)
+	if (cnt > MCLBYTES && siz > MCLBYTES &&
+	    (nd->nd_flag & (ND_TLS | ND_EXTPG | ND_SAVEREPLY)) == ND_TLS &&
+	    (nd->nd_flag & (ND_NFSV4 | ND_NFSV41)) != ND_NFSV4)
 		nd->nd_flag |= ND_EXTPG;
 
 	/*
@@ -2438,13 +2442,17 @@ again:
 	}
 
 	/*
-	 * If the reply is likely to exceed MCLBYTES, then use TLS.
+	 * If the reply is likely to exceed MCLBYTES and the reply will
+	 * not be saved, use ext_pgs mbufs for TLS.
 	 * It is difficult to predict how large each entry will be and
 	 * how many entries have been read, so just assume the directory
 	 * entries grow by a factor of 4 when attributes are included.
+	 * For NFSv4.0, we do not know for sure if the reply will
+	 * be saved, so do not use ext_pgs mbufs for NFSv4.0.
 	 */
-	if ((nd->nd_flag & (ND_EXTPG | ND_TLS)) == ND_TLS && cnt > MCLBYTES &&
-	    siz > MCLBYTES / 4)
+	if (cnt > MCLBYTES && siz > MCLBYTES / 4 &&
+	    (nd->nd_flag & (ND_TLS | ND_EXTPG | ND_SAVEREPLY)) == ND_TLS &&
+	    (nd->nd_flag & (ND_NFSV4 | ND_NFSV41)) != ND_NFSV4)
 		nd->nd_flag |= ND_EXTPG;
 
 	/*
@@ -6291,10 +6299,15 @@ nfsvno_getxattr(struct vnode *vp, char *name, uint32_t maxresp,
 	len = siz;
 	tlen = NFSM_RNDUP(len);
 	/*
-	 * If the cnt is larger than MCLBYTES, use ext_pgs for TLS.
-	 * Always use ext_pgs if ND_EXTPG is set.
+	 * If cnt > MCLBYTES and the reply will not be saved, use
+	 * ext_pgs mbufs for TLS.
+	 * For NFSv4.0, we do not know for sure if the reply will
+	 * be saved, so do not use ext_pgs mbufs for NFSv4.0.
+	 * Always use ext_pgs mbufs if ND_EXTPG is set.
 	 */
-	if ((flag & ND_EXTPG) != 0 || ((flag & ND_TLS) != 0 && tlen > MCLBYTES))
+	if ((flag & ND_EXTPG) != 0 || (tlen > MCLBYTES &&
+	    (flag & (ND_TLS | ND_SAVEREPLY)) == ND_TLS &&
+	    (flag & (ND_NFSV4 | ND_NFSV41)) != ND_NFSV4))
 		uiop->uio_iovcnt = nfsrv_createiovec_extpgs(tlen, maxextsiz,
 		    &m, &m2, &iv);
 	else
