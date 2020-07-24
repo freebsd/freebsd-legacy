@@ -363,7 +363,7 @@ void nfsm_set(struct nfsrv_descript *, u_int);
 
 /* nfs_clcomsubs.c */
 void nfsm_uiombuf(struct nfsrv_descript *, struct uio *, int);
-struct mbuf *nfsm_uiombuflist(struct uio *, int, struct mbuf **, char **);
+struct mbuf *nfsm_uiombuflist(struct uio *, int, u_int);
 nfsuint64 *nfscl_getcookie(struct nfsnode *, off_t off, int);
 u_int8_t *nfscl_getmyip(struct nfsmount *, struct in6_addr *, int *);
 int nfsm_getfh(struct nfsrv_descript *, struct nfsfh **);
