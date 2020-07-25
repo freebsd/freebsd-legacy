@@ -58,7 +58,6 @@ __FBSDID("$FreeBSD$");
 #include <net/if_var.h>
 #ifdef RSS
 #include <net/netisr.h>
-#include <net/nhop.h>
 #include <net/rss_config.h>
 #endif
 #include <net/route.h>
@@ -79,7 +78,7 @@ __FBSDID("$FreeBSD$");
 
 struct ktls_wq {
 	struct mtx	mtx;
-	STAILQ_HEAD(, mbuf) head;
+	STAILQ_HEAD(, mbuf) m_head;
 	STAILQ_HEAD(, socket) so_head;
 	bool		running;
 } __aligned(CACHE_LINE_SIZE);
@@ -383,7 +382,7 @@ ktls_init(void *dummy __unused)
 	 * work queue for each CPU.
 	 */
 	CPU_FOREACH(i) {
-		STAILQ_INIT(&ktls_wq[i].head);
+		STAILQ_INIT(&ktls_wq[i].m_head);
 		STAILQ_INIT(&ktls_wq[i].so_head);
 		mtx_init(&ktls_wq[i].mtx, "ktls work queue", NULL, MTX_DEF);
 		error = kproc_kthread_add(ktls_work_thread, &ktls_wq[i],
@@ -697,15 +696,12 @@ ktls_cleanup(struct ktls_session *tls)
 #endif
 	}
 	if (tls->params.auth_key != NULL) {
-		explicit_bzero(tls->params.auth_key, tls->params.auth_key_len);
-		free(tls->params.auth_key, M_KTLS);
+		zfree(tls->params.auth_key, M_KTLS);
 		tls->params.auth_key = NULL;
 		tls->params.auth_key_len = 0;
 	}
 	if (tls->params.cipher_key != NULL) {
-		explicit_bzero(tls->params.cipher_key,
-		    tls->params.cipher_key_len);
-		free(tls->params.cipher_key, M_KTLS);
+		zfree(tls->params.cipher_key, M_KTLS);
 		tls->params.cipher_key = NULL;
 		tls->params.cipher_key_len = 0;
 	}
@@ -1661,7 +1657,6 @@ m_segments(struct mbuf *m, int skip)
 	return (count);
 }
 
-#define KTLS_SMALLIOVEC		2
 static void
 ktls_decrypt(struct socket *so)
 {
@@ -1669,11 +1664,10 @@ ktls_decrypt(struct socket *so)
 	struct ktls_session *tls;
 	struct sockbuf *sb;
 	struct tls_record_layer *hdr;
-	struct iovec *iov, iv[KTLS_SMALLIOVEC];
 	struct tls_get_record tgr;
 	struct mbuf *control, *data, *m;
 	uint64_t seqno;
-	int error, i, iov_cap, iov_count, remain, tls_len, trail_len;
+	int error, remain, tls_len, trail_len;
 
 	hdr = (struct tls_record_layer *)tls_header;
 	sb = &so->so_rcv;
@@ -1684,8 +1678,6 @@ ktls_decrypt(struct socket *so)
 	tls = sb->sb_tls_info;
 	MPASS(tls != NULL);
 
-	iov = iv;
-	iov_cap = KTLS_SMALLIOVEC;
 	for (;;) {
 		/* Is there enough queued for a TLS header? */
 		if (sb->sb_tlscc < tls->params.tls_hlen)
@@ -1737,31 +1729,7 @@ ktls_decrypt(struct socket *so)
 		SBCHECK(sb);
 		SOCKBUF_UNLOCK(sb);
 
-		/*
-		 * Build an I/O vector spanning the TLS record payload
-		 * and trailer but skipping the header.
-		 */
-		iov_count = m_segments(data, tls->params.tls_hlen);
-		if (iov_count > iov_cap) {
-			if (iov_cap > KTLS_SMALLIOVEC)
-				free(iov, M_KTLS);
-			iov = malloc(sizeof(*iov) * iov_count, M_KTLS,
-			    M_WAITOK);
-			iov_cap = iov_count;
-		}
-		remain = tls->params.tls_hlen;
-		for (m = data; remain >= m->m_len; m = m->m_next)
-			remain -= m->m_len;
-		iov[0].iov_base = m->m_data + remain;
-		iov[0].iov_len = m->m_len - remain;
-		for (m = m->m_next, i = 1; m != NULL; m = m->m_next, i++) {
-			iov[i].iov_base = m->m_data;
-			iov[i].iov_len = m->m_len;
-		}
-		MPASS(i == iov_count);
-
-		error = tls->sw_decrypt(tls, hdr, iov, iov_count, seqno,
-		    &trail_len);
+		error = tls->sw_decrypt(tls, hdr, data, seqno, &trail_len);
 		if (error) {
 			counter_u64_add(ktls_offload_failed_crypto, 1);
 
@@ -1863,8 +1831,6 @@ ktls_decrypt(struct socket *so)
 	sorwakeup_locked(so);
 
 deref:
-	if (iov_cap > KTLS_SMALLIOVEC)
-		free(iov, M_KTLS);
 	SOCKBUF_UNLOCK_ASSERT(sb);
 
 	CURVNET_SET(so->so_vnet);
@@ -1883,7 +1849,7 @@ ktls_enqueue_to_free(struct mbuf *m)
 	m->m_epg_flags |= EPG_FLAG_2FREE;
 	wq = &ktls_wq[m->m_epg_tls->wq_index];
 	mtx_lock(&wq->mtx);
-	STAILQ_INSERT_TAIL(&wq->head, m, m_epg_stailq);
+	STAILQ_INSERT_TAIL(&wq->m_head, m, m_epg_stailq);
 	running = wq->running;
 	mtx_unlock(&wq->mtx);
 	if (!running)
@@ -1913,7 +1879,7 @@ ktls_enqueue(struct mbuf *m, struct socket *so, int page_count)
 
 	wq = &ktls_wq[m->m_epg_tls->wq_index];
 	mtx_lock(&wq->mtx);
-	STAILQ_INSERT_TAIL(&wq->head, m, m_epg_stailq);
+	STAILQ_INSERT_TAIL(&wq->m_head, m, m_epg_stailq);
 	running = wq->running;
 	mtx_unlock(&wq->mtx);
 	if (!running)
@@ -2069,9 +2035,9 @@ static void
 ktls_work_thread(void *ctx)
 {
 	struct ktls_wq *wq = ctx;
-	struct socket *so, *son;
 	struct mbuf *m, *n;
-	STAILQ_HEAD(, mbuf) local_head;
+	struct socket *so, *son;
+	STAILQ_HEAD(, mbuf) local_m_head;
 	STAILQ_HEAD(, socket) local_so_head;
 
 #if defined(__aarch64__) || defined(__amd64__) || defined(__i386__)
@@ -2079,20 +2045,20 @@ ktls_work_thread(void *ctx)
 #endif
 	for (;;) {
 		mtx_lock(&wq->mtx);
-		while (STAILQ_EMPTY(&wq->head) &&
+		while (STAILQ_EMPTY(&wq->m_head) &&
 		    STAILQ_EMPTY(&wq->so_head)) {
 			wq->running = false;
 			mtx_sleep(wq, &wq->mtx, 0, "-", 0);
 			wq->running = true;
 		}
 
-		STAILQ_INIT(&local_head);
-		STAILQ_CONCAT(&local_head, &wq->head);
+		STAILQ_INIT(&local_m_head);
+		STAILQ_CONCAT(&local_m_head, &wq->m_head);
 		STAILQ_INIT(&local_so_head);
 		STAILQ_CONCAT(&local_so_head, &wq->so_head);
 		mtx_unlock(&wq->mtx);
 
-		STAILQ_FOREACH_SAFE(m, &local_head, m_epg_stailq, n) {
+		STAILQ_FOREACH_SAFE(m, &local_m_head, m_epg_stailq, n) {
 			if (m->m_epg_flags & EPG_FLAG_2FREE) {
 				ktls_free(m->m_epg_tls);
 				uma_zfree(zone_mbuf, m);

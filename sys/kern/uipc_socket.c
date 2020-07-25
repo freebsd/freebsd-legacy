@@ -793,7 +793,7 @@ sonewconn(struct socket *head, int connstatus)
 	return (so);
 }
 
-#ifdef SCTP
+#if defined(SCTP) || defined(SCTP_SUPPORT)
 /*
  * Socket part of sctp_peeloff().  Detach a new socket from an
  * association.  The new socket is returned with a reference.
@@ -3262,7 +3262,6 @@ sogetopt(struct socket *so, struct sockopt *sopt)
 		case SO_NOSIGPIPE:
 		case SO_NO_DDP:
 		case SO_NO_OFFLOAD:
-		case SO_WANT_KTLS:
 			optval = so->so_options & sopt->sopt_name;
 integer:
 			error = sooptcopyout(sopt, &optval, sizeof optval);

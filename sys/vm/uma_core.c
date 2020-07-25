@@ -2197,7 +2197,7 @@ keg_ctor(void *mem, int size, void *udata, int flags)
 	keg->uk_dr.dr_iter = 0;
 
 	/*
-	 * The master zone is passed to us at keg-creation time.
+	 * The primary zone is passed to us at keg-creation time.
 	 */
 	zone = arg->zone;
 	keg->uk_name = zone->uz_name;
@@ -2808,8 +2808,9 @@ uma_startup1(vm_offset_t virtual_avail)
 {
 	struct uma_zctor_args args;
 	size_t ksize, zsize, size;
-	uma_keg_t masterkeg;
+	uma_keg_t primarykeg;
 	uintptr_t m;
+	int domain;
 	uint8_t pflag;
 
 	bootstart = bootmem = virtual_avail;
@@ -2827,12 +2828,17 @@ uma_startup1(vm_offset_t virtual_avail)
 
 	/* Allocate the zone of zones, zone of kegs, and zone of zones keg. */
 	size = (zsize * 2) + ksize;
-	m = (uintptr_t)startup_alloc(NULL, size, 0, &pflag, M_NOWAIT | M_ZERO);
+	for (domain = 0; domain < vm_ndomains; domain++) {
+		m = (uintptr_t)startup_alloc(NULL, size, domain, &pflag,
+		    M_NOWAIT | M_ZERO);
+		if (m != 0)
+			break;
+	}
 	zones = (uma_zone_t)m;
 	m += zsize;
 	kegs = (uma_zone_t)m;
 	m += zsize;
-	masterkeg = (uma_keg_t)m;
+	primarykeg = (uma_keg_t)m;
 
 	/* "manually" create the initial zone */
 	memset(&args, 0, sizeof(args));
@@ -2842,7 +2848,7 @@ uma_startup1(vm_offset_t virtual_avail)
 	args.dtor = keg_dtor;
 	args.uminit = zero_init;
 	args.fini = NULL;
-	args.keg = masterkeg;
+	args.keg = primarykeg;
 	args.align = UMA_SUPER_ALIGN - 1;
 	args.flags = UMA_ZFLAG_INTERNAL;
 	zone_ctor(kegs, zsize, &args, M_WAITOK);
@@ -3018,13 +3024,13 @@ uma_zcreate(const char *name, size_t size, uma_ctor ctor, uma_dtor dtor,
 /* See uma.h */
 uma_zone_t
 uma_zsecond_create(const char *name, uma_ctor ctor, uma_dtor dtor,
-    uma_init zinit, uma_fini zfini, uma_zone_t master)
+    uma_init zinit, uma_fini zfini, uma_zone_t primary)
 {
 	struct uma_zctor_args args;
 	uma_keg_t keg;
 	uma_zone_t res;
 
-	keg = master->uz_keg;
+	keg = primary->uz_keg;
 	memset(&args, 0, sizeof(args));
 	args.name = name;
 	args.size = keg->uk_size;
@@ -3190,6 +3196,19 @@ item_dtor(uma_zone_t zone, void *item, int size, void *udata,
 #endif
 	}
 }
+
+#ifdef NUMA
+static int
+item_domain(void *item)
+{
+	int domain;
+
+	domain = _vm_phys_domain(vtophys(item));
+	KASSERT(domain >= 0 && domain < vm_ndomains,
+	    ("%s: unknown domain for item %p", __func__, item));
+	return (domain);
+}
+#endif
 
 #if defined(INVARIANTS) || defined(DEBUG_MEMGUARD) || defined(WITNESS)
 #define	UMA_ZALLOC_DEBUG
@@ -3379,7 +3398,7 @@ static __noinline bool
 cache_alloc(uma_zone_t zone, uma_cache_t cache, void *udata, int flags)
 {
 	uma_bucket_t bucket;
-	int domain;
+	int curdomain, domain;
 	bool new;
 
 	CRITICAL_ASSERT(curthread);
@@ -3426,7 +3445,8 @@ cache_alloc(uma_zone_t zone, uma_cache_t cache, void *udata, int flags)
 	 * the critical section.
 	 */
 	domain = PCPU_GET(domain);
-	if ((cache_uz_flags(cache) & UMA_ZONE_ROUNDROBIN) != 0)
+	if ((cache_uz_flags(cache) & UMA_ZONE_ROUNDROBIN) != 0 ||
+	    VM_DOMAIN_EMPTY(domain))
 		domain = zone_domain_highest(zone, domain);
 	bucket = cache_fetch_bucket(zone, cache, domain);
 	if (bucket == NULL) {
@@ -3451,7 +3471,8 @@ cache_alloc(uma_zone_t zone, uma_cache_t cache, void *udata, int flags)
 	cache = &zone->uz_cpu[curcpu];
 	if (cache->uc_allocbucket.ucb_bucket == NULL &&
 	    ((cache_uz_flags(cache) & UMA_ZONE_FIRSTTOUCH) == 0 ||
-	    domain == PCPU_GET(domain))) {
+	    (curdomain = PCPU_GET(domain)) == domain ||
+	    VM_DOMAIN_EMPTY(curdomain))) {
 		if (new)
 			atomic_add_long(&ZDOM_GET(zone, domain)->uzd_imax,
 			    bucket->ub_cnt);
@@ -3858,7 +3879,7 @@ zone_alloc_bucket(uma_zone_t zone, void *udata, int domain, int flags)
 	/* Avoid allocs targeting empty domains. */
 	if (domain != UMA_ANYDOMAIN && VM_DOMAIN_EMPTY(domain))
 		domain = UMA_ANYDOMAIN;
-	if ((zone->uz_flags & UMA_ZONE_ROUNDROBIN) != 0)
+	else if ((zone->uz_flags & UMA_ZONE_ROUNDROBIN) != 0)
 		domain = UMA_ANYDOMAIN;
 
 	if (zone->uz_max_items > 0)
@@ -4001,7 +4022,7 @@ uma_zfree_smr(uma_zone_t zone, void *item)
 	itemdomain = 0;
 #ifdef NUMA
 	if ((uz_flags & UMA_ZONE_FIRSTTOUCH) != 0)
-		itemdomain = _vm_phys_domain(pmap_kextract((vm_offset_t)item));
+		itemdomain = item_domain(item);
 #endif
 	critical_enter();
 	do {
@@ -4085,7 +4106,7 @@ uma_zfree_arg(uma_zone_t zone, void *item, void *udata)
 	itemdomain = 0;
 #ifdef NUMA
 	if ((uz_flags & UMA_ZONE_FIRSTTOUCH) != 0)
-		itemdomain = _vm_phys_domain(pmap_kextract((vm_offset_t)item));
+		itemdomain = item_domain(item);
 #endif
 	critical_enter();
 	do {
@@ -4159,7 +4180,7 @@ zone_free_cross(uma_zone_t zone, uma_bucket_t bucket, void *udata)
 	ZONE_CROSS_LOCK(zone);
 	while (bucket->ub_cnt > 0) {
 		item = bucket->ub_bucket[bucket->ub_cnt - 1];
-		domain = _vm_phys_domain(pmap_kextract((vm_offset_t)item));
+		domain = item_domain(item);
 		zdom = ZDOM_GET(zone, domain);
 		if (zdom->uzd_cross == NULL) {
 			zdom->uzd_cross = bucket_alloc(zone, udata, M_NOWAIT);
@@ -4182,8 +4203,7 @@ zone_free_cross(uma_zone_t zone, uma_bucket_t bucket, void *udata)
 
 	while ((b = STAILQ_FIRST(&fullbuckets)) != NULL) {
 		STAILQ_REMOVE_HEAD(&fullbuckets, ub_link);
-		domain = _vm_phys_domain(pmap_kextract(
-		    (vm_offset_t)b->ub_bucket[0]));
+		domain = item_domain(b->ub_bucket[0]);
 		zone_put_bucket(zone, domain, b, udata, true);
 	}
 }

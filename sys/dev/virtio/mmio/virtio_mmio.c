@@ -390,7 +390,13 @@ vtmmio_negotiate_features(device_t dev, uint64_t child_features)
 
 	sc = device_get_softc(dev);
 
+	vtmmio_write_config_4(sc, VIRTIO_MMIO_HOST_FEATURES_SEL, 1);
 	host_features = vtmmio_read_config_4(sc, VIRTIO_MMIO_HOST_FEATURES);
+	host_features <<= 32;
+
+	vtmmio_write_config_4(sc, VIRTIO_MMIO_HOST_FEATURES_SEL, 0);
+	host_features |= vtmmio_read_config_4(sc, VIRTIO_MMIO_HOST_FEATURES);
+
 	vtmmio_describe_features(sc, "host", host_features);
 
 	/*
@@ -402,6 +408,11 @@ vtmmio_negotiate_features(device_t dev, uint64_t child_features)
 	sc->vtmmio_features = features;
 
 	vtmmio_describe_features(sc, "negotiated", features);
+
+	vtmmio_write_config_4(sc, VIRTIO_MMIO_HOST_FEATURES_SEL, 1);
+	vtmmio_write_config_4(sc, VIRTIO_MMIO_GUEST_FEATURES, features >> 32);
+
+	vtmmio_write_config_4(sc, VIRTIO_MMIO_HOST_FEATURES_SEL, 0);
 	vtmmio_write_config_4(sc, VIRTIO_MMIO_GUEST_FEATURES, features);
 
 	return (features);
@@ -480,8 +491,10 @@ vtmmio_alloc_virtqueues(device_t dev, int flags, int nvqs,
 	if (sc->vtmmio_vqs == NULL)
 		return (ENOMEM);
 
-	vtmmio_write_config_4(sc, VIRTIO_MMIO_GUEST_PAGE_SIZE,
-	    (1 << PAGE_SHIFT));
+	if (sc->vtmmio_version == 1) {
+		vtmmio_write_config_4(sc, VIRTIO_MMIO_GUEST_PAGE_SIZE,
+		    (1 << PAGE_SHIFT));
+	}
 
 	for (idx = 0; idx < nvqs; idx++) {
 		vqx = &sc->vtmmio_vqs[idx];
@@ -553,8 +566,10 @@ vtmmio_reinit(device_t dev, uint64_t features)
 
 	vtmmio_negotiate_features(dev, features);
 
-	vtmmio_write_config_4(sc, VIRTIO_MMIO_GUEST_PAGE_SIZE,
-	    (1 << PAGE_SHIFT));
+	if (sc->vtmmio_version == 1) {
+		vtmmio_write_config_4(sc, VIRTIO_MMIO_GUEST_PAGE_SIZE,
+		    (1 << PAGE_SHIFT));
+	}
 
 	for (idx = 0; idx < sc->vtmmio_nvqs; idx++) {
 		error = vtmmio_reinit_virtqueue(sc, idx);

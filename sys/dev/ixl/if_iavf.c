@@ -2090,7 +2090,7 @@ iavf_add_device_sysctls(struct iavf_sc *sc)
 	/* Add sysctls meant to print debug information, but don't list them
 	 * in "sysctl -a" output. */
 	debug_node = SYSCTL_ADD_NODE(ctx, ctx_list,
-	    OID_AUTO, "debug", CTLFLAG_RD | CTLFLAG_SKIP | CTLFLAG_NEEDGIANT,
+	    OID_AUTO, "debug", CTLFLAG_RD | CTLFLAG_SKIP | CTLFLAG_MPSAFE,
 	    NULL, "Debug Sysctls");
 	debug_list = SYSCTL_CHILDREN(debug_node);
 
@@ -2124,7 +2124,7 @@ iavf_add_device_sysctls(struct iavf_sc *sc)
 
 	/* Add stats sysctls */
 	ixl_add_vsi_sysctls(dev, vsi, ctx, "vsi");
-	ixl_add_queues_sysctls(dev, vsi);
+	ixl_vsi_add_queues_stats(vsi, ctx);
 
 }
 

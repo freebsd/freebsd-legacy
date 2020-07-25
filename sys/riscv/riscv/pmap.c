@@ -339,7 +339,8 @@ pagezero(void *p)
 #define	pmap_l2_index(va)	(((va) >> L2_SHIFT) & Ln_ADDR_MASK)
 #define	pmap_l3_index(va)	(((va) >> L3_SHIFT) & Ln_ADDR_MASK)
 
-#define	PTE_TO_PHYS(pte)	((pte >> PTE_PPN0_S) * PAGE_SIZE)
+#define	PTE_TO_PHYS(pte) \
+    ((((pte) & ~PTE_HI_MASK) >> PTE_PPN0_S) * PAGE_SIZE)
 
 static __inline pd_entry_t *
 pmap_l1(pmap_t pmap, vm_offset_t va)
@@ -563,8 +564,6 @@ pmap_bootstrap(vm_offset_t l1pt, vm_paddr_t kernstart, vm_size_t kernlen)
 	int i;
 
 	printf("pmap_bootstrap %lx %lx %lx\n", l1pt, kernstart, kernlen);
-	printf("%lx\n", l1pt);
-	printf("%lx\n", (KERNBASE >> L1_SHIFT) & Ln_ADDR_MASK);
 
 	/* Set this early so we can use the pagetable walking functions */
 	kernel_pmap_store.pm_l1 = (pd_entry_t *)l1pt;
@@ -621,8 +620,8 @@ pmap_bootstrap(vm_offset_t l1pt, vm_paddr_t kernstart, vm_size_t kernlen)
 	 * possibility of an aliased mapping in the future.
 	 */
 	l2p = pmap_l2(kernel_pmap, VM_EARLY_DTB_ADDRESS);
-	KASSERT((pmap_load(l2p) & PTE_V) != 0, ("dtpb not mapped"));
-	pmap_clear(l2p);
+	if ((pmap_load(l2p) & PTE_V) != 0)
+		pmap_clear(l2p);
 
 	sfence_vma();
 

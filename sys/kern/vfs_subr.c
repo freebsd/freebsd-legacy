@@ -76,6 +76,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/rwlock.h>
 #include <sys/sched.h>
 #include <sys/sleepqueue.h>
+#include <sys/smr.h>
 #include <sys/smp.h>
 #include <sys/stat.h>
 #include <sys/sysctl.h>
@@ -233,10 +234,13 @@ static struct mtx __exclusive_cache_line vnode_list_mtx;
 struct nfs_public nfs_pub;
 
 static uma_zone_t buf_trie_zone;
+static smr_t buf_trie_smr;
 
 /* Zone for allocation of new vnodes - used exclusively by getnewvnode() */
 static uma_zone_t vnode_zone;
 static uma_zone_t vnodepoll_zone;
+
+__read_frequently smr_t vfs_smr;
 
 /*
  * The workitem queue.
@@ -488,17 +492,16 @@ static int vnsz2log;
 static void *
 buf_trie_alloc(struct pctrie *ptree)
 {
-
-	return uma_zalloc(buf_trie_zone, M_NOWAIT);
+	return (uma_zalloc_smr(buf_trie_zone, M_NOWAIT));
 }
 
 static void
 buf_trie_free(struct pctrie *ptree, void *node)
 {
-
-	uma_zfree(buf_trie_zone, node);
+	uma_zfree_smr(buf_trie_zone, node);
 }
-PCTRIE_DEFINE(BUF, buf, b_lblkno, buf_trie_alloc, buf_trie_free);
+PCTRIE_DEFINE_SMR(BUF, buf, b_lblkno, buf_trie_alloc, buf_trie_free,
+    buf_trie_smr);
 
 /*
  * Initialize the vnode management data structures.
@@ -661,7 +664,8 @@ vntblinit(void *dummy __unused)
 	vnode_list_reclaim_marker = vn_alloc_marker(NULL);
 	TAILQ_INSERT_HEAD(&vnode_list, vnode_list_reclaim_marker, v_vnodelist);
 	vnode_zone = uma_zcreate("VNODE", sizeof (struct vnode), NULL, NULL,
-	    vnode_init, vnode_fini, UMA_ALIGN_PTR, 0);
+	    vnode_init, vnode_fini, UMA_ALIGN_PTR, UMA_ZONE_SMR);
+	vfs_smr = uma_zone_get_smr(vnode_zone);
 	vnodepoll_zone = uma_zcreate("VNODEPOLL", sizeof (struct vpollinfo),
 	    NULL, NULL, NULL, NULL, UMA_ALIGN_PTR, 0);
 	/*
@@ -671,7 +675,8 @@ vntblinit(void *dummy __unused)
 	 */
 	buf_trie_zone = uma_zcreate("BUF TRIE", pctrie_node_size(),
 	    NULL, NULL, pctrie_zone_init, NULL, UMA_ALIGN_PTR, 
-	    UMA_ZONE_NOFREE);
+	    UMA_ZONE_NOFREE | UMA_ZONE_SMR);
+	buf_trie_smr = uma_zone_get_smr(buf_trie_zone);
 	uma_prealloc(buf_trie_zone, nbuf);
 
 	vnodes_created = counter_u64_alloc(M_WAITOK);
@@ -1478,7 +1483,7 @@ static struct kproc_desc vnlru_kp = {
 };
 SYSINIT(vnlru, SI_SUB_KTHREAD_UPDATE, SI_ORDER_FIRST, kproc_start,
     &vnlru_kp);
- 
+
 /*
  * Routines having to do with the management of the vnode table.
  */
@@ -1603,7 +1608,7 @@ alloc:
 	if (vnlru_under(rnumvnodes, vlowat))
 		vnlru_kick();
 	mtx_unlock(&vnode_list_mtx);
-	return (uma_zalloc(vnode_zone, M_WAITOK));
+	return (uma_zalloc_smr(vnode_zone, M_WAITOK));
 }
 
 static struct vnode *
@@ -1619,7 +1624,7 @@ vn_alloc(struct mount *mp)
 		return (vn_alloc_hard(mp));
 	}
 
-	return (uma_zalloc(vnode_zone, M_WAITOK));
+	return (uma_zalloc_smr(vnode_zone, M_WAITOK));
 }
 
 static void
@@ -1627,7 +1632,7 @@ vn_free(struct vnode *vp)
 {
 
 	atomic_subtract_long(&numvnodes, 1);
-	uma_zfree(vnode_zone, vp);
+	uma_zfree_smr(vnode_zone, vp);
 }
 
 /*
@@ -1758,7 +1763,7 @@ freevnode(struct vnode *vp)
 	CTR2(KTR_VFS, "%s: destroying the vnode %p", __func__, vp);
 	bo = &vp->v_bufobj;
 	VNASSERT(vp->v_data == NULL, vp, ("cleaned vnode isn't"));
-	VNASSERT(vp->v_holdcnt == 0, vp, ("Non-zero hold count"));
+	VNPASS(vp->v_holdcnt == VHOLD_NO_SMR, vp);
 	VNASSERT(vp->v_usecount == 0, vp, ("Non-zero use count"));
 	VNASSERT(vp->v_writecount == 0, vp, ("Non-zero write count"));
 	VNASSERT(bo->bo_numoutput == 0, vp, ("Clean vnode has pending I/O's"));
@@ -2326,7 +2331,25 @@ gbincore(struct bufobj *bo, daddr_t lblkno)
 	bp = BUF_PCTRIE_LOOKUP(&bo->bo_clean.bv_root, lblkno);
 	if (bp != NULL)
 		return (bp);
-	return BUF_PCTRIE_LOOKUP(&bo->bo_dirty.bv_root, lblkno);
+	return (BUF_PCTRIE_LOOKUP(&bo->bo_dirty.bv_root, lblkno));
+}
+
+/*
+ * Look up a buf using the buffer tries, without the bufobj lock.  This relies
+ * on SMR for safe lookup, and bufs being in a no-free zone to provide type
+ * stability of the result.  Like other lockless lookups, the found buf may
+ * already be invalid by the time this function returns.
+ */
+struct buf *
+gbincore_unlocked(struct bufobj *bo, daddr_t lblkno)
+{
+	struct buf *bp;
+
+	ASSERT_BO_UNLOCKED(bo);
+	bp = BUF_PCTRIE_LOOKUP_UNLOCKED(&bo->bo_clean.bv_root, lblkno);
+	if (bp != NULL)
+		return (bp);
+	return (BUF_PCTRIE_LOOKUP_UNLOCKED(&bo->bo_dirty.bv_root, lblkno));
 }
 
 /*
@@ -2848,7 +2871,29 @@ v_decr_devcount(struct vnode *vp)
  *
  * holdcnt can be manipulated using atomics without holding any locks,
  * except when transitioning 1<->0, in which case the interlock is held.
+ *
+ * Consumers which don't guarantee liveness of the vnode can use SMR to
+ * try to get a reference. Note this operation can fail since the vnode
+ * may be awaiting getting freed by the time they get to it.
  */
+enum vgetstate
+vget_prep_smr(struct vnode *vp)
+{
+	enum vgetstate vs;
+
+	VFS_SMR_ASSERT_ENTERED();
+
+	if (refcount_acquire_if_not_zero(&vp->v_usecount)) {
+		vs = VGET_USECOUNT;
+	} else {
+		if (vhold_smr(vp))
+			vs = VGET_HOLDCNT;
+		else
+			vs = VGET_NONE;
+	}
+	return (vs);
+}
+
 enum vgetstate
 vget_prep(struct vnode *vp)
 {
@@ -2919,6 +2964,7 @@ vget_finish(struct vnode *vp, int flags, enum vgetstate vs)
 		ASSERT_VI_LOCKED(vp, __func__);
 	else
 		ASSERT_VI_UNLOCKED(vp, __func__);
+	VNPASS(vs == VGET_HOLDCNT || vs == VGET_USECOUNT, vp);
 	VNPASS(vp->v_holdcnt > 0, vp);
 	VNPASS(vs == VGET_HOLDCNT || vp->v_usecount > 0, vp);
 
@@ -3380,7 +3426,8 @@ vhold(struct vnode *vp)
 
 	CTR2(KTR_VFS, "%s: vp %p", __func__, vp);
 	old = atomic_fetchadd_int(&vp->v_holdcnt, 1);
-	VNASSERT(old >= 0, vp, ("%s: wrong hold count %d", __func__, old));
+	VNASSERT(old >= 0 && (old & VHOLD_ALL_FLAGS) == 0, vp,
+	    ("%s: wrong hold count %d", __func__, old));
 	if (old != 0)
 		return;
 	critical_enter();
@@ -3405,10 +3452,51 @@ vholdnz(struct vnode *vp)
 	CTR2(KTR_VFS, "%s: vp %p", __func__, vp);
 #ifdef INVARIANTS
 	int old = atomic_fetchadd_int(&vp->v_holdcnt, 1);
-	VNASSERT(old > 0, vp, ("%s: wrong hold count %d", __func__, old));
+	VNASSERT(old > 0 && (old & VHOLD_ALL_FLAGS) == 0, vp,
+	    ("%s: wrong hold count %d", __func__, old));
 #else
 	atomic_add_int(&vp->v_holdcnt, 1);
 #endif
+}
+
+/*
+ * Grab a hold count unless the vnode is freed.
+ *
+ * Only use this routine if vfs smr is the only protection you have against
+ * freeing the vnode.
+ *
+ * The code loops trying to add a hold count as long as the VHOLD_NO_SMR flag
+ * is not set.  After the flag is set the vnode becomes immutable to anyone but
+ * the thread which managed to set the flag.
+ *
+ * It may be tempting to replace the loop with:
+ * count = atomic_fetchadd_int(&vp->v_holdcnt, 1);
+ * if (count & VHOLD_NO_SMR) {
+ *     backpedal and error out;
+ * }
+ *
+ * However, while this is more performant, it hinders debugging by eliminating
+ * the previously mentioned invariant.
+ */
+bool
+vhold_smr(struct vnode *vp)
+{
+	int count;
+
+	VFS_SMR_ASSERT_ENTERED();
+
+	count = atomic_load_int(&vp->v_holdcnt);
+	for (;;) {
+		if (count & VHOLD_NO_SMR) {
+			VNASSERT((count & ~VHOLD_NO_SMR) == 0, vp,
+			    ("non-zero hold count with flags %d\n", count));
+			return (false);
+		}
+
+		VNASSERT(count >= 0, vp, ("invalid hold count %d\n", count));
+		if (atomic_fcmpset_int(&vp->v_holdcnt, &count, count + 1))
+			return (true);
+	}
 }
 
 static void __noinline
@@ -3581,11 +3669,25 @@ vdropl(struct vnode *vp)
 		VI_UNLOCK(vp);
 		return;
 	}
-	if (VN_IS_DOOMED(vp)) {
-		freevnode(vp);
+	if (!VN_IS_DOOMED(vp)) {
+		vdrop_deactivate(vp);
 		return;
 	}
-	vdrop_deactivate(vp);
+	/*
+	 * We may be racing against vhold_smr.
+	 *
+	 * If they win we can just pretend we never got this far, they will
+	 * vdrop later.
+	 */
+	if (!atomic_cmpset_int(&vp->v_holdcnt, 0, VHOLD_NO_SMR)) {
+		/*
+		 * We lost the aforementioned race. Note that any subsequent
+		 * access is invalid as they might have managed to vdropl on
+		 * their own.
+		 */
+		return;
+	}
+	freevnode(vp);
 }
 
 /*
@@ -4041,20 +4143,25 @@ static const char * const typename[] =
 {"VNON", "VREG", "VDIR", "VBLK", "VCHR", "VLNK", "VSOCK", "VFIFO", "VBAD",
  "VMARKER"};
 
+_Static_assert((VHOLD_ALL_FLAGS & ~VHOLD_NO_SMR) == 0,
+    "new hold count flag not added to vn_printf");
+
 void
 vn_printf(struct vnode *vp, const char *fmt, ...)
 {
 	va_list ap;
 	char buf[256], buf2[16];
 	u_long flags;
+	u_int holdcnt;
 
 	va_start(ap, fmt);
 	vprintf(fmt, ap);
 	va_end(ap);
 	printf("%p: ", (void *)vp);
 	printf("type %s\n", typename[vp->v_type]);
+	holdcnt = atomic_load_int(&vp->v_holdcnt);
 	printf("    usecount %d, writecount %d, refcount %d",
-	    vp->v_usecount, vp->v_writecount, vp->v_holdcnt);
+	    vp->v_usecount, vp->v_writecount, holdcnt & ~VHOLD_ALL_FLAGS);
 	switch (vp->v_type) {
 	case VDIR:
 		printf(" mountedhere %p\n", vp->v_mountedhere);
@@ -4072,6 +4179,12 @@ vn_printf(struct vnode *vp, const char *fmt, ...)
 		printf("\n");
 		break;
 	}
+	buf[0] = '\0';
+	buf[1] = '\0';
+	if (holdcnt & VHOLD_NO_SMR)
+		strlcat(buf, "|VHOLD_NO_SMR", sizeof(buf));
+	printf("    hold count flags (%s)\n", buf + 1);
+
 	buf[0] = '\0';
 	buf[1] = '\0';
 	if (vp->v_irflag & VIRF_DOOMED)

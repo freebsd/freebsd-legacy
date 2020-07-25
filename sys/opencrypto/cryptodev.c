@@ -117,28 +117,6 @@ struct crypt_kop32 {
 	struct crparam32	crk_param[CRK_MAXPARAM];
 };
 
-struct cryptotstat32 {
-	struct timespec32	acc;
-	struct timespec32	min;
-	struct timespec32	max;
-	u_int32_t	count;
-};
-
-struct cryptostats32 {
-	u_int32_t	cs_ops;
-	u_int32_t	cs_errs;
-	u_int32_t	cs_kops;
-	u_int32_t	cs_kerrs;
-	u_int32_t	cs_intrs;
-	u_int32_t	cs_rets;
-	u_int32_t	cs_blocks;
-	u_int32_t	cs_kblocks;
-	struct cryptotstat32 cs_invoke;
-	struct cryptotstat32 cs_done;
-	struct cryptotstat32 cs_cb;
-	struct cryptotstat32 cs_finis;
-};
-
 #define	CIOCGSESSION32	_IOWR('c', 101, struct session_op32)
 #define	CIOCCRYPT32	_IOWR('c', 103, struct crypt_op32)
 #define	CIOCKEY32	_IOWR('c', 104, struct crypt_kop32)
@@ -282,6 +260,8 @@ struct cryptop_data {
 	struct csession *cse;
 
 	char		*buf;
+	char		*obuf;
+	char		*aad;
 	bool		done;
 };
 
@@ -290,6 +270,16 @@ struct fcrypt {
 	int		sesn;
 	struct mtx	lock;
 };
+
+static bool use_outputbuffers;
+SYSCTL_BOOL(_kern_crypto, OID_AUTO, cryptodev_use_output, CTLFLAG_RW,
+    &use_outputbuffers, 0,
+    "Use separate output buffers for /dev/crypto requests.");
+
+static bool use_separate_aad;
+SYSCTL_BOOL(_kern_crypto, OID_AUTO, cryptodev_separate_aad, CTLFLAG_RW,
+    &use_separate_aad, 0,
+    "Use separate AAD buffer for /dev/crypto requests.");
 
 static	int cryptof_ioctl(struct file *, u_long, void *,
 		    struct ucred *, struct thread *);
@@ -547,6 +537,8 @@ cryptof_ioctl(
 		}
 
 		memset(&csp, 0, sizeof(csp));
+		if (use_outputbuffers)
+			csp.csp_flags |= CSP_F_SEPARATE_OUTPUT;
 
 		if (sop->cipher == CRYPTO_AES_NIST_GCM_16) {
 			switch (sop->mac) {
@@ -595,6 +587,14 @@ cryptof_ioctl(
 			csp.csp_mode = CSP_MODE_CIPHER;
 		else
 			csp.csp_mode = CSP_MODE_DIGEST;
+
+		switch (csp.csp_mode) {
+		case CSP_MODE_AEAD:
+		case CSP_MODE_ETA:
+			if (use_separate_aad)
+				csp.csp_flags |= CSP_F_SEPARATE_AAD;
+			break;
+		}
 
 		if (txform) {
 			csp.csp_cipher_alg = txform->type;
@@ -811,14 +811,21 @@ bail:
 static int cryptodev_cb(struct cryptop *);
 
 static struct cryptop_data *
-cod_alloc(struct csession *cse, size_t len, struct thread *td)
+cod_alloc(struct csession *cse, size_t aad_len, size_t len, struct thread *td)
 {
 	struct cryptop_data *cod;
 
 	cod = malloc(sizeof(struct cryptop_data), M_XDATA, M_WAITOK | M_ZERO);
 
 	cod->cse = cse;
-	cod->buf = malloc(len, M_XDATA, M_WAITOK);
+	if (crypto_get_params(cse->cses)->csp_flags & CSP_F_SEPARATE_AAD) {
+		if (aad_len != 0)
+			cod->aad = malloc(aad_len, M_XDATA, M_WAITOK);
+		cod->buf = malloc(len, M_XDATA, M_WAITOK);
+	} else
+		cod->buf = malloc(aad_len + len, M_XDATA, M_WAITOK);
+	if (crypto_get_params(cse->cses)->csp_flags & CSP_F_SEPARATE_OUTPUT)
+		cod->obuf = malloc(len, M_XDATA, M_WAITOK);
 	return (cod);
 }
 
@@ -826,6 +833,8 @@ static void
 cod_free(struct cryptop_data *cod)
 {
 
+	free(cod->aad, M_XDATA);
+	free(cod->obuf, M_XDATA);
 	free(cod->buf, M_XDATA);
 	free(cod, M_XDATA);
 }
@@ -870,7 +879,7 @@ cryptodev_op(
 		}
 	}
 
-	cod = cod_alloc(cse, cop->len + cse->hashsize, td);
+	cod = cod_alloc(cse, 0, cop->len + cse->hashsize, td);
 
 	crp = crypto_getreq(cse->cses, M_WAITOK);
 
@@ -919,6 +928,8 @@ cryptodev_op(
 		case COP_ENCRYPT:
 		case COP_DECRYPT:
 			crp->crp_op = CRYPTO_OP_COMPUTE_DIGEST;
+			if (cod->obuf != NULL)
+				crp->crp_digest_start = 0;
 			break;
 		default:
 			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
@@ -948,10 +959,10 @@ cryptodev_op(
 		goto bail;
 	}
 
-	crp->crp_ilen = cop->len + cse->hashsize;
 	crp->crp_flags = CRYPTO_F_CBIMM | (cop->flags & COP_F_BATCH);
-	crp->crp_buf = cod->buf;
-	crp->crp_buf_type = CRYPTO_BUF_CONTIG;
+	crypto_use_buf(crp, cod->buf, cop->len + cse->hashsize);
+	if (cod->obuf)
+		crypto_use_output_buf(crp, cod->obuf, cop->len + cse->hashsize);
 	crp->crp_callback = cryptodev_cb;
 	crp->crp_opaque = cod;
 
@@ -971,10 +982,12 @@ cryptodev_op(
 		crp->crp_iv_start = 0;
 		crp->crp_payload_start += cse->ivsize;
 		crp->crp_payload_length -= cse->ivsize;
+		cop->dst += cse->ivsize;
 	}
 
-	if (cop->mac != NULL) {
-		error = copyin(cop->mac, cod->buf + cop->len, cse->hashsize);
+	if (cop->mac != NULL && crp->crp_op & CRYPTO_OP_VERIFY_DIGEST) {
+		error = copyin(cop->mac, cod->buf + crp->crp_digest_start,
+		    cse->hashsize);
 		if (error) {
 			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
 			goto bail;
@@ -1013,15 +1026,18 @@ again:
 	}
 
 	if (cop->dst != NULL) {
-		error = copyout(cod->buf, cop->dst, cop->len);
+		error = copyout(cod->obuf != NULL ? cod->obuf :
+		    cod->buf + crp->crp_payload_start, cop->dst,
+		    crp->crp_payload_length);
 		if (error) {
 			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
 			goto bail;
 		}
 	}
 
-	if (cop->mac != NULL) {
-		error = copyout(cod->buf + cop->len, cop->mac, cse->hashsize);
+	if (cop->mac != NULL && (crp->crp_op & CRYPTO_OP_VERIFY_DIGEST) == 0) {
+		error = copyout((cod->obuf != NULL ? cod->obuf : cod->buf) +
+		    crp->crp_digest_start, cop->mac, cse->hashsize);
 		if (error) {
 			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
 			goto bail;
@@ -1069,44 +1085,41 @@ cryptodev_aead(
 		}
 	}
 
-	cod = cod_alloc(cse, caead->aadlen + caead->len + cse->hashsize, td);
+	cod = cod_alloc(cse, caead->aadlen, caead->len + cse->hashsize, td);
 
 	crp = crypto_getreq(cse->cses, M_WAITOK);
 
-	error = copyin(caead->aad, cod->buf, caead->aadlen);
+	if (cod->aad != NULL)
+		error = copyin(caead->aad, cod->aad, caead->aadlen);
+	else
+		error = copyin(caead->aad, cod->buf, caead->aadlen);
 	if (error) {
 		SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
 		goto bail;
 	}
+	crp->crp_aad = cod->aad;
 	crp->crp_aad_start = 0;
 	crp->crp_aad_length = caead->aadlen;
 
-	error = copyin(caead->src, cod->buf + caead->aadlen, caead->len);
+	if (cod->aad != NULL)
+		crp->crp_payload_start = 0;
+	else
+		crp->crp_payload_start = caead->aadlen;
+	error = copyin(caead->src, cod->buf + crp->crp_payload_start,
+	    caead->len);
 	if (error) {
 		SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
 		goto bail;
 	}
-	crp->crp_payload_start = caead->aadlen;
 	crp->crp_payload_length = caead->len;
-	crp->crp_digest_start = caead->aadlen + caead->len;
+	if (caead->op == COP_ENCRYPT && cod->obuf != NULL)
+		crp->crp_digest_start = crp->crp_payload_output_start +
+		    caead->len;
+	else
+		crp->crp_digest_start = crp->crp_payload_start + caead->len;
 
 	switch (cse->mode) {
 	case CSP_MODE_AEAD:
-		switch (caead->op) {
-		case COP_ENCRYPT:
-			crp->crp_op = CRYPTO_OP_ENCRYPT |
-			    CRYPTO_OP_COMPUTE_DIGEST;
-			break;
-		case COP_DECRYPT:
-			crp->crp_op = CRYPTO_OP_DECRYPT |
-			    CRYPTO_OP_VERIFY_DIGEST;
-			break;
-		default:
-			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
-			error = EINVAL;
-			goto bail;
-		}
-		break;
 	case CSP_MODE_ETA:
 		switch (caead->op) {
 		case COP_ENCRYPT:
@@ -1129,10 +1142,12 @@ cryptodev_aead(
 		goto bail;
 	}
 
-	crp->crp_ilen = caead->aadlen + caead->len + cse->hashsize;
 	crp->crp_flags = CRYPTO_F_CBIMM | (caead->flags & COP_F_BATCH);
-	crp->crp_buf = cod->buf;
-	crp->crp_buf_type = CRYPTO_BUF_CONTIG;
+	crypto_use_buf(crp, cod->buf, crp->crp_payload_start + caead->len +
+	    cse->hashsize);
+	if (cod->obuf != NULL)
+		crypto_use_output_buf(crp, cod->obuf, caead->len +
+		    cse->hashsize);
 	crp->crp_callback = cryptodev_cb;
 	crp->crp_opaque = cod;
 
@@ -1162,13 +1177,16 @@ cryptodev_aead(
 		crp->crp_iv_start = crp->crp_payload_start;
 		crp->crp_payload_start += cse->ivsize;
 		crp->crp_payload_length -= cse->ivsize;
+		caead->dst += cse->ivsize;
 	}
 
-	error = copyin(caead->tag, cod->buf + caead->len + caead->aadlen,
-	    cse->hashsize);
-	if (error) {
-		SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
-		goto bail;
+	if (crp->crp_op & CRYPTO_OP_VERIFY_DIGEST) {
+		error = copyin(caead->tag, cod->buf + crp->crp_digest_start,
+		    cse->hashsize);
+		if (error) {
+			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
+			goto bail;
+		}
 	}
 again:
 	/*
@@ -1203,19 +1221,22 @@ again:
 	}
 
 	if (caead->dst != NULL) {
-		error = copyout(cod->buf + caead->aadlen, caead->dst,
-		    caead->len);
+		error = copyout(cod->obuf != NULL ? cod->obuf :
+		    cod->buf + crp->crp_payload_start, caead->dst,
+		    crp->crp_payload_length);
 		if (error) {
 			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
 			goto bail;
 		}
 	}
 
-	error = copyout(cod->buf + caead->aadlen + caead->len, caead->tag,
-	    cse->hashsize);
-	if (error) {
-		SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
-		goto bail;
+	if ((crp->crp_op & CRYPTO_OP_VERIFY_DIGEST) == 0) {
+		error = copyout((cod->obuf != NULL ? cod->obuf : cod->buf) +
+		    crp->crp_digest_start, caead->tag, cse->hashsize);
+		if (error) {
+			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
+			goto bail;
+		}
 	}
 
 bail:
@@ -1294,11 +1315,7 @@ cryptodev_key(struct crypt_kop *kop)
 		return (EINVAL);
 	}
 
-	krp = (struct cryptkop *)malloc(sizeof *krp, M_XDATA, M_WAITOK|M_ZERO);
-	if (!krp) {
-		SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
-		return (ENOMEM);
-	}
+	krp = malloc(sizeof(*krp), M_XDATA, M_WAITOK | M_ZERO);
 	krp->krp_op = kop->crk_op;
 	krp->krp_status = kop->crk_status;
 	krp->krp_iparams = kop->crk_iparams;

@@ -459,6 +459,7 @@ cesa_set_mkey(struct cesa_session *cs, int alg, const uint8_t *mkey, int mklen)
 		hin[i] = htobe32(hin[i]);
 		hout[i] = htobe32(hout[i]);
 	}
+	explicit_bzero(&auth_ctx, sizeof(auth_ctx));
 }
 
 static int
@@ -1712,7 +1713,7 @@ cesa_process(device_t dev, struct cryptop *crp, int hint)
 	csp = crypto_get_params(crp->crp_session);
 
 	/* Check and parse input */
-	if (crp->crp_ilen > CESA_MAX_REQUEST_SIZE) {
+	if (crypto_buffer_len(&crp->crp_buf) > CESA_MAX_REQUEST_SIZE) {
 		crp->crp_etype = E2BIG;
 		crypto_done(crp);
 		return (0);

@@ -93,6 +93,7 @@ __FBSDID("$FreeBSD$");
 #include <net/if_llatbl.h>
 #include <net/if_types.h>
 #include <net/route.h>
+#include <net/route/route_ctl.h>
 #include <net/route/nhop.h>
 #include <net/vnet.h>
 
@@ -401,6 +402,8 @@ icmp6_input(struct mbuf **mp, int *offp, int proto)
 	struct icmp6_hdr *icmp6, *nicmp6;
 	char ip6bufs[INET6_ADDRSTRLEN], ip6bufd[INET6_ADDRSTRLEN];
 	int code, error, icmp6len, ip6len, noff, off, sum;
+
+	NET_EPOCH_ASSERT();
 
 	m = *mp;
 	off = *offp;
@@ -2267,13 +2270,17 @@ icmp6_redirect_input(struct mbuf *m, int off)
 	}
     {
 	/* ip6->ip6_src must be equal to gw for icmp6->icmp6_reddst */
-	struct nhop6_basic nh6;
+	struct nhop_object *nh;
 	struct in6_addr kdst;
 	uint32_t scopeid;
 
 	in6_splitscope(&reddst6, &kdst, &scopeid);
-	if (fib6_lookup_nh_basic(ifp->if_fib, &kdst, scopeid, 0, 0,&nh6)==0){
-		if ((nh6.nh_flags & NHF_GATEWAY) == 0) {
+	NET_EPOCH_ASSERT();
+	nh = fib6_lookup(ifp->if_fib, &kdst, scopeid, 0, 0);
+	if (nh != NULL) {
+		struct in6_addr nh_addr;
+		nh_addr = ifatoia6(nh->nh_ifa)->ia_addr.sin6_addr;
+		if ((nh->nh_flags & NHF_GATEWAY) == 0) {
 			nd6log((LOG_ERR,
 			    "ICMP6 redirect rejected; no route "
 			    "with inet6 gateway found for redirect dst: %s\n",
@@ -2282,19 +2289,16 @@ icmp6_redirect_input(struct mbuf *m, int off)
 		}
 
 		/*
-		 * Embed scope zone id into next hop address, since
-		 * fib6_lookup_nh_basic() returns address without embedded
-		 * scope zone id.
+		 * Embed scope zone id into next hop address.
 		 */
-		if (in6_setscope(&nh6.nh_addr, m->m_pkthdr.rcvif, NULL))
-			goto freeit;
+		nh_addr = nh->gw6_sa.sin6_addr;
 
-		if (IN6_ARE_ADDR_EQUAL(&src6, &nh6.nh_addr) == 0) {
+		if (IN6_ARE_ADDR_EQUAL(&src6, &nh_addr) == 0) {
 			nd6log((LOG_ERR,
 			    "ICMP6 redirect rejected; "
 			    "not equal to gw-for-src=%s (must be same): "
 			    "%s\n",
-			    ip6_sprintf(ip6buf, &nh6.nh_addr),
+			    ip6_sprintf(ip6buf, &nh_addr),
 			    icmp6_redirect_diag(&src6, &reddst6, &redtgt6)));
 			goto bad;
 		}

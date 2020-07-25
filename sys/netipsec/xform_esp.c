@@ -37,6 +37,7 @@
  */
 #include "opt_inet.h"
 #include "opt_inet6.h"
+#include "opt_ipsec.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -80,6 +81,8 @@
 #include <opencrypto/xform.h>
 
 VNET_DEFINE(int, esp_enable) = 1;
+VNET_DEFINE_STATIC(int, esp_ctr_compatibility) = 1;
+#define V_esp_ctr_compatibility VNET(esp_ctr_compatibility)
 VNET_PCPUSTAT_DEFINE(struct espstat, espstat);
 VNET_PCPUSTAT_SYSINIT(espstat);
 
@@ -90,6 +93,9 @@ VNET_PCPUSTAT_SYSUNINIT(espstat);
 SYSCTL_DECL(_net_inet_esp);
 SYSCTL_INT(_net_inet_esp, OID_AUTO, esp_enable,
 	CTLFLAG_VNET | CTLFLAG_RW, &VNET_NAME(esp_enable), 0, "");
+SYSCTL_INT(_net_inet_esp, OID_AUTO, ctr_compatibility,
+    CTLFLAG_VNET | CTLFLAG_RW, &VNET_NAME(esp_ctr_compatibility), 0,
+    "Align AES-CTR encrypted transmitted frames to blocksize");
 SYSCTL_VNET_PCPUSTAT(_net_inet_esp, IPSECCTL_STATS, stats,
     struct espstat, espstat,
     "ESP statistics (struct espstat, netipsec/esp_var.h");
@@ -231,20 +237,14 @@ esp_init(struct secasvar *sav, struct xformsw *xsp)
 	return error;
 }
 
-/*
- * Paranoia.
- */
-static int
-esp_zeroize(struct secasvar *sav)
+static void
+esp_cleanup(struct secasvar *sav)
 {
-	/* NB: ah_zerorize free's the crypto session state */
-	int error = ah_zeroize(sav);
 
-	if (sav->key_enc)
-		bzero(sav->key_enc->key_data, _KEYLEN(sav->key_enc));
+	crypto_freesession(sav->tdb_cryptoid);
+	sav->tdb_cryptoid = NULL;
+	sav->tdb_authalgxform = NULL;
 	sav->tdb_encalgxform = NULL;
-	sav->tdb_xform = NULL;
-	return error;
 }
 
 /*
@@ -366,12 +366,10 @@ esp_input(struct mbuf *m, struct secasvar *sav, int skip, int protoff)
 	}
 
 	/* Crypto operation descriptor */
-	crp->crp_ilen = m->m_pkthdr.len; /* Total input length */
 	crp->crp_flags = CRYPTO_F_CBIFSYNC;
 	if (V_async_crypto)
 		crp->crp_flags |= CRYPTO_F_ASYNC | CRYPTO_F_ASYNC_KEEPORDER;
-	crp->crp_mbuf = m;
-	crp->crp_buf_type = CRYPTO_BUF_MBUF;
+	crypto_use_mbuf(crp, m);
 	crp->crp_callback = esp_input_cb;
 	crp->crp_opaque = xd;
 
@@ -446,7 +444,7 @@ esp_input_cb(struct cryptop *crp)
 	crypto_session_t cryptoid;
 	int hlen, skip, protoff, error, alen;
 
-	m = crp->crp_mbuf;
+	m = crp->crp_buf.cb_mbuf;
 	xd = crp->crp_opaque;
 	CURVNET_SET(xd->vnet);
 	sav = xd->sav;
@@ -654,8 +652,14 @@ esp_output(struct mbuf *m, struct secpolicy *sp, struct secasvar *sav,
 	rlen = m->m_pkthdr.len - skip;	/* Raw payload length. */
 	/*
 	 * RFC4303 2.4 Requires 4 byte alignment.
+	 * Old versions of FreeBSD can't decrypt partial blocks encrypted
+	 * with AES-CTR. Align payload to native_blocksize (16 bytes)
+	 * in order to preserve compatibility.
 	 */
-	blks = MAX(4, espx->blocksize);		/* Cipher blocksize */
+	if (SAV_ISCTR(sav) && V_esp_ctr_compatibility)
+		blks = MAX(4, espx->native_blocksize);	/* Cipher blocksize */
+	else
+		blks = MAX(4, espx->blocksize);
 
 	/* XXX clamp padding length a la KAME??? */
 	padding = ((blks - ((rlen + 2) % blks)) % blks) + 2;
@@ -840,12 +844,10 @@ esp_output(struct mbuf *m, struct secpolicy *sp, struct secasvar *sav,
 	xd->vnet = curvnet;
 
 	/* Crypto operation descriptor. */
-	crp->crp_ilen = m->m_pkthdr.len; /* Total input length. */
 	crp->crp_flags |= CRYPTO_F_CBIFSYNC;
 	if (V_async_crypto)
 		crp->crp_flags |= CRYPTO_F_ASYNC | CRYPTO_F_ASYNC_KEEPORDER;
-	crp->crp_mbuf = m;
-	crp->crp_buf_type = CRYPTO_BUF_MBUF;
+	crypto_use_mbuf(crp, m);
 	crp->crp_callback = esp_output_cb;
 	crp->crp_opaque = xd;
 
@@ -884,7 +886,7 @@ esp_output_cb(struct cryptop *crp)
 
 	xd = (struct xform_data *) crp->crp_opaque;
 	CURVNET_SET(xd->vnet);
-	m = (struct mbuf *) crp->crp_buf;
+	m = crp->crp_buf.cb_mbuf;
 	sp = xd->sp;
 	sav = xd->sav;
 	idx = xd->idx;
@@ -958,7 +960,7 @@ static struct xformsw esp_xformsw = {
 	.xf_type =	XF_ESP,
 	.xf_name =	"IPsec ESP",
 	.xf_init =	esp_init,
-	.xf_zeroize =	esp_zeroize,
+	.xf_cleanup =	esp_cleanup,
 	.xf_input =	esp_input,
 	.xf_output =	esp_output,
 };

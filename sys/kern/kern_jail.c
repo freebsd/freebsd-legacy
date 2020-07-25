@@ -3107,10 +3107,8 @@ prison_priv_check(struct ucred *cred, int priv)
 		/*
 		 * 802.11-related privileges.
 		 */
-	case PRIV_NET80211_GETKEY:
-#ifdef notyet
-	case PRIV_NET80211_MANAGE:		/* XXX-BZ discuss with sam@ */
-#endif
+	case PRIV_NET80211_VAP_GETKEY:
+	case PRIV_NET80211_VAP_MANAGE:
 
 #ifdef notyet
 		/*
@@ -3322,6 +3320,14 @@ prison_priv_check(struct ucred *cred, int priv)
 			return (0);
 		else
 			return (EPERM);
+
+		/*
+		 * Jails should hold no disposition on the PRIV_VFS_READ_DIR
+		 * policy.  priv_check_cred will not specifically allow it, and
+		 * we may want a MAC policy to allow it.
+		 */
+	case PRIV_VFS_READ_DIR:
+		return (0);
 
 		/*
 		 * Conditionnaly allow locking (unlocking) physical pages

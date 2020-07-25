@@ -44,6 +44,7 @@ __FBSDID("$FreeBSD$");
 #include <net/if_var.h>
 #include <net/if_dl.h>
 #include <net/route.h>
+#include <net/route/route_ctl.h>
 #include <net/route/route_var.h>
 #include <net/route/nhop_utils.h>
 #include <net/route/nhop.h>
@@ -597,8 +598,17 @@ destroy_nhop_epoch(epoch_context_t ctx)
 	destroy_nhop(nh_priv);
 }
 
-int
+void
 nhop_ref_object(struct nhop_object *nh)
+{
+	u_int old;
+
+	old = refcount_acquire(&nh->nh_priv->nh_refcnt);
+	KASSERT(old > 0, ("%s: nhop object %p has 0 refs", __func__, nh));
+}
+
+int
+nhop_try_ref_object(struct nhop_object *nh)
 {
 
 	return (refcount_acquire_if_not_zero(&nh->nh_priv->nh_refcnt));
@@ -653,7 +663,7 @@ int
 nhop_ref_any(struct nhop_object *nh)
 {
 
-	return (nhop_ref_object(nh));
+	return (nhop_try_ref_object(nh));
 }
 
 void

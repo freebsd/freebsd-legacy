@@ -54,6 +54,8 @@ __FBSDID("$FreeBSD$");
 
 #include <security/mac/mac_framework.h>
 
+#include <vm/vm_param.h>
+
 /*
  * Data items converted to xdr at startup, since they are constant
  * This is kinda hokey, but may save a little time doing byte swaps
@@ -614,6 +616,8 @@ nfscl_fillsattr(struct nfsrv_descript *nd, struct vattr *vap,
 			NFSSETBIT_ATTRBIT(&attrbits, NFSATTRBIT_TIMEACCESSSET);
 		if (vap->va_mtime.tv_sec != VNOVAL)
 			NFSSETBIT_ATTRBIT(&attrbits, NFSATTRBIT_TIMEMODIFYSET);
+		if (vap->va_birthtime.tv_sec != VNOVAL)
+			NFSSETBIT_ATTRBIT(&attrbits, NFSATTRBIT_TIMECREATE);
 		(void) nfsv4_fillattr(nd, vp->v_mount, vp, NULL, vap, NULL, 0,
 		    &attrbits, NULL, NULL, 0, 0, 0, 0, (uint64_t)0, NULL);
 		break;
@@ -1432,9 +1436,9 @@ nfsv4_loadattr(struct nfsrv_descript *nd, vnode_t vp,
 			if (compare) {
 			    if (*retcmpp == 0) {
 				if (thyp != (u_int64_t)
-				    vfs_statfs(vnode_mount(vp))->f_fsid.val[0] ||
+				    vp->v_mount->mnt_stat.f_fsid.val[0] ||
 				    thyp2 != (u_int64_t)
-				    vfs_statfs(vnode_mount(vp))->f_fsid.val[1])
+				    vp->v_mount->mnt_stat.f_fsid.val[1])
 					*retcmpp = NFSERR_NOTSAME;
 			    }
 			} else if (nap != NULL) {
@@ -1906,7 +1910,7 @@ nfsv4_loadattr(struct nfsrv_descript *nd, vnode_t vp,
 			     */
 			    savuid = p->p_cred->p_ruid;
 			    p->p_cred->p_ruid = cred->cr_uid;
-			    if (!VFS_QUOTACTL(vnode_mount(vp),QCMD(Q_GETQUOTA,
+			    if (!VFS_QUOTACTL(vp->v_mount,QCMD(Q_GETQUOTA,
 				USRQUOTA), cred->cr_uid, (caddr_t)&dqb))
 				freenum = min(dqb.dqb_bhardlimit, freenum);
 			    p->p_cred->p_ruid = savuid;
@@ -1935,7 +1939,7 @@ nfsv4_loadattr(struct nfsrv_descript *nd, vnode_t vp,
 			     */
 			    savuid = p->p_cred->p_ruid;
 			    p->p_cred->p_ruid = cred->cr_uid;
-			    if (!VFS_QUOTACTL(vnode_mount(vp),QCMD(Q_GETQUOTA,
+			    if (!VFS_QUOTACTL(vp->v_mount,QCMD(Q_GETQUOTA,
 				USRQUOTA), cred->cr_uid, (caddr_t)&dqb))
 				freenum = min(dqb.dqb_bsoftlimit, freenum);
 			    p->p_cred->p_ruid = savuid;
@@ -1961,7 +1965,7 @@ nfsv4_loadattr(struct nfsrv_descript *nd, vnode_t vp,
 			     */
 			    savuid = p->p_cred->p_ruid;
 			    p->p_cred->p_ruid = cred->cr_uid;
-			    if (!VFS_QUOTACTL(vnode_mount(vp),QCMD(Q_GETQUOTA,
+			    if (!VFS_QUOTACTL(vp->v_mount,QCMD(Q_GETQUOTA,
 				USRQUOTA), cred->cr_uid, (caddr_t)&dqb))
 				freenum = dqb.dqb_curblocks;
 			    p->p_cred->p_ruid = savuid;
@@ -2073,8 +2077,15 @@ nfsv4_loadattr(struct nfsrv_descript *nd, vnode_t vp,
 			break;
 		case NFSATTRBIT_TIMECREATE:
 			NFSM_DISSECT(tl, u_int32_t *, NFSX_V4TIME);
-			if (compare && !(*retcmpp))
-				*retcmpp = NFSERR_ATTRNOTSUPP;
+			fxdr_nfsv4time(tl, &temptime);
+			if (compare) {
+			    if (!(*retcmpp)) {
+				if (!NFS_CMPTIME(temptime, nap->na_btime))
+					*retcmpp = NFSERR_NOTSAME;
+			    }
+			} else if (nap != NULL) {
+				nap->na_btime = temptime;
+			}
 			attrsum += NFSX_V4TIME;
 			break;
 		case NFSATTRBIT_TIMEDELTA:
@@ -2950,6 +2961,11 @@ nfsv4_fillattr(struct nfsrv_descript *nd, struct mount *mp, vnode_t vp,
 		case NFSATTRBIT_TIMEMODIFY:
 			NFSM_BUILD(tl, u_int32_t *, NFSX_V4TIME);
 			txdr_nfsv4time(&vap->va_mtime, tl);
+			retnum += NFSX_V4TIME;
+			break;
+		case NFSATTRBIT_TIMECREATE:
+			NFSM_BUILD(tl, u_int32_t *, NFSX_V4TIME);
+			txdr_nfsv4time(&vap->va_birthtime, tl);
 			retnum += NFSX_V4TIME;
 			break;
 		case NFSATTRBIT_TIMEMODIFYSET:

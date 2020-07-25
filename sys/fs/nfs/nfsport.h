@@ -654,6 +654,7 @@ struct nfsvattr {
 #define	na_atime	na_vattr.va_atime
 #define	na_mtime	na_vattr.va_mtime
 #define	na_ctime	na_vattr.va_ctime
+#define	na_btime	na_vattr.va_birthtime
 #define	na_gen		na_vattr.va_gen
 #define	na_flags	na_vattr.va_flags
 #define	na_rdev		na_vattr.va_rdev
@@ -1058,11 +1059,6 @@ bool ncl_pager_setsize(struct vnode *vp, u_quad_t *nsizep);
 #define	NFSHASTLS(n)		(((n)->nm_newflag & NFSMNT_TLS) != 0)
 
 /*
- * Gets the stats field out of the mount structure.
- */
-#define	vfs_statfs(m)	(&((m)->mnt_stat))
-
-/*
  * Set boottime.
  */
 #define	NFSSETBOOTTIME(b)	(getboottime(&b))
@@ -1085,6 +1081,11 @@ bool ncl_pager_setsize(struct vnode *vp, u_quad_t *nsizep);
 struct nfsex_args {
 	char	*fspec;
 	struct export_args	export;
+};
+
+struct nfsex_oldargs {
+	char	*fspec;
+	struct o2export_args	export;
 };
 
 /*

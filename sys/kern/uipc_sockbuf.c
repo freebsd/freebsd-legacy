@@ -339,7 +339,7 @@ sbfree(struct sockbuf *sb, struct mbuf *m)
 #ifdef KERN_TLS
 /*
  * Similar to sballoc/sbfree but does not adjust state associated with
- * the sb_mb chain such a sb_fnrdy or sb_sndptr*.  Also assumes mbufs
+ * the sb_mb chain such as sb_fnrdy or sb_sndptr*.  Also assumes mbufs
  * are not ready.
  */
 void
