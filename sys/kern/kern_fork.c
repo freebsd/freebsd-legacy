@@ -128,6 +128,7 @@ sys_pdfork(struct thread *td, struct pdfork_args *uap)
 	fr.fr_pidp = &pid;
 	fr.fr_pd_fd = &fd;
 	fr.fr_pd_flags = uap->flags;
+	AUDIT_ARG_FFLAGS(uap->flags);
 	/*
 	 * It is necessary to return fd by reference because 0 is a valid file
 	 * descriptor number, and the child needs to be able to distinguish
@@ -331,7 +332,7 @@ fork_norfproc(struct thread *td, int flags)
 	 */
 	if (flags & RFCFDG) {
 		struct filedesc *fdtmp;
-		fdtmp = fdinit(td->td_proc->p_fd, false);
+		fdtmp = fdinit(td->td_proc->p_fd, false, NULL);
 		fdescfree(td);
 		p1->p_fd = fdtmp;
 	}
@@ -402,7 +403,7 @@ do_fork(struct thread *td, struct fork_req *fr, struct proc *p2, struct thread *
 	 * Copy filedesc.
 	 */
 	if (fr->fr_flags & RFCFDG) {
-		fd = fdinit(p1->p_fd, false);
+		fd = fdinit(p1->p_fd, false, NULL);
 		fdtol = NULL;
 	} else if (fr->fr_flags & RFFDG) {
 		fd = fdcopy(p1->p_fd);
@@ -909,6 +910,7 @@ fork1(struct thread *td, struct fork_req *fr)
 		    fr->fr_pd_flags, fr->fr_pd_fcaps);
 		if (error != 0)
 			goto fail2;
+		AUDIT_ARG_FD(*fr->fr_pd_fd);
 	}
 
 	mem_charged = 0;
@@ -959,7 +961,7 @@ fork1(struct thread *td, struct fork_req *fr)
 	 * XXX: This is ugly; when we copy resource usage, we need to bump
 	 *      per-cred resource counters.
 	 */
-	proc_set_cred_init(newproc, crhold(td->td_ucred));
+	proc_set_cred_init(newproc, td->td_ucred);
 
 	/*
 	 * Initialize resource accounting for the child process.
@@ -996,8 +998,7 @@ fail0:
 #endif
 	racct_proc_exit(newproc);
 fail1:
-	crfree(newproc->p_ucred);
-	newproc->p_ucred = NULL;
+	proc_unset_cred(newproc);
 fail2:
 	if (vm2 != NULL)
 		vmspace_free(vm2);

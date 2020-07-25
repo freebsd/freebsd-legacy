@@ -12,7 +12,9 @@ ATF_TESTS_SH=			\
 				redirect \
 				divert \
 				forward6 \
-				output6
+				output6 \
+				lpm6
+TEST_METADATA.output6+=	required_programs="python"
 
 ${PACKAGE}FILES+=		exthdr.py
 ${PACKAGE}FILES+=		mld.py

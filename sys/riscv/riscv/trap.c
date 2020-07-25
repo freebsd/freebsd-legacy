@@ -147,6 +147,11 @@ dump_regs(struct trapframe *frame)
 	for (i = 0; i < n; i++)
 		printf("a[%d] == 0x%016lx\n", i, frame->tf_a[i]);
 
+	printf("ra == 0x%016lx\n", frame->tf_ra);
+	printf("sp == 0x%016lx\n", frame->tf_sp);
+	printf("gp == 0x%016lx\n", frame->tf_gp);
+	printf("tp == 0x%016lx\n", frame->tf_tp);
+
 	printf("sepc == 0x%016lx\n", frame->tf_sepc);
 	printf("sstatus == 0x%016lx\n", frame->tf_sstatus);
 }
@@ -264,7 +269,7 @@ do_trap_supervisor(struct trapframe *frame)
 	CTR3(KTR_TRAP, "do_trap_supervisor: curthread: %p, sepc: %lx, frame: %p",
 	    curthread, frame->tf_sepc, frame);
 
-	switch(exception) {
+	switch (exception) {
 	case EXCP_FAULT_LOAD:
 	case EXCP_FAULT_STORE:
 	case EXCP_FAULT_FETCH:
@@ -274,10 +279,9 @@ do_trap_supervisor(struct trapframe *frame)
 		break;
 	case EXCP_BREAKPOINT:
 #ifdef KDTRACE_HOOKS
-		if (dtrace_invop_jump_addr != 0) {
-			dtrace_invop_jump_addr(frame);
-			break;
-		}
+		if (dtrace_invop_jump_addr != NULL &&
+		    dtrace_invop_jump_addr(frame) == 0)
+				break;
 #endif
 #ifdef KDB
 		kdb_trap(exception, 0, frame);
@@ -322,7 +326,7 @@ do_trap_user(struct trapframe *frame)
 	CTR3(KTR_TRAP, "do_trap_user: curthread: %p, sepc: %lx, frame: %p",
 	    curthread, frame->tf_sepc, frame);
 
-	switch(exception) {
+	switch (exception) {
 	case EXCP_FAULT_LOAD:
 	case EXCP_FAULT_STORE:
 	case EXCP_FAULT_FETCH:

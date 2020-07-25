@@ -65,12 +65,12 @@ __FBSDID("$FreeBSD$");
 #include <machine/specialreg.h>
 #include <x86/include/busdma_impl.h>
 #include <x86/iommu/intel_reg.h>
-#include <x86/iommu/busdma_dmar.h>
+#include <dev/iommu/busdma_iommu.h>
 #include <dev/pci/pcireg.h>
 #include <x86/iommu/intel_dmar.h>
 
 static int domain_unmap_buf_locked(struct dmar_domain *domain,
-    dmar_gaddr_t base, dmar_gaddr_t size, int flags);
+    iommu_gaddr_t base, iommu_gaddr_t size, int flags);
 
 /*
  * The cache of the identity mapping page tables for the DMARs.  Using
@@ -82,7 +82,7 @@ static int domain_unmap_buf_locked(struct dmar_domain *domain,
  */
 
 struct idpgtbl {
-	dmar_gaddr_t maxaddr;	/* Page table covers the guest address
+	iommu_gaddr_t maxaddr;	/* Page table covers the guest address
 				   range [0..maxaddr) */
 	int pglvl;		/* Total page table levels ignoring
 				   superpages */
@@ -109,12 +109,12 @@ static MALLOC_DEFINE(M_DMAR_IDPGTBL, "dmar_idpgtbl",
  */
 static void
 domain_idmap_nextlvl(struct idpgtbl *tbl, int lvl, vm_pindex_t idx,
-    dmar_gaddr_t addr)
+    iommu_gaddr_t addr)
 {
 	vm_page_t m1;
 	dmar_pte_t *pte;
 	struct sf_buf *sf;
-	dmar_gaddr_t f, pg_sz;
+	iommu_gaddr_t f, pg_sz;
 	vm_pindex_t base;
 	int i;
 
@@ -163,7 +163,7 @@ domain_idmap_nextlvl(struct idpgtbl *tbl, int lvl, vm_pindex_t idx,
  * maxaddr is typically mapped.
  */
 vm_object_t
-domain_get_idmap_pgtbl(struct dmar_domain *domain, dmar_gaddr_t maxaddr)
+domain_get_idmap_pgtbl(struct dmar_domain *domain, iommu_gaddr_t maxaddr)
 {
 	struct dmar_unit *unit;
 	struct idpgtbl *tbl;
@@ -323,7 +323,7 @@ put_idmap_pgtbl(vm_object_t obj)
  * the level lvl.
  */
 static int
-domain_pgtbl_pte_off(struct dmar_domain *domain, dmar_gaddr_t base, int lvl)
+domain_pgtbl_pte_off(struct dmar_domain *domain, iommu_gaddr_t base, int lvl)
 {
 
 	base >>= DMAR_PAGE_SHIFT + (domain->pglvl - lvl - 1) *
@@ -337,7 +337,7 @@ domain_pgtbl_pte_off(struct dmar_domain *domain, dmar_gaddr_t base, int lvl)
  * lvl.
  */
 static vm_pindex_t
-domain_pgtbl_get_pindex(struct dmar_domain *domain, dmar_gaddr_t base, int lvl)
+domain_pgtbl_get_pindex(struct dmar_domain *domain, iommu_gaddr_t base, int lvl)
 {
 	vm_pindex_t idx, pidx;
 	int i;
@@ -353,7 +353,7 @@ domain_pgtbl_get_pindex(struct dmar_domain *domain, dmar_gaddr_t base, int lvl)
 }
 
 static dmar_pte_t *
-domain_pgtbl_map_pte(struct dmar_domain *domain, dmar_gaddr_t base, int lvl,
+domain_pgtbl_map_pte(struct dmar_domain *domain, iommu_gaddr_t base, int lvl,
     int flags, vm_pindex_t *idxp, struct sf_buf **sf)
 {
 	vm_page_t m;
@@ -421,12 +421,12 @@ retry:
 }
 
 static int
-domain_map_buf_locked(struct dmar_domain *domain, dmar_gaddr_t base,
-    dmar_gaddr_t size, vm_page_t *ma, uint64_t pflags, int flags)
+domain_map_buf_locked(struct dmar_domain *domain, iommu_gaddr_t base,
+    iommu_gaddr_t size, vm_page_t *ma, uint64_t pflags, int flags)
 {
 	dmar_pte_t *pte;
 	struct sf_buf *sf;
-	dmar_gaddr_t pg_sz, base1, size1;
+	iommu_gaddr_t pg_sz, base1, size1;
 	vm_pindex_t pi, c, idx, run_sz;
 	int lvl;
 	bool superpage;
@@ -499,15 +499,23 @@ domain_map_buf_locked(struct dmar_domain *domain, dmar_gaddr_t base,
 }
 
 int
-domain_map_buf(struct dmar_domain *domain, dmar_gaddr_t base, dmar_gaddr_t size,
-    vm_page_t *ma, uint64_t pflags, int flags)
+domain_map_buf(struct iommu_domain *iodom, iommu_gaddr_t base,
+    iommu_gaddr_t size, vm_page_t *ma, uint64_t eflags, int flags)
 {
+	struct dmar_domain *domain;
 	struct dmar_unit *unit;
+	uint64_t pflags;
 	int error;
 
+	pflags = ((eflags & IOMMU_MAP_ENTRY_READ) != 0 ? DMAR_PTE_R : 0) |
+	    ((eflags & IOMMU_MAP_ENTRY_WRITE) != 0 ? DMAR_PTE_W : 0) |
+	    ((eflags & IOMMU_MAP_ENTRY_SNOOP) != 0 ? DMAR_PTE_SNP : 0) |
+	    ((eflags & IOMMU_MAP_ENTRY_TM) != 0 ? DMAR_PTE_TM : 0);
+
+	domain = (struct dmar_domain *)iodom;
 	unit = domain->dmar;
 
-	KASSERT((domain->flags & DMAR_DOMAIN_IDMAP) == 0,
+	KASSERT((domain->iodom.flags & DMAR_DOMAIN_IDMAP) == 0,
 	    ("modifying idmap pagetable domain %p", domain));
 	KASSERT((base & DMAR_PAGE_MASK) == 0,
 	    ("non-aligned base %p %jx %jx", domain, (uintmax_t)base,
@@ -559,11 +567,11 @@ domain_map_buf(struct dmar_domain *domain, dmar_gaddr_t base, dmar_gaddr_t size,
 }
 
 static void domain_unmap_clear_pte(struct dmar_domain *domain,
-    dmar_gaddr_t base, int lvl, int flags, dmar_pte_t *pte,
+    iommu_gaddr_t base, int lvl, int flags, dmar_pte_t *pte,
     struct sf_buf **sf, bool free_fs);
 
 static void
-domain_free_pgtbl_pde(struct dmar_domain *domain, dmar_gaddr_t base,
+domain_free_pgtbl_pde(struct dmar_domain *domain, iommu_gaddr_t base,
     int lvl, int flags)
 {
 	struct sf_buf *sf;
@@ -576,7 +584,7 @@ domain_free_pgtbl_pde(struct dmar_domain *domain, dmar_gaddr_t base,
 }
 
 static void
-domain_unmap_clear_pte(struct dmar_domain *domain, dmar_gaddr_t base, int lvl,
+domain_unmap_clear_pte(struct dmar_domain *domain, iommu_gaddr_t base, int lvl,
     int flags, dmar_pte_t *pte, struct sf_buf **sf, bool free_sf)
 {
 	vm_page_t m;
@@ -605,20 +613,20 @@ domain_unmap_clear_pte(struct dmar_domain *domain, dmar_gaddr_t base, int lvl,
  * Assumes that the unmap is never partial.
  */
 static int
-domain_unmap_buf_locked(struct dmar_domain *domain, dmar_gaddr_t base,
-    dmar_gaddr_t size, int flags)
+domain_unmap_buf_locked(struct dmar_domain *domain, iommu_gaddr_t base,
+    iommu_gaddr_t size, int flags)
 {
 	dmar_pte_t *pte;
 	struct sf_buf *sf;
 	vm_pindex_t idx;
-	dmar_gaddr_t pg_sz;
+	iommu_gaddr_t pg_sz;
 	int lvl;
 
 	DMAR_DOMAIN_ASSERT_PGLOCKED(domain);
 	if (size == 0)
 		return (0);
 
-	KASSERT((domain->flags & DMAR_DOMAIN_IDMAP) == 0,
+	KASSERT((domain->iodom.flags & DMAR_DOMAIN_IDMAP) == 0,
 	    ("modifying idmap pagetable domain %p", domain));
 	KASSERT((base & DMAR_PAGE_MASK) == 0,
 	    ("non-aligned base %p %jx %jx", domain, (uintmax_t)base,
@@ -677,8 +685,8 @@ domain_unmap_buf_locked(struct dmar_domain *domain, dmar_gaddr_t base,
 }
 
 int
-domain_unmap_buf(struct dmar_domain *domain, dmar_gaddr_t base,
-    dmar_gaddr_t size, int flags)
+domain_unmap_buf(struct dmar_domain *domain, iommu_gaddr_t base,
+    iommu_gaddr_t size, int flags)
 {
 	int error;
 
@@ -705,7 +713,7 @@ domain_alloc_pgtbl(struct dmar_domain *domain)
 	m->ref_count = 1;
 	DMAR_DOMAIN_PGUNLOCK(domain);
 	DMAR_LOCK(domain->dmar);
-	domain->flags |= DMAR_DOMAIN_PGTBL_INITED;
+	domain->iodom.flags |= DMAR_DOMAIN_PGTBL_INITED;
 	DMAR_UNLOCK(domain->dmar);
 	return (0);
 }
@@ -719,16 +727,16 @@ domain_free_pgtbl(struct dmar_domain *domain)
 	obj = domain->pgtbl_obj;
 	if (obj == NULL) {
 		KASSERT((domain->dmar->hw_ecap & DMAR_ECAP_PT) != 0 &&
-		    (domain->flags & DMAR_DOMAIN_IDMAP) != 0,
+		    (domain->iodom.flags & DMAR_DOMAIN_IDMAP) != 0,
 		    ("lost pagetable object domain %p", domain));
 		return;
 	}
 	DMAR_DOMAIN_ASSERT_PGLOCKED(domain);
 	domain->pgtbl_obj = NULL;
 
-	if ((domain->flags & DMAR_DOMAIN_IDMAP) != 0) {
+	if ((domain->iodom.flags & DMAR_DOMAIN_IDMAP) != 0) {
 		put_idmap_pgtbl(obj);
-		domain->flags &= ~DMAR_DOMAIN_IDMAP;
+		domain->iodom.flags &= ~DMAR_DOMAIN_IDMAP;
 		return;
 	}
 
@@ -757,17 +765,17 @@ domain_wait_iotlb_flush(struct dmar_unit *unit, uint64_t wt, int iro)
 }
 
 void
-domain_flush_iotlb_sync(struct dmar_domain *domain, dmar_gaddr_t base,
-    dmar_gaddr_t size)
+domain_flush_iotlb_sync(struct dmar_domain *domain, iommu_gaddr_t base,
+    iommu_gaddr_t size)
 {
 	struct dmar_unit *unit;
-	dmar_gaddr_t isize;
+	iommu_gaddr_t isize;
 	uint64_t iotlbr;
 	int am, iro;
 
 	unit = domain->dmar;
 	KASSERT(!unit->qi_enabled, ("dmar%d: sync iotlb flush call",
-	    unit->unit));
+	    unit->iommu.unit));
 	iro = DMAR_ECAP_IRO(unit->hw_ecap) * 16;
 	DMAR_LOCK(unit);
 	if ((unit->hw_cap & DMAR_CAP_PSI) == 0 || size > 2 * 1024 * 1024) {
@@ -775,7 +783,7 @@ domain_flush_iotlb_sync(struct dmar_domain *domain, dmar_gaddr_t base,
 		    DMAR_IOTLB_DID(domain->domain), iro);
 		KASSERT((iotlbr & DMAR_IOTLB_IAIG_MASK) !=
 		    DMAR_IOTLB_IAIG_INVLD,
-		    ("dmar%d: invalidation failed %jx", unit->unit,
+		    ("dmar%d: invalidation failed %jx", unit->iommu.unit,
 		    (uintmax_t)iotlbr));
 	} else {
 		for (; size > 0; base += isize, size -= isize) {
@@ -788,7 +796,7 @@ domain_flush_iotlb_sync(struct dmar_domain *domain, dmar_gaddr_t base,
 			    DMAR_IOTLB_IAIG_INVLD,
 			    ("dmar%d: PSI invalidation failed "
 			    "iotlbr 0x%jx base 0x%jx size 0x%jx am %d",
-			    unit->unit, (uintmax_t)iotlbr,
+			    unit->iommu.unit, (uintmax_t)iotlbr,
 			    (uintmax_t)base, (uintmax_t)size, am));
 			/*
 			 * Any non-page granularity covers whole guest

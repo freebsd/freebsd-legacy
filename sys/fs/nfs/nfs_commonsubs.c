@@ -41,7 +41,6 @@ __FBSDID("$FreeBSD$");
  * the nfs op functions. They do things like create the rpc header and
  * copy data between mbuf chains and uio lists.
  */
-#ifndef APPLEKEXT
 #include "opt_inet.h"
 #include "opt_inet6.h"
 
@@ -50,6 +49,8 @@ __FBSDID("$FreeBSD$");
 #include <sys/extattr.h>
 
 #include <security/mac/mac_framework.h>
+
+#include <vm/vm_param.h>
 
 /*
  * Data items converted to xdr at startup, since they are constant
@@ -192,7 +193,6 @@ struct nfsv4_opflag nfsv4_opflag[NFSV42_NOPS] = {
 	{ 0, 1, 0, 0, LK_SHARED, 1, 1 },		/* Listxattrs */
 	{ 0, 1, 1, 1, LK_EXCLUSIVE, 1, 1 },		/* Removexattr */
 };
-#endif	/* !APPLEKEXT */
 
 static int ncl_mbuf_mhlen = MHLEN;
 static int nfsrv_usercnt = 0;
@@ -316,10 +316,10 @@ static int nfs_bigrequest[NFSV42_NPROCS] = {
  * Start building a request. Mostly just put the first file handle in
  * place.
  */
-APPLESTATIC void
+void
 nfscl_reqstart(struct nfsrv_descript *nd, int procnum, struct nfsmount *nmp,
     u_int8_t *nfhp, int fhlen, u_int32_t **opcntpp, struct nfsclsession *sep,
-    int vers, int minorvers)
+    int vers, int minorvers, bool use_ext)
 {
 	struct mbuf *mb;
 	u_int32_t *tl;
@@ -352,17 +352,26 @@ nfscl_reqstart(struct nfsrv_descript *nd, int procnum, struct nfsmount *nmp,
 	}
 	nd->nd_procnum = procnum;
 	nd->nd_repstat = 0;
+	nd->nd_maxextsiz = 16384;
+	if (use_ext && mb_use_ext_pgs && PMAP_HAS_DMAP != 0)
+		nd->nd_flag |= ND_EXTPG;
 
 	/*
 	 * Get the first mbuf for the request.
 	 */
-	if (nfs_bigrequest[procnum])
-		NFSMCLGET(mb, M_WAITOK);
-	else
-		NFSMGET(mb);
-	mb->m_len = 0;
-	nd->nd_mreq = nd->nd_mb = mb;
-	nd->nd_bpos = mtod(mb, caddr_t);
+	if ((nd->nd_flag & ND_EXTPG) != 0) {
+		mb = mb_alloc_ext_plus_pages(PAGE_SIZE, M_WAITOK);
+		nd->nd_mreq = nd->nd_mb = mb;
+		nfsm_set(nd, 0);
+	} else {
+		if (nfs_bigrequest[procnum])
+			NFSMCLGET(mb, M_WAITOK);
+		else
+			NFSMGET(mb);
+		mb->m_len = 0;
+		nd->nd_mreq = nd->nd_mb = mb;
+		nd->nd_bpos = mtod(mb, char *);
+	}
 	
 	/*
 	 * And fill the first file handle into the request.
@@ -455,7 +464,7 @@ nfscl_reqstart(struct nfsrv_descript *nd, int procnum, struct nfsmount *nmp,
 /*
  * Put a state Id in the mbuf list.
  */
-APPLESTATIC void
+void
 nfsm_stateidtom(struct nfsrv_descript *nd, nfsv4stateid_t *stateidp, int flag)
 {
 	nfsv4stateid_t *st;
@@ -596,6 +605,8 @@ nfscl_fillsattr(struct nfsrv_descript *nd, struct vattr *vap,
 			NFSSETBIT_ATTRBIT(&attrbits, NFSATTRBIT_TIMEACCESSSET);
 		if (vap->va_mtime.tv_sec != VNOVAL)
 			NFSSETBIT_ATTRBIT(&attrbits, NFSATTRBIT_TIMEMODIFYSET);
+		if (vap->va_birthtime.tv_sec != VNOVAL)
+			NFSSETBIT_ATTRBIT(&attrbits, NFSATTRBIT_TIMECREATE);
 		(void) nfsv4_fillattr(nd, vp->v_mount, vp, NULL, vap, NULL, 0,
 		    &attrbits, NULL, NULL, 0, 0, 0, 0, (uint64_t)0, NULL);
 		break;
@@ -611,7 +622,7 @@ nfsm_mbufuio(struct nfsrv_descript *nd, struct uio *uiop, int siz)
 {
 	char *mbufcp, *uiocp;
 	int xfer, left, len;
-	mbuf_t mp;
+	struct mbuf *mp;
 	long uiosiz, rem;
 	int error = 0;
 
@@ -652,7 +663,7 @@ nfsm_mbufuio(struct nfsrv_descript *nd, struct uio *uiop, int siz)
 			if (uiop->uio_segflg == UIO_SYSSPACE)
 				NFSBCOPY(mbufcp, uiocp, xfer);
 			else
-				copyout(mbufcp, CAST_USER_ADDR_T(uiocp), xfer);
+				copyout(mbufcp, uiocp, xfer);
 			left -= xfer;
 			len -= xfer;
 			mbufcp += xfer;
@@ -691,10 +702,10 @@ out:
  * This is used by the macro NFSM_DISSECT for tough
  * cases.
  */
-APPLESTATIC void *
+void *
 nfsm_dissct(struct nfsrv_descript *nd, int siz, int how)
 {
-	mbuf_t mp2;
+	struct mbuf *mp2;
 	int siz2, xfer;
 	caddr_t p;
 	int left;
@@ -757,7 +768,7 @@ nfsm_dissct(struct nfsrv_descript *nd, int siz, int how)
  * here than check for offs > 0 for all calls to nfsm_advance.
  * If left == -1, it should be calculated here.
  */
-APPLESTATIC int
+int
 nfsm_advance(struct nfsrv_descript *nd, int offs, int left)
 {
 	int error = 0;
@@ -805,12 +816,12 @@ out:
  * Copy a string into mbuf(s).
  * Return the number of bytes output, including XDR overheads.
  */
-APPLESTATIC int
+int
 nfsm_strtom(struct nfsrv_descript *nd, const char *cp, int siz)
 {
-	mbuf_t m2;
+	struct mbuf *m2;
 	int xfer, left;
-	mbuf_t m1;
+	struct mbuf *m1;
 	int rem, bytesize;
 	u_int32_t *tl;
 	char *cp2;
@@ -821,22 +832,38 @@ nfsm_strtom(struct nfsrv_descript *nd, const char *cp, int siz)
 	bytesize = NFSX_UNSIGNED + siz + rem;
 	m2 = nd->nd_mb;
 	cp2 = nd->nd_bpos;
-	left = M_TRAILINGSPACE(m2);
+	if ((nd->nd_flag & ND_EXTPG) != 0)
+		left = nd->nd_bextpgsiz;
+	else
+		left = M_TRAILINGSPACE(m2);
 
+	KASSERT(((m2->m_flags & (M_EXT | M_EXTPG)) ==
+	    (M_EXT | M_EXTPG) && (nd->nd_flag & ND_EXTPG) != 0) ||
+	    ((m2->m_flags & (M_EXT | M_EXTPG)) !=
+	    (M_EXT | M_EXTPG) && (nd->nd_flag & ND_EXTPG) == 0),
+	    ("nfsm_strtom: ext_pgs and non-ext_pgs mbufs mixed"));
 	/*
 	 * Loop around copying the string to mbuf(s).
 	 */
 	while (siz > 0) {
 		if (left == 0) {
-			if (siz > ncl_mbuf_mlen)
-				NFSMCLGET(m1, M_WAITOK);
-			else
-				NFSMGET(m1);
-			m1->m_len = 0;
-			m2->m_next = m1;
-			m2 = m1;
-			cp2 = mtod(m2, caddr_t);
-			left = M_TRAILINGSPACE(m2);
+			if ((nd->nd_flag & ND_EXTPG) != 0) {
+				m2 = nfsm_add_ext_pgs(m2,
+				    nd->nd_maxextsiz, &nd->nd_bextpg);
+				cp2 = (char *)(void *)PHYS_TO_DMAP(
+				    m2->m_epg_pa[nd->nd_bextpg]);
+				nd->nd_bextpgsiz = left = PAGE_SIZE;
+			} else {
+				if (siz > ncl_mbuf_mlen)
+					NFSMCLGET(m1, M_WAITOK);
+				else
+					NFSMGET(m1);
+				m1->m_len = 0;
+				cp2 = mtod(m1, char *);
+				left = M_TRAILINGSPACE(m1);
+				m2->m_next = m1;
+				m2 = m1;
+			}
 		}
 		if (left >= siz)
 			xfer = siz;
@@ -844,25 +871,38 @@ nfsm_strtom(struct nfsrv_descript *nd, const char *cp, int siz)
 			xfer = left;
 		NFSBCOPY(cp, cp2, xfer);
 		cp += xfer;
+		cp2 += xfer;
 		m2->m_len += xfer;
 		siz -= xfer;
 		left -= xfer;
+		if ((nd->nd_flag & ND_EXTPG) != 0) {
+			nd->nd_bextpgsiz -= xfer;
+			m2->m_epg_last_len += xfer;
+		}
 		if (siz == 0 && rem) {
 			if (left < rem)
 				panic("nfsm_strtom");
-			NFSBZERO(cp2 + xfer, rem);
+			NFSBZERO(cp2, rem);
 			m2->m_len += rem;
+			cp2 += rem;
+			if ((nd->nd_flag & ND_EXTPG) != 0) {
+				nd->nd_bextpgsiz -= rem;
+				m2->m_epg_last_len += rem;
+			}
 		}
 	}
 	nd->nd_mb = m2;
-	nd->nd_bpos = mtod(m2, caddr_t) + m2->m_len;
+	if ((nd->nd_flag & ND_EXTPG) != 0)
+		nd->nd_bpos = cp2;
+	else
+		nd->nd_bpos = mtod(m2, char *) + m2->m_len;
 	return (bytesize);
 }
 
 /*
  * Called once to initialize data structures...
  */
-APPLESTATIC void
+void
 newnfs_init(void)
 {
 	static int nfs_inited = 0;
@@ -892,7 +932,7 @@ newnfs_init(void)
  * set_true == 1 if there should be an newnfs_true prepended on the file handle.
  * Return the number of bytes output, including XDR overhead.
  */
-APPLESTATIC int
+int
 nfsm_fhtom(struct nfsrv_descript *nd, u_int8_t *fhp, int size, int set_true)
 {
 	u_int32_t *tl;
@@ -935,7 +975,7 @@ nfsm_fhtom(struct nfsrv_descript *nd, u_int8_t *fhp, int size, int set_true)
  * The AF_INET family is handled as a special case so that address mbufs
  * don't need to be saved to store "struct in_addr", which is only 4 bytes.
  */
-APPLESTATIC int
+int
 nfsaddr_match(int family, union nethostaddr *haddr, NFSSOCKADDR_T nam)
 {
 #ifdef INET
@@ -972,7 +1012,7 @@ nfsaddr_match(int family, union nethostaddr *haddr, NFSSOCKADDR_T nam)
 /*
  * Similar to the above, but takes to NFSSOCKADDR_T args.
  */
-APPLESTATIC int
+int
 nfsaddr2_match(NFSSOCKADDR_T nam1, NFSSOCKADDR_T nam2)
 {
 	struct sockaddr_in *addr1, *addr2;
@@ -1006,60 +1046,13 @@ nfsaddr2_match(NFSSOCKADDR_T nam1, NFSSOCKADDR_T nam2)
 	return (0);
 }
 
-
-/*
- * Trim the stuff already dissected off the mbuf list.
- */
-APPLESTATIC void
-newnfs_trimleading(nd)
-	struct nfsrv_descript *nd;
-{
-	mbuf_t m, n;
-	int offs;
-
-	/*
-	 * First, free up leading mbufs.
-	 */
-	if (nd->nd_mrep != nd->nd_md) {
-		m = nd->nd_mrep;
-		while (m->m_next != nd->nd_md) {
-			if (m->m_next == NULL)
-				panic("nfsm trim leading");
-			m = m->m_next;
-		}
-		m->m_next = NULL;
-		m_freem(nd->nd_mrep);
-	}
-	m = nd->nd_md;
-
-	/*
-	 * Now, adjust this mbuf, based on nd_dpos.
-	 */
-	offs = nd->nd_dpos - mtod(m, caddr_t);
-	if (offs == m->m_len) {
-		n = m;
-		m = m->m_next;
-		if (m == NULL)
-			panic("nfsm trim leading2");
-		n->m_next = NULL;
-		m_freem(n);
-	} else if (offs > 0) {
-		m->m_len -= offs;
-		m->m_data += offs;
-	} else if (offs < 0)
-		panic("nfsm trimleading offs");
-	nd->nd_mrep = m;
-	nd->nd_md = m;
-	nd->nd_dpos = mtod(m, caddr_t);
-}
-
 /*
  * Trim trailing data off the mbuf list being built.
  */
-APPLESTATIC void
+void
 newnfs_trimtrailing(nd, mb, bpos)
 	struct nfsrv_descript *nd;
-	mbuf_t mb;
+	struct mbuf *mb;
 	caddr_t bpos;
 {
 
@@ -1075,7 +1068,7 @@ newnfs_trimtrailing(nd, mb, bpos)
 /*
  * Dissect a file handle on the client.
  */
-APPLESTATIC int
+int
 nfsm_getfh(struct nfsrv_descript *nd, struct nfsfh **nfhpp)
 {
 	u_int32_t *tl;
@@ -1110,7 +1103,7 @@ nfsmout:
  * Break down the nfsv4 acl.
  * If the aclp == NULL or won't fit in an acl, just discard the acl info.
  */
-APPLESTATIC int
+int
 nfsrv_dissectacl(struct nfsrv_descript *nd, NFSACL_T *aclp, int *aclerrp,
     int *aclsizep, __unused NFSPROC_T *p)
 {
@@ -1176,7 +1169,7 @@ nfsmout:
  * Returns EBADRPC for a parsing error, 0 otherwise.
  * If the clearinvalid flag is set, clear the bits not supported.
  */
-APPLESTATIC int
+int
 nfsrv_getattrbits(struct nfsrv_descript *nd, nfsattrbit_t *attrbitp, int *cntp,
     int *retnotsupp)
 {
@@ -1222,7 +1215,7 @@ nfsmout:
  * and 0 otherwise.
  * Returns EBADRPC if it can't be parsed, 0 otherwise.
  */
-APPLESTATIC int
+int
 nfsv4_loadattr(struct nfsrv_descript *nd, vnode_t vp,
     struct nfsvattr *nap, struct nfsfh **nfhpp, fhandle_t *fhp, int fhsize,
     struct nfsv3_pathconf *pc, struct statfs *sbp, struct nfsstatfs *sfp,
@@ -1451,9 +1444,9 @@ nfsv4_loadattr(struct nfsrv_descript *nd, vnode_t vp,
 			if (compare) {
 			    if (*retcmpp == 0) {
 				if (thyp != (u_int64_t)
-				    vfs_statfs(vnode_mount(vp))->f_fsid.val[0] ||
+				    vp->v_mount->mnt_stat.f_fsid.val[0] ||
 				    thyp2 != (u_int64_t)
-				    vfs_statfs(vnode_mount(vp))->f_fsid.val[1])
+				    vp->v_mount->mnt_stat.f_fsid.val[1])
 					*retcmpp = NFSERR_NOTSAME;
 			    }
 			} else if (nap != NULL) {
@@ -1925,7 +1918,7 @@ nfsv4_loadattr(struct nfsrv_descript *nd, vnode_t vp,
 			     */
 			    savuid = p->p_cred->p_ruid;
 			    p->p_cred->p_ruid = cred->cr_uid;
-			    if (!VFS_QUOTACTL(vnode_mount(vp),QCMD(Q_GETQUOTA,
+			    if (!VFS_QUOTACTL(vp->v_mount,QCMD(Q_GETQUOTA,
 				USRQUOTA), cred->cr_uid, (caddr_t)&dqb))
 				freenum = min(dqb.dqb_bhardlimit, freenum);
 			    p->p_cred->p_ruid = savuid;
@@ -1954,7 +1947,7 @@ nfsv4_loadattr(struct nfsrv_descript *nd, vnode_t vp,
 			     */
 			    savuid = p->p_cred->p_ruid;
 			    p->p_cred->p_ruid = cred->cr_uid;
-			    if (!VFS_QUOTACTL(vnode_mount(vp),QCMD(Q_GETQUOTA,
+			    if (!VFS_QUOTACTL(vp->v_mount,QCMD(Q_GETQUOTA,
 				USRQUOTA), cred->cr_uid, (caddr_t)&dqb))
 				freenum = min(dqb.dqb_bsoftlimit, freenum);
 			    p->p_cred->p_ruid = savuid;
@@ -1980,7 +1973,7 @@ nfsv4_loadattr(struct nfsrv_descript *nd, vnode_t vp,
 			     */
 			    savuid = p->p_cred->p_ruid;
 			    p->p_cred->p_ruid = cred->cr_uid;
-			    if (!VFS_QUOTACTL(vnode_mount(vp),QCMD(Q_GETQUOTA,
+			    if (!VFS_QUOTACTL(vp->v_mount,QCMD(Q_GETQUOTA,
 				USRQUOTA), cred->cr_uid, (caddr_t)&dqb))
 				freenum = dqb.dqb_curblocks;
 			    p->p_cred->p_ruid = savuid;
@@ -2092,8 +2085,15 @@ nfsv4_loadattr(struct nfsrv_descript *nd, vnode_t vp,
 			break;
 		case NFSATTRBIT_TIMECREATE:
 			NFSM_DISSECT(tl, u_int32_t *, NFSX_V4TIME);
-			if (compare && !(*retcmpp))
-				*retcmpp = NFSERR_ATTRNOTSUPP;
+			fxdr_nfsv4time(tl, &temptime);
+			if (compare) {
+			    if (!(*retcmpp)) {
+				if (!NFS_CMPTIME(temptime, nap->na_btime))
+					*retcmpp = NFSERR_NOTSAME;
+			    }
+			} else if (nap != NULL) {
+				nap->na_btime = temptime;
+			}
 			attrsum += NFSX_V4TIME;
 			break;
 		case NFSATTRBIT_TIMEDELTA:
@@ -2266,7 +2266,7 @@ nfsmout:
  * and the mp argument indicates to check for a forced dismount, iff not
  * NULL.
  */
-APPLESTATIC int
+int
 nfsv4_lock(struct nfsv4lock *lp, int iwantlock, int *isleptp,
     void *mutex, struct mount *mp)
 {
@@ -2313,7 +2313,7 @@ nfsv4_lock(struct nfsv4lock *lp, int iwantlock, int *isleptp,
  * The second argument is set to 1 to indicate the nfslock_usecnt should be
  * incremented, as well.
  */
-APPLESTATIC void
+void
 nfsv4_unlock(struct nfsv4lock *lp, int incref)
 {
 
@@ -2326,7 +2326,7 @@ nfsv4_unlock(struct nfsv4lock *lp, int incref)
 /*
  * Release a reference cnt.
  */
-APPLESTATIC void
+void
 nfsv4_relref(struct nfsv4lock *lp)
 {
 
@@ -2346,7 +2346,7 @@ nfsv4_relref(struct nfsv4lock *lp)
  * If the mp argument is not NULL, check for NFSCL_FORCEDISM() being set and
  * return without getting a refcnt for that case.
  */
-APPLESTATIC void
+void
 nfsv4_getref(struct nfsv4lock *lp, int *isleptp, void *mutex,
     struct mount *mp)
 {
@@ -2376,7 +2376,7 @@ nfsv4_getref(struct nfsv4lock *lp, int *isleptp, void *mutex,
  * Get a reference as above, but return failure instead of sleeping if
  * an exclusive lock is held.
  */
-APPLESTATIC int
+int
 nfsv4_getref_nonblock(struct nfsv4lock *lp)
 {
 
@@ -2390,7 +2390,7 @@ nfsv4_getref_nonblock(struct nfsv4lock *lp)
 /*
  * Test for a lock. Return 1 if locked, 0 otherwise.
  */
-APPLESTATIC int
+int
 nfsv4_testlock(struct nfsv4lock *lp)
 {
 
@@ -2418,12 +2418,12 @@ nfsv4_wanted(struct nfsv4lock *lp)
  * Return EBADRPC if there is an mbuf error,
  * 0 otherwise.
  */
-APPLESTATIC int
+int
 nfsrv_mtostr(struct nfsrv_descript *nd, char *str, int siz)
 {
 	char *cp;
 	int xfer, len;
-	mbuf_t mp;
+	struct mbuf *mp;
 	int rem, error = 0;
 
 	mp = nd->nd_md;
@@ -2469,7 +2469,7 @@ out:
 /*
  * Fill in the attributes as marked by the bitmap (V4).
  */
-APPLESTATIC int
+int
 nfsv4_fillattr(struct nfsrv_descript *nd, struct mount *mp, vnode_t vp,
     NFSACL_T *saclp, struct vattr *vap, fhandle_t *fhp, int rderror,
     nfsattrbit_t *attrbitp, struct ucred *cred, NFSPROC_T *p, int isdgram,
@@ -2971,6 +2971,11 @@ nfsv4_fillattr(struct nfsrv_descript *nd, struct mount *mp, vnode_t vp,
 			txdr_nfsv4time(&vap->va_mtime, tl);
 			retnum += NFSX_V4TIME;
 			break;
+		case NFSATTRBIT_TIMECREATE:
+			NFSM_BUILD(tl, u_int32_t *, NFSX_V4TIME);
+			txdr_nfsv4time(&vap->va_birthtime, tl);
+			retnum += NFSX_V4TIME;
+			break;
 		case NFSATTRBIT_TIMEMODIFYSET:
 			if ((vap->va_vaflags & VA_UTIMES_NULL) == 0) {
 				NFSM_BUILD(tl, u_int32_t *, NFSX_V4SETTIME);
@@ -3049,7 +3054,7 @@ nfsv4_fillattr(struct nfsrv_descript *nd, struct mount *mp, vnode_t vp,
  * Put the attribute bits onto an mbuf list.
  * Return the number of bytes of output generated.
  */
-APPLESTATIC int
+int
 nfsrv_putattrbit(struct nfsrv_descript *nd, nfsattrbit_t *attrbitp)
 {
 	u_int32_t *tl;
@@ -3074,7 +3079,7 @@ nfsrv_putattrbit(struct nfsrv_descript *nd, nfsattrbit_t *attrbitp)
  *       (malloc a larger one, as required)
  * retlenp - pointer to length to be returned
  */
-APPLESTATIC void
+void
 nfsv4_uidtostr(uid_t uid, u_char **cpp, int *retlenp)
 {
 	int i;
@@ -3231,7 +3236,7 @@ tryagain:
  * string is made up entirely of digits, just convert the string to
  * a number.
  */
-APPLESTATIC int
+int
 nfsv4_strtouid(struct nfsrv_descript *nd, u_char *str, int len, uid_t *uidp)
 {
 	int i;
@@ -3333,7 +3338,7 @@ out:
  *       (malloc a larger one, as required)
  * retlenp - pointer to length to be returned
  */
-APPLESTATIC void
+void
 nfsv4_gidtostr(gid_t gid, u_char **cpp, int *retlenp)
 {
 	int i;
@@ -3445,7 +3450,7 @@ tryagain:
  * string is made up entirely of digits, just convert the string to
  * a number.
  */
-APPLESTATIC int
+int
 nfsv4_strtogid(struct nfsrv_descript *nd, u_char *str, int len, gid_t *gidp)
 {
 	int i;
@@ -3570,7 +3575,7 @@ nfsrv_cmpmixedcase(u_char *cp, u_char *cp2, int len)
 /*
  * Set the port for the nfsuserd.
  */
-APPLESTATIC int
+int
 nfsrv_nfsuserdport(struct nfsuserd_args *nargs, NFSPROC_T *p)
 {
 	struct nfssockreq *rp;
@@ -3653,7 +3658,7 @@ out:
 /*
  * Delete the nfsuserd port.
  */
-APPLESTATIC void
+void
 nfsrv_nfsuserddelport(void)
 {
 
@@ -3740,7 +3745,7 @@ out:
  * This function is called from the nfssvc(2) system call, to update the
  * kernel user/group name list(s) for the V4 owner and ownergroup attributes.
  */
-APPLESTATIC int
+int
 nfssvc_idname(struct nfsd_idargs *nidp)
 {
 	struct nfsusrgrp *nusrp, *usrp, *newusrp;
@@ -3759,8 +3764,7 @@ nfssvc_idname(struct nfsd_idargs *nidp)
 	}
 	if (nidp->nid_flag & NFSID_INITIALIZE) {
 		cp = malloc(nidp->nid_namelen + 1, M_NFSSTRING, M_WAITOK);
-		error = copyin(CAST_USER_ADDR_T(nidp->nid_name), cp,
-		    nidp->nid_namelen);
+		error = copyin(nidp->nid_name, cp, nidp->nid_namelen);
 		if (error != 0) {
 			free(cp, M_NFSSTRING);
 			goto out;
@@ -3856,13 +3860,13 @@ nfssvc_idname(struct nfsd_idargs *nidp)
 	 */
 	newusrp = malloc(sizeof(struct nfsusrgrp) + nidp->nid_namelen,
 	    M_NFSUSERGROUP, M_WAITOK | M_ZERO);
-	error = copyin(CAST_USER_ADDR_T(nidp->nid_name), newusrp->lug_name,
+	error = copyin(nidp->nid_name, newusrp->lug_name,
 	    nidp->nid_namelen);
 	if (error == 0 && nidp->nid_ngroup > 0 &&
 	    (nidp->nid_flag & NFSID_ADDUID) != 0) {
 		grps = malloc(sizeof(gid_t) * nidp->nid_ngroup, M_TEMP,
 		    M_WAITOK);
-		error = copyin(CAST_USER_ADDR_T(nidp->nid_grps), grps,
+		error = copyin(nidp->nid_grps, grps,
 		    sizeof(gid_t) * nidp->nid_ngroup);
 		if (error == 0) {
 			/*
@@ -4134,7 +4138,7 @@ nfsrv_removeuser(struct nfsusrgrp *usrp, int isuser)
  * running, since it doesn't do any locking.
  * This function is meant to be used when the nfscommon module is unloaded.
  */
-APPLESTATIC void
+void
 nfsrv_cleanusergroup(void)
 {
 	struct nfsrv_lughash *hp, *hp2;
@@ -4181,7 +4185,7 @@ nfsrv_cleanusergroup(void)
  * This function scans a byte string and checks for UTF-8 compliance.
  * It returns 0 if it conforms and NFSERR_INVAL if not.
  */
-APPLESTATIC int
+int
 nfsrv_checkutf8(u_int8_t *cp, int len)
 {
 	u_int32_t val = 0x0;
@@ -4434,26 +4438,35 @@ nfsrv_refstrbigenough(int siz, u_char **cpp, u_char **cpp2, int *slenp)
 /*
  * Initialize the reply header data structures.
  */
-APPLESTATIC void
+void
 nfsrvd_rephead(struct nfsrv_descript *nd)
 {
-	mbuf_t mreq;
+	struct mbuf *mreq;
 
-	/*
-	 * If this is a big reply, use a cluster.
-	 */
-	if ((nd->nd_flag & ND_GSSINITREPLY) == 0 &&
-	    nfs_bigreply[nd->nd_procnum]) {
-		NFSMCLGET(mreq, M_WAITOK);
-		nd->nd_mreq = mreq;
-		nd->nd_mb = mreq;
+	if ((nd->nd_flag & ND_EXTPG) != 0) {
+		mreq = mb_alloc_ext_plus_pages(PAGE_SIZE, M_WAITOK);
+		nd->nd_mreq = nd->nd_mb = mreq;
+		nd->nd_bpos = (char *)(void *)
+		    PHYS_TO_DMAP(mreq->m_epg_pa[0]);
+		nd->nd_bextpg = 0;
+		nd->nd_bextpgsiz = PAGE_SIZE;
 	} else {
-		NFSMGET(mreq);
-		nd->nd_mreq = mreq;
-		nd->nd_mb = mreq;
+		/*
+		 * If this is a big reply, use a cluster.
+		 */
+		if ((nd->nd_flag & ND_GSSINITREPLY) == 0 &&
+		    nfs_bigreply[nd->nd_procnum]) {
+			NFSMCLGET(mreq, M_WAITOK);
+			nd->nd_mreq = mreq;
+			nd->nd_mb = mreq;
+		} else {
+			NFSMGET(mreq);
+			nd->nd_mreq = mreq;
+			nd->nd_mb = mreq;
+		}
+		nd->nd_bpos = mtod(mreq, char *);
+		mreq->m_len = 0;
 	}
-	nd->nd_bpos = mtod(mreq, caddr_t);
-	mreq->m_len = 0;
 
 	if ((nd->nd_flag & ND_GSSINITREPLY) == 0)
 		NFSM_BUILD(nd->nd_errp, int *, NFSX_UNSIGNED);
@@ -4499,7 +4512,7 @@ newnfs_sndunlock(int *flagp)
 	NFSUNLOCKSOCK();
 }
 
-APPLESTATIC int
+int
 nfsv4_getipaddr(struct nfsrv_descript *nd, struct sockaddr_in *sin,
     struct sockaddr_in6 *sin6, sa_family_t *saf, int *isudp)
 {
@@ -4680,7 +4693,7 @@ nfsv4_seqsess_cacherep(uint32_t slotid, struct nfsslot *slots, int repstat,
 /*
  * Generate the xdr for an NFSv4.1 Sequence Operation.
  */
-APPLESTATIC void
+void
 nfsv4_setsequence(struct nfsmount *nmp, struct nfsrv_descript *nd,
     struct nfsclsession *sep, int dont_replycache)
 {
@@ -4788,7 +4801,7 @@ nfsv4_sequencelookup(struct nfsmount *nmp, struct nfsclsession *sep,
 /*
  * Free a session slot.
  */
-APPLESTATIC void
+void
 nfsv4_freeslot(struct nfsclsession *sep, int slot)
 {
 	uint64_t bitval;
@@ -4828,3 +4841,76 @@ nfsv4_findmirror(struct nfsmount *nmp)
 	return (ds);
 }
 
+/*
+ * Fill in the fields of "struct nfsrv_descript".
+ */
+void
+nfsm_set(struct nfsrv_descript *nd, u_int offs)
+{
+	struct mbuf *m;
+	int rlen;
+
+	m = nd->nd_mb;
+	if ((m->m_flags & M_EXTPG) != 0) {
+		nd->nd_bextpg = 0;
+		while (offs > 0) {
+			if (nd->nd_bextpg == 0)
+				rlen = m_epg_pagelen(m, 0, m->m_epg_1st_off);
+			else
+				rlen = m_epg_pagelen(m, nd->nd_bextpg, 0);
+			if (offs <= rlen)
+				break;
+			offs -= rlen;
+			nd->nd_bextpg++;
+			if (nd->nd_bextpg == m->m_epg_npgs) {
+				printf("nfsm_set: build offs "
+				    "out of range\n");
+				nd->nd_bextpg--;
+				break;
+			}
+		}
+		nd->nd_bpos = (char *)(void *)
+		    PHYS_TO_DMAP(m->m_epg_pa[nd->nd_bextpg]);
+		if (nd->nd_bextpg == 0)
+			nd->nd_bpos += m->m_epg_1st_off;
+		if (offs > 0) {
+			nd->nd_bpos += offs;
+			nd->nd_bextpgsiz = rlen - offs;
+		} else if (nd->nd_bextpg == 0)
+			nd->nd_bextpgsiz = PAGE_SIZE - m->m_epg_1st_off;
+		else
+			nd->nd_bextpgsiz = PAGE_SIZE;
+	} else
+		nd->nd_bpos = mtod(m, char *) + offs;
+}
+
+/*
+ * Grow a ext_pgs mbuf list.  Either allocate another page or add
+ * an mbuf to the list.
+ */
+struct mbuf *
+nfsm_add_ext_pgs(struct mbuf *m, int maxextsiz, int *bextpg)
+{
+	struct mbuf *mp;
+	vm_page_t pg;
+
+	if ((m->m_epg_npgs + 1) * PAGE_SIZE > maxextsiz) {
+		mp = mb_alloc_ext_plus_pages(PAGE_SIZE, M_WAITOK);
+		*bextpg = 0;
+		m->m_next = mp;
+	} else {
+		do {
+			pg = vm_page_alloc(NULL, 0, VM_ALLOC_NORMAL |
+			    VM_ALLOC_NOOBJ | VM_ALLOC_NODUMP |
+			    VM_ALLOC_WIRED);
+			if (pg == NULL)
+				vm_wait(NULL);
+		} while (pg == NULL);
+		m->m_epg_pa[m->m_epg_npgs] = VM_PAGE_TO_PHYS(pg);
+		*bextpg = m->m_epg_npgs;
+		m->m_epg_npgs++;
+		m->m_epg_last_len = 0;
+		mp = m;
+	}
+	return (mp);
+}

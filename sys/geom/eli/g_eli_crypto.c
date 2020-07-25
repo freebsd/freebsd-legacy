@@ -92,9 +92,7 @@ g_eli_crypto_cipher(u_int algo, int enc, u_char *data, size_t datasize,
 
 	crp->crp_opaque = NULL;
 	crp->crp_callback = g_eli_crypto_done;
-	crp->crp_buf_type = CRYPTO_BUF_CONTIG;
-	crp->crp_ilen = datasize;
-	crp->crp_buf = (void *)data;
+	crypto_use_buf(crp, data, datasize);
 
 	error = crypto_dispatch(crp);
 	if (error == 0) {
@@ -138,9 +136,6 @@ g_eli_crypto_cipher(u_int algo, int enc, u_char *data, size_t datasize,
 			return (EINVAL);
 		}
 		break;
-	case CRYPTO_BLF_CBC:
-		type = EVP_bf_cbc();
-		break;
 #ifndef OPENSSL_NO_CAMELLIA
 	case CRYPTO_CAMELLIA_CBC:
 		switch (keysize) {
@@ -158,9 +153,6 @@ g_eli_crypto_cipher(u_int algo, int enc, u_char *data, size_t datasize,
 		}
 		break;
 #endif
-	case CRYPTO_3DES_CBC:
-		type = EVP_des_ede3_cbc();
-		break;
 	default:
 		return (EINVAL);
 	}

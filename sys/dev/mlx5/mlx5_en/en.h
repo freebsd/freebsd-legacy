@@ -728,6 +728,8 @@ struct mlx5e_params_ethtool {
 	u16	fec_avail_50x[MLX5E_MAX_FEC_50X];
 	u32	fec_mode_active;
 	u32	hw_mtu_msb;
+	s32	hw_val_temp[MLX5_MAX_TEMPERATURE];
+	u32	hw_num_temp;
 };
 
 struct mlx5e_cq {
@@ -1103,7 +1105,7 @@ struct mlx5e_eeprom {
 #define	MLX5E_FLD_MAX(typ, fld) ((1ULL << __mlx5_bit_sz(typ, fld)) - 1ULL)
 
 bool	mlx5e_do_send_cqe(struct mlx5e_sq *);
-int	mlx5e_get_full_header_size(struct mbuf *, struct tcphdr **);
+int	mlx5e_get_full_header_size(const struct mbuf *, const struct tcphdr **);
 int	mlx5e_xmit(struct ifnet *, struct mbuf *);
 
 int	mlx5e_open_locked(struct ifnet *);
@@ -1199,6 +1201,7 @@ void	mlx5e_update_sq_inline(struct mlx5e_sq *sq);
 void	mlx5e_refresh_sq_inline(struct mlx5e_priv *priv);
 int	mlx5e_update_buf_lossy(struct mlx5e_priv *priv);
 int	mlx5e_fec_update(struct mlx5e_priv *priv);
+int	mlx5e_hw_temperature_update(struct mlx5e_priv *priv);
 
 if_snd_tag_alloc_t mlx5e_ul_snd_tag_alloc;
 if_snd_tag_modify_t mlx5e_ul_snd_tag_modify;

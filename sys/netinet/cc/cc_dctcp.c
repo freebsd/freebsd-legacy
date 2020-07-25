@@ -154,10 +154,8 @@ dctcp_ack_received(struct cc_var *ccv, uint16_t type)
 		 * Update the fraction of marked bytes at the end of
 		 * current window size.
 		 */
-		if ((IN_FASTRECOVERY(CCV(ccv, t_flags)) &&
-		    SEQ_GEQ(ccv->curack, CCV(ccv, snd_recover))) ||
-		    (!IN_FASTRECOVERY(CCV(ccv, t_flags)) &&
-		    SEQ_GT(ccv->curack, dctcp_data->save_sndnxt)))
+		if (!IN_FASTRECOVERY(CCV(ccv, t_flags)) &&
+		    SEQ_GT(ccv->curack, dctcp_data->save_sndnxt))
 			dctcp_update_alpha(ccv);
 	} else
 		newreno_cc_algo.ack_received(ccv, type);
@@ -466,3 +464,4 @@ SYSCTL_PROC(_net_inet_tcp_cc_dctcp, OID_AUTO, slowstart,
     "half CWND reduction after the first slow start");
 
 DECLARE_CC_MODULE(dctcp, &dctcp_cc_algo);
+MODULE_VERSION(dctcp, 1);

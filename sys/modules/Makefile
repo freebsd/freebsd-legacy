@@ -142,6 +142,8 @@ SUBDIR=	\
 	${_iavf} \
         ${_ibcore} \
 	${_ichwd} \
+	${_ice} \
+	${_ice_ddp} \
 	${_ida} \
 	if_bridge \
 	if_disc \
@@ -315,8 +317,10 @@ SUBDIR=	\
 	${_rtwnfw} \
 	${_s3} \
 	${_safe} \
+	safexcel \
 	${_sbni} \
 	scc \
+	${_sctp} \
 	sdhci \
 	${_sdhci_acpi} \
 	sdhci_pci \
@@ -354,7 +358,6 @@ SUBDIR=	\
 	twe \
 	tws \
 	uart \
-	ubsec \
 	udf \
 	udf_iconv \
 	ufs \
@@ -385,6 +388,7 @@ SUBDIR=	\
 	${_wpi} \
 	${_wpifw} \
 	${_x86bios} \
+	xdr \
 	xl \
 	xz \
 	zlib
@@ -417,6 +421,12 @@ _ktls_ocf=	ktls_ocf
 SUBDIR+=	cuse
 .endif
 
+.if ${MK_EFI} != "no"
+.if ${MACHINE_CPUARCH} == "aarch64" || ${MACHINE_CPUARCH} == "amd64"
+_efirt=		efirt
+.endif
+.endif
+
 .if (${MK_INET_SUPPORT} != "no" || ${MK_INET6_SUPPORT} != "no") || \
 	defined(ALL_MODULES)
 _carp=		carp
@@ -425,8 +435,11 @@ _if_enc=	if_enc
 _if_gif=	if_gif
 _if_gre=	if_gre
 _ipfw_pmod=	ipfw_pmod
-.if ${MK_IPSEC_SUPPORT} != "no"
+.if ${KERN_OPTS:MIPSEC_SUPPORT} && !${KERN_OPTS:MIPSEC}
 _ipsec=		ipsec
+.endif
+.if ${KERN_OPTS:MSCTP_SUPPORT} || ${KERN_OPTS:MSCTP}
+_sctp=		sctp
 .endif
 .endif
 
@@ -532,6 +545,13 @@ _rtwnfw=	rtwnfw
 _cxgbe=		cxgbe
 .endif
 
+.if ${MACHINE_ARCH} == "amd64" || ${MACHINE_ARCH} == "arm64"
+_ice=		ice
+.if ${MK_SOURCELESS_UCODE} != "no"
+_ice_ddp=	ice_ddp
+.endif
+.endif
+
 # These rely on 64bit atomics
 .if ${MACHINE_ARCH} != "powerpc" && ${MACHINE_ARCH} != "powerpcspe" && \
 	${MACHINE_CPUARCH} != "mips"
@@ -571,7 +591,6 @@ _cxgb=		cxgb
 .if ${MACHINE_CPUARCH} == "aarch64"
 _allwinner=	allwinner
 _armv8crypto=	armv8crypto
-_efirt=		efirt
 _em=		em
 _rockchip=	rockchip
 .endif
@@ -620,9 +639,7 @@ _aac=		aac
 _aacraid=	aacraid
 _acpi=		acpi
 .if ${MK_CRYPT} != "no" || defined(ALL_MODULES)
-.if ${COMPILER_TYPE} != "gcc" || ${COMPILER_VERSION} > 40201
 _aesni=		aesni
-.endif
 .endif
 _amd_ecc_inject=amd_ecc_inject
 _amdsbwd=	amdsbwd
@@ -695,7 +712,6 @@ _x86bios=	x86bios
 .if ${MACHINE_CPUARCH} == "amd64"
 _amdgpio=	amdgpio
 _ccp=		ccp
-_efirt=		efirt
 _iavf=		iavf
 _ioat=		ioat
 _ixl=		ixl

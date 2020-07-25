@@ -1246,7 +1246,7 @@ lagg_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 			if (lsc->lsc_strict_mode != 0)
 				ro->ro_opts |= LAGG_OPT_LACP_STRICT;
 			if (lsc->lsc_fast_timeout != 0)
-				ro->ro_opts |= LAGG_OPT_LACP_TIMEOUT;
+				ro->ro_opts |= LAGG_OPT_LACP_FAST_TIMO;
 
 			ro->ro_active = sc->sc_active;
 		} else {
@@ -1305,8 +1305,8 @@ lagg_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 		case -LAGG_OPT_LACP_RXTEST:
 		case LAGG_OPT_LACP_STRICT:
 		case -LAGG_OPT_LACP_STRICT:
-		case LAGG_OPT_LACP_TIMEOUT:
-		case -LAGG_OPT_LACP_TIMEOUT:
+		case LAGG_OPT_LACP_FAST_TIMO:
+		case -LAGG_OPT_LACP_FAST_TIMO:
 			valid = lacp = 1;
 			break;
 		default:
@@ -1366,14 +1366,14 @@ lagg_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 			case -LAGG_OPT_LACP_STRICT:
 				lsc->lsc_strict_mode = 0;
 				break;
-			case LAGG_OPT_LACP_TIMEOUT:
+			case LAGG_OPT_LACP_FAST_TIMO:
 				LACP_LOCK(lsc);
         			LIST_FOREACH(lp, &lsc->lsc_ports, lp_next)
                         		lp->lp_state |= LACP_STATE_TIMEOUT;
 				LACP_UNLOCK(lsc);
 				lsc->lsc_fast_timeout = 1;
 				break;
-			case -LAGG_OPT_LACP_TIMEOUT:
+			case -LAGG_OPT_LACP_FAST_TIMO:
 				LACP_LOCK(lsc);
         			LIST_FOREACH(lp, &lsc->lsc_ports, lp_next)
                         		lp->lp_state &= ~LACP_STATE_TIMEOUT;
@@ -1874,10 +1874,6 @@ lagg_transmit(struct ifnet *ifp, struct mbuf *m)
 
 	error = lagg_proto_start(sc, m);
 	LAGG_RUNLOCK();
-
-	if (error != 0)
-		if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
-
 	return (error);
 }
 
@@ -2100,6 +2096,7 @@ lagg_rr_start(struct lagg_softc *sc, struct mbuf *m)
 	 * port if the link is down or the port is NULL.
 	 */
 	if ((lp = lagg_link_active(sc, lp)) == NULL) {
+		if_inc_counter(sc->sc_ifp, IFCOUNTER_OERRORS, 1);
 		m_freem(m);
 		return (ENETDOWN);
 	}
@@ -2145,31 +2142,28 @@ lagg_bcast_start(struct lagg_softc *sc, struct mbuf *m)
 				errors++;
 				break;
 			}
-
-			ret = lagg_enqueue(last->lp_ifp, m0);
-			if (ret != 0)
-				errors++;
+			lagg_enqueue(last->lp_ifp, m0);
 		}
 		last = lp;
 	}
 
 	if (last == NULL) {
+		if_inc_counter(sc->sc_ifp, IFCOUNTER_OERRORS, 1);
 		m_freem(m);
 		return (ENOENT);
 	}
 	if ((last = lagg_link_active(sc, last)) == NULL) {
+		errors++;
+		if_inc_counter(sc->sc_ifp, IFCOUNTER_OERRORS, errors);
 		m_freem(m);
 		return (ENETDOWN);
 	}
 
 	ret = lagg_enqueue(last->lp_ifp, m);
-	if (ret != 0)
-		errors++;
+	if (errors != 0)
+		if_inc_counter(sc->sc_ifp, IFCOUNTER_OERRORS, errors);
 
-	if (errors == 0)
-		return (ret);
-
-	return (0);
+	return (ret);
 }
 
 static struct mbuf*
@@ -2192,6 +2186,7 @@ lagg_fail_start(struct lagg_softc *sc, struct mbuf *m)
 
 	/* Use the master port if active or the next available port */
 	if ((lp = lagg_link_active(sc, sc->sc_primary)) == NULL) {
+		if_inc_counter(sc->sc_ifp, IFCOUNTER_OERRORS, 1);
 		m_freem(m);
 		return (ENETDOWN);
 	}
@@ -2315,6 +2310,7 @@ lagg_lb_start(struct lagg_softc *sc, struct mbuf *m)
 	 * port if the link is down or the port is NULL.
 	 */
 	if ((lp = lagg_link_active(sc, lp)) == NULL) {
+		if_inc_counter(sc->sc_ifp, IFCOUNTER_OERRORS, 1);
 		m_freem(m);
 		return (ENETDOWN);
 	}
@@ -2386,6 +2382,7 @@ lagg_lacp_start(struct lagg_softc *sc, struct mbuf *m)
 
 	lp = lacp_select_tx_port(sc, m);
 	if (lp == NULL) {
+		if_inc_counter(sc->sc_ifp, IFCOUNTER_OERRORS, 1);
 		m_freem(m);
 		return (ENETDOWN);
 	}

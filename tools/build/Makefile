@@ -92,6 +92,9 @@ DISKINCS+=	${SRCTOP}/sys/sys/disk/bsd.h
 SYSINCS+=	${SRCTOP}/sys/sys/nv.h ${SRCTOP}/sys/sys/cnv.h \
 		${SRCTOP}/sys/sys/dnv.h
 
+# vtfontcvt is using sys/font.h
+SYSINCS+=	${SRCTOP}/sys/sys/font.h
+
 # We want to run the build with only ${WORLDTMP} in $PATH to ensure we don't
 # accidentally run tools that are incompatible but happen to be in $PATH.
 # This is especially important when building on Linux/MacOS where many of the
@@ -102,7 +105,7 @@ SYSINCS+=	${SRCTOP}/sys/sys/nv.h ${SRCTOP}/sys/sys/cnv.h \
 
 # basic commands: It is fine to use the host version for all of these even on
 # Linux/MacOS since we only use flags that are supported by all of them.
-_host_tools_to_symlink=	basename bzip2 bunzip2 chmod chown cmp comm cp date \
+_host_tools_to_symlink=	basename bzip2 bunzip2 chmod chown cmp comm cp date dd \
 	dirname echo env false find fmt gzip gunzip head hostname id ln ls \
 	mkdir mv nice patch rm realpath sh sleep stat tee touch tr true uname \
 	uniq wc which
@@ -146,6 +149,7 @@ INSTALLDIR_LIST= \
 	lib/casper \
 	lib/geom \
 	usr/include/casper \
+	usr/include/private/ucl \
 	usr/include/private/zstd \
 	usr/lib \
 	usr/libexec

@@ -82,7 +82,7 @@ g_eli_crypto_read_done(struct cryptop *crp)
 	if (crp->crp_etype == 0) {
 		G_ELI_DEBUG(3, "Crypto READ request done (%d/%d).",
 		    bp->bio_inbed, bp->bio_children);
-		bp->bio_completed += crp->crp_ilen;
+		bp->bio_completed += crp->crp_payload_length;
 	} else {
 		G_ELI_DEBUG(1, "Crypto READ request failed (%d/%d) error=%d.",
 		    bp->bio_inbed, bp->bio_children, crp->crp_etype);
@@ -265,10 +265,8 @@ g_eli_crypto_run(struct g_eli_worker *wr, struct bio *bp)
 	for (i = 0, dstoff = bp->bio_offset; i < nsec; i++, dstoff += secsize) {
 		crp = crypto_getreq(wr->w_sid, M_WAITOK);
 
-		crp->crp_ilen = secsize;
+		crypto_use_buf(crp, data, secsize);
 		crp->crp_opaque = (void *)bp;
-		crp->crp_buf_type = CRYPTO_BUF_CONTIG;
-		crp->crp_buf = (void *)data;
 		data += secsize;
 		if (bp->bio_cmd == BIO_WRITE) {
 			crp->crp_op = CRYPTO_OP_ENCRYPT;
@@ -283,13 +281,15 @@ g_eli_crypto_run(struct g_eli_worker *wr, struct bio *bp)
 
 		crp->crp_payload_start = 0;
 		crp->crp_payload_length = secsize;
-		crp->crp_flags |= CRYPTO_F_IV_SEPARATE;
 		if ((sc->sc_flags & G_ELI_FLAG_SINGLE_KEY) == 0) {
 			crp->crp_cipher_key = g_eli_key_hold(sc, dstoff,
 			    secsize);
 		}
-		g_eli_crypto_ivgen(sc, dstoff, crp->crp_iv,
-		    sizeof(crp->crp_iv));
+		if (g_eli_ivlen(sc->sc_ealgo) != 0) {
+			crp->crp_flags |= CRYPTO_F_IV_SEPARATE;
+			g_eli_crypto_ivgen(sc, dstoff, crp->crp_iv,
+			sizeof(crp->crp_iv));
+		}
 
 		error = crypto_dispatch(crp);
 		KASSERT(error == 0, ("crypto_dispatch() failed (error=%d)",

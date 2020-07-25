@@ -131,7 +131,7 @@ armv8_crypto_attach(device_t dev)
 	sc->dieing = 0;
 
 	sc->cid = crypto_get_driverid(dev, sizeof(struct armv8_crypto_session),
-	    CRYPTOCAP_F_SOFTWARE | CRYPTOCAP_F_SYNC);
+	    CRYPTOCAP_F_SOFTWARE | CRYPTOCAP_F_SYNC | CRYPTOCAP_F_ACCEL_SOFTWARE);
 	if (sc->cid < 0) {
 		device_printf(dev, "Could not get crypto driver id.\n");
 		return (ENOMEM);
@@ -335,14 +335,7 @@ armv8_crypto_cipher_process(struct armv8_crypto_session *ses,
 		panic("armv8: new cipher key");
 	}
 
-	/* Setup iv */
-	if (crp->crp_flags & CRYPTO_F_IV_GENERATE) {
-		arc4rand(iv, csp->csp_ivlen, 0);
-		crypto_copyback(crp, crp->crp_iv_start, csp->csp_ivlen, iv);
-	} else if (crp->crp_flags & CRYPTO_F_IV_SEPARATE)
-		memcpy(iv, crp->crp_iv, csp->csp_ivlen);
-	else
-		crypto_copydata(crp, crp->crp_iv_start, csp->csp_ivlen, iv);
+	crypto_read_iv(crp, iv);
 
 	/* Do work */
 	switch (csp->csp_cipher_alg) {
@@ -364,10 +357,8 @@ armv8_crypto_cipher_process(struct armv8_crypto_session *ses,
 		fpu_kern_leave(curthread, ctx);
 		RELEASE_CTX(i, ctx);
 	}
-	if (allocated) {
-		bzero(buf, crp->crp_payload_length);
-		free(buf, M_ARMV8_CRYPTO);
-	}
+	if (allocated)
+		zfree(buf, M_ARMV8_CRYPTO);
 	return (0);
 }
 

@@ -94,7 +94,7 @@ static struct pr_usrreqs nousrreqs;
 #include <netinet/sctp_pcb.h>
 #include <netinet/sctp.h>
 #include <netinet/sctp_var.h>
-#endif /* SCTP */
+#endif
 
 FEATURE(inet, "Internet Protocol version 4");
 
@@ -163,7 +163,7 @@ struct protosw inetsw[] = {
 	.pr_input =		sctp_input,
 	.pr_ctlinput =		sctp_ctlinput,
 	.pr_ctloutput =		sctp_ctloutput,
-	.pr_drain =		sctp_drain,
+	.pr_drain =		NULL, /* Covered by the SOCK_SEQPACKET entry. */
 	.pr_usrreqs =		&sctp_usrreqs
 },
 #endif /* SCTP */
@@ -324,7 +324,7 @@ SYSCTL_NODE(_net_inet, IPPROTO_UDP, udp, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
     "UDP");
 SYSCTL_NODE(_net_inet, IPPROTO_TCP, tcp, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
     "TCP");
-#ifdef SCTP
+#if defined(SCTP) || defined(SCTP_SUPPORT)
 SYSCTL_NODE(_net_inet, IPPROTO_SCTP, sctp, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
     "SCTP");
 #endif

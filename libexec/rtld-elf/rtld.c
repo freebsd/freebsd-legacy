@@ -136,7 +136,8 @@ static void objlist_put_after(Objlist *, Obj_Entry *, Obj_Entry *);
 static void objlist_remove(Objlist *, Obj_Entry *);
 static int open_binary_fd(const char *argv0, bool search_in_path,
     const char **binpath_res);
-static int parse_args(char* argv[], int argc, bool *use_pathp, int *fdp);
+static int parse_args(char* argv[], int argc, bool *use_pathp, int *fdp,
+    const char **argv0);
 static int parse_integer(const char *);
 static void *path_enumerate(const char *, path_enum_proc, const char *, void *);
 static void print_usage(const char *argv0);
@@ -383,11 +384,12 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
     const char *argv0, *binpath;
     caddr_t imgentry;
     char buf[MAXPATHLEN];
-    int argc, fd, i, phnum, rtld_argc;
+    int argc, fd, i, mib[4], old_osrel, osrel, phnum, rtld_argc;
+    size_t sz;
 #ifdef __powerpc__
     int old_auxv_format = 1;
 #endif
-    bool dir_enable, explicit_fd, search_in_path;
+    bool dir_enable, direct_exec, explicit_fd, search_in_path;
 
     /*
      * On entry, the dynamic linker itself has not been relocated yet.
@@ -450,6 +452,7 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
 	    ld_fast_sigblock = true;
 
     trust = !issetugid();
+    direct_exec = false;
 
     md_abi_variant_hook(aux_info);
 
@@ -465,10 +468,11 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
 		    argv0);
 		rtld_die();
 	    }
+	    direct_exec = true;
+
 	    dbg("opening main program in direct exec mode");
 	    if (argc >= 2) {
-		rtld_argc = parse_args(argv, argc, &search_in_path, &fd);
-		argv0 = argv[rtld_argc];
+		rtld_argc = parse_args(argv, argc, &search_in_path, &fd, &argv0);
 		explicit_fd = (fd != -1);
 		binpath = NULL;
 		if (!explicit_fd)
@@ -704,7 +708,8 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
     preload_tail = globallist_curr(TAILQ_LAST(&obj_list, obj_entry_q));
 
     dbg("loading needed objects");
-    if (load_needed_objects(obj_main, 0) == -1)
+    if (load_needed_objects(obj_main, ld_tracing != NULL ? RTLD_LO_TRACE :
+      0) == -1)
 	rtld_die();
 
     /* Make a list of all objects loaded at startup. */
@@ -803,6 +808,18 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
      * init functions.
      */
     pre_init();
+
+    if (direct_exec) {
+	/* Set osrel for direct-execed binary */
+	mib[0] = CTL_KERN;
+	mib[1] = KERN_PROC;
+	mib[2] = KERN_PROC_OSREL;
+	mib[3] = getpid();
+	osrel = obj_main->osrel;
+	sz = sizeof(old_osrel);
+	dbg("setting osrel to %d", osrel);
+	(void)sysctl(mib, 4, &old_osrel, &sz, &osrel, sizeof(osrel));
+    }
 
     wlock_acquire(rtld_bind_lock, &lockstate);
 
@@ -1207,6 +1224,9 @@ digest_dynamic1(Obj_Entry *obj, int early, const Elf_Dyn **dyn_rpath,
 
 		*needed_filtees_tail = nep;
 		needed_filtees_tail = &nep->next;
+
+		if (obj->linkmap.l_refname == NULL)
+		    obj->linkmap.l_refname = (char *)dynp->d_un.d_val;
 	    }
 	    break;
 
@@ -1367,6 +1387,8 @@ digest_dynamic1(Obj_Entry *obj, int early, const Elf_Dyn **dyn_rpath,
 		    obj->z_interpose = true;
 		if (dynp->d_un.d_val & DF_1_NODEFLIB)
 		    obj->z_nodeflib = true;
+		if (dynp->d_un.d_val & DF_1_PIE)
+		    obj->z_pie = true;
 	    break;
 
 	default:
@@ -1402,6 +1424,10 @@ digest_dynamic1(Obj_Entry *obj, int early, const Elf_Dyn **dyn_rpath,
 	}
 	obj->dynsymcount += obj->symndx_gnu;
     }
+
+    if (obj->linkmap.l_refname != NULL)
+	obj->linkmap.l_refname = obj->strtab + (unsigned long)obj->
+	  linkmap.l_refname;
 }
 
 static bool
@@ -2143,6 +2169,34 @@ process_z(Obj_Entry *root)
 		}
 	}
 }
+
+static void
+parse_rtld_phdr(Obj_Entry *obj)
+{
+	const Elf_Phdr *ph;
+	Elf_Addr note_start, note_end;
+
+	obj->stack_flags = PF_X | PF_R | PF_W;
+	for (ph = obj->phdr;  (const char *)ph < (const char *)obj->phdr +
+	    obj->phsize; ph++) {
+		switch (ph->p_type) {
+		case PT_GNU_STACK:
+			obj->stack_flags = ph->p_flags;
+			break;
+		case PT_GNU_RELRO:
+			obj->relro_page = obj->relocbase +
+			    trunc_page(ph->p_vaddr);
+			obj->relro_size = round_page(ph->p_memsz);
+			break;
+		case PT_NOTE:
+			note_start = (Elf_Addr)obj->relocbase + ph->p_vaddr;
+			note_end = note_start + ph->p_filesz;
+			digest_notes(obj, note_start, note_end);
+			break;
+		}
+	}
+}
+
 /*
  * Initialize the dynamic linker.  The argument is the address at which
  * the dynamic linker has been mapped into memory.  The primary task of
@@ -2211,6 +2265,9 @@ init_rtld(caddr_t mapbase, Elf_Auxinfo **aux_info)
 
     /* Replace the path with a dynamically allocated copy. */
     obj_rtld.path = xstrdup(ld_path_rtld);
+
+    parse_rtld_phdr(&obj_rtld);
+    obj_enforce_relro(&obj_rtld);
 
     r_debug.r_brk = r_debug_state;
     r_debug.r_state = RT_CONSISTENT;
@@ -2575,6 +2632,11 @@ do_load_object(int fd, const char *name, char *path, struct stat *sbp,
 	goto errp;
     dbg("%s valid_hash_sysv %d valid_hash_gnu %d dynsymcount %d", obj->path,
 	obj->valid_hash_sysv, obj->valid_hash_gnu, obj->dynsymcount);
+    if (obj->z_pie && (flags & RTLD_LO_TRACE) == 0) {
+	dbg("refusing to load PIE executable \"%s\"", obj->path);
+	_rtld_error("Cannot load PIE binary %s as DSO", obj->path);
+	goto errp;
+    }
     if (obj->z_noopen && (flags & (RTLD_LO_DLOPEN | RTLD_LO_TRACE)) ==
       RTLD_LO_DLOPEN) {
 	dbg("refusing to load non-loadable \"%s\"", obj->path);
@@ -3036,7 +3098,8 @@ resolve_object_ifunc(Obj_Entry *obj, bool bind_now, int flags,
 		return (0);
 	obj->ifuncs_resolved = true;
 	if (!obj->irelative && !obj->irelative_nonplt &&
-	    !((obj->bind_now || bind_now) && obj->gnu_ifunc))
+	    !((obj->bind_now || bind_now) && obj->gnu_ifunc) &&
+	    !obj->non_plt_gnu_ifunc)
 		return (0);
 	if (obj_disable_relro(obj) == -1 ||
 	    (obj->irelative && reloc_iresolve(obj, lockstate) == -1) ||
@@ -3044,6 +3107,8 @@ resolve_object_ifunc(Obj_Entry *obj, bool bind_now, int flags,
 	    lockstate) == -1) ||
 	    ((obj->bind_now || bind_now) && obj->gnu_ifunc &&
 	    reloc_gnu_ifunc(obj, flags, lockstate) == -1) ||
+	    (obj->non_plt_gnu_ifunc && reloc_non_plt(obj, &obj_rtld,
+	    flags | SYMLOOK_IFUNC, lockstate) == -1) ||
 	    obj_enforce_relro(obj) == -1)
 		return (-1);
 	return (0);
@@ -3366,8 +3431,10 @@ rtld_dlopen(const char *name, int fd, int mode)
 	    lo_flags |= RTLD_LO_NODELETE;
     if (mode & RTLD_NOLOAD)
 	    lo_flags |= RTLD_LO_NOLOAD;
+    if (mode & RTLD_DEEPBIND)
+	    lo_flags |= RTLD_LO_DEEPBIND;
     if (ld_tracing != NULL)
-	    lo_flags |= RTLD_LO_TRACE;
+	    lo_flags |= RTLD_LO_TRACE | RTLD_LO_IGNSTLS;
 
     return (dlopen_object(name, fd, obj_main, lo_flags,
       mode & (RTLD_MODEMASK | RTLD_GLOBAL), NULL));
@@ -3393,6 +3460,9 @@ dlopen_object(const char *name, int fd, Obj_Entry *refobj, int lo_flags,
     RtldLockState mlockstate;
     int result;
 
+    dbg("dlopen_object name \"%s\" fd %d refobj \"%s\" lo_flags %#x mode %#x",
+      name != NULL ? name : "<null>", fd, refobj == NULL ? "<null>" :
+      refobj->path, lo_flags, mode);
     objlist_init(&initlist);
 
     if (lockstate == NULL && !(lo_flags & RTLD_LO_EARLY)) {
@@ -3417,16 +3487,18 @@ dlopen_object(const char *name, int fd, Obj_Entry *refobj, int lo_flags,
 	if (globallist_next(old_obj_tail) != NULL) {
 	    /* We loaded something new. */
 	    assert(globallist_next(old_obj_tail) == obj);
+	    if ((lo_flags & RTLD_LO_DEEPBIND) != 0)
+		obj->symbolic = true;
 	    result = 0;
-	    if ((lo_flags & RTLD_LO_EARLY) == 0 && obj->static_tls &&
-	      !allocate_tls_offset(obj)) {
+	    if ((lo_flags & (RTLD_LO_EARLY | RTLD_LO_IGNSTLS)) == 0 &&
+	      obj->static_tls && !allocate_tls_offset(obj)) {
 		_rtld_error("%s: No space available "
 		  "for static Thread Local Storage", obj->path);
 		result = -1;
 	    }
 	    if (result != -1)
 		result = load_needed_objects(obj, lo_flags & (RTLD_LO_DLOPEN |
-		    RTLD_LO_EARLY));
+		  RTLD_LO_EARLY | RTLD_LO_IGNSTLS | RTLD_LO_TRACE));
 	    init_dag(obj);
 	    ref_dag(obj);
 	    if (result != -1)
@@ -4024,52 +4096,50 @@ rtld_dirname_abs(const char *path, char *base)
 static void
 linkmap_add(Obj_Entry *obj)
 {
-    struct link_map *l = &obj->linkmap;
-    struct link_map *prev;
+	struct link_map *l, *prev;
 
-    obj->linkmap.l_name = obj->path;
-    obj->linkmap.l_addr = obj->mapbase;
-    obj->linkmap.l_ld = obj->dynamic;
-#ifdef __mips__
-    /* GDB needs load offset on MIPS to use the symbols */
-    obj->linkmap.l_offs = obj->relocbase;
-#endif
+	l = &obj->linkmap;
+	l->l_name = obj->path;
+	l->l_base = obj->mapbase;
+	l->l_ld = obj->dynamic;
+	l->l_addr = obj->relocbase;
 
-    if (r_debug.r_map == NULL) {
-	r_debug.r_map = l;
-	return;
-    }
+	if (r_debug.r_map == NULL) {
+		r_debug.r_map = l;
+		return;
+	}
 
-    /*
-     * Scan to the end of the list, but not past the entry for the
-     * dynamic linker, which we want to keep at the very end.
-     */
-    for (prev = r_debug.r_map;
-      prev->l_next != NULL && prev->l_next != &obj_rtld.linkmap;
-      prev = prev->l_next)
-	;
+	/*
+	 * Scan to the end of the list, but not past the entry for the
+	 * dynamic linker, which we want to keep at the very end.
+	 */
+	for (prev = r_debug.r_map;
+	    prev->l_next != NULL && prev->l_next != &obj_rtld.linkmap;
+	     prev = prev->l_next)
+		;
 
-    /* Link in the new entry. */
-    l->l_prev = prev;
-    l->l_next = prev->l_next;
-    if (l->l_next != NULL)
-	l->l_next->l_prev = l;
-    prev->l_next = l;
+	/* Link in the new entry. */
+	l->l_prev = prev;
+	l->l_next = prev->l_next;
+	if (l->l_next != NULL)
+		l->l_next->l_prev = l;
+	prev->l_next = l;
 }
 
 static void
 linkmap_delete(Obj_Entry *obj)
 {
-    struct link_map *l = &obj->linkmap;
+	struct link_map *l;
 
-    if (l->l_prev == NULL) {
-	if ((r_debug.r_map = l->l_next) != NULL)
-	    l->l_next->l_prev = NULL;
-	return;
-    }
+	l = &obj->linkmap;
+	if (l->l_prev == NULL) {
+		if ((r_debug.r_map = l->l_next) != NULL)
+			l->l_next->l_prev = NULL;
+		return;
+	}
 
-    if ((l->l_prev->l_next = l->l_next) != NULL)
-	l->l_next->l_prev = l->l_prev;
+	if ((l->l_prev->l_next = l->l_next) != NULL)
+		l->l_next->l_prev = l->l_prev;
 }
 
 /*
@@ -4979,13 +5049,13 @@ allocate_tls(Obj_Entry *objs, void *oldtls, size_t tcbsize, size_t tcbalign)
     ralign = tcbalign;
     if (tls_static_max_align > ralign)
 	    ralign = tls_static_max_align;
-    size = round(tls_static_space, ralign) + round(tcbsize, ralign);
+    size = roundup(tls_static_space, ralign) + roundup(tcbsize, ralign);
 
     assert(tcbsize >= 2*sizeof(Elf_Addr));
     tls = malloc_aligned(size, ralign, 0 /* XXX */);
     dtv = xcalloc(tls_max_index + 2, sizeof(Elf_Addr));
 
-    segbase = (Elf_Addr)(tls + round(tls_static_space, ralign));
+    segbase = (Elf_Addr)(tls + roundup(tls_static_space, ralign));
     ((Elf_Addr*)segbase)[0] = segbase;
     ((Elf_Addr*)segbase)[1] = (Elf_Addr) dtv;
 
@@ -5051,7 +5121,7 @@ free_tls(void *tls, size_t tcbsize  __unused, size_t tcbalign)
     ralign = tcbalign;
     if (tls_static_max_align > ralign)
 	    ralign = tls_static_max_align;
-    size = round(tls_static_space, ralign);
+    size = roundup(tls_static_space, ralign);
 
     dtv = ((Elf_Addr**)tls)[1];
     dtvsize = dtv[1];
@@ -5109,10 +5179,11 @@ allocate_tls_offset(Obj_Entry *obj)
     }
 
     if (tls_last_offset == 0)
-	off = calculate_first_tls_offset(obj->tlssize, obj->tlsalign);
+	off = calculate_first_tls_offset(obj->tlssize, obj->tlsalign,
+	  obj->tlspoffset);
     else
 	off = calculate_tls_offset(tls_last_offset, tls_last_size,
-				   obj->tlssize, obj->tlsalign);
+	  obj->tlssize, obj->tlsalign, obj->tlspoffset);
 
     /*
      * If we have already fixed the size of the static TLS block, we
@@ -5600,15 +5671,20 @@ open_binary_fd(const char *argv0, bool search_in_path,
  * Parse a set of command-line arguments.
  */
 static int
-parse_args(char* argv[], int argc, bool *use_pathp, int *fdp)
+parse_args(char* argv[], int argc, bool *use_pathp, int *fdp,
+    const char **argv0)
 {
 	const char *arg;
-	int fd, i, j, arglen;
+	char machine[64];
+	size_t sz;
+	int arglen, fd, i, j, mib[2];
 	char opt;
+	bool seen_b, seen_f;
 
 	dbg("Parsing command-line arguments");
 	*use_pathp = false;
 	*fdp = -1;
+	seen_b = seen_f = false;
 
 	for (i = 1; i < argc; i++ ) {
 		arg = argv[i];
@@ -5635,7 +5711,21 @@ parse_args(char* argv[], int argc, bool *use_pathp, int *fdp)
 			if (opt == 'h') {
 				print_usage(argv[0]);
 				_exit(0);
+			} else if (opt == 'b') {
+				if (seen_f) {
+					_rtld_error("Both -b and -f specified");
+					rtld_die();
+				}
+				i++;
+				*argv0 = argv[i];
+				seen_b = true;
+				break;
 			} else if (opt == 'f') {
+				if (seen_b) {
+					_rtld_error("Both -b and -f specified");
+					rtld_die();
+				}
+
 				/*
 				 * -f XX can be used to specify a
 				 * descriptor for the binary named at
@@ -5659,9 +5749,28 @@ parse_args(char* argv[], int argc, bool *use_pathp, int *fdp)
 					rtld_die();
 				}
 				*fdp = fd;
+				seen_f = true;
 				break;
 			} else if (opt == 'p') {
 				*use_pathp = true;
+			} else if (opt == 'v') {
+				machine[0] = '\0';
+				mib[0] = CTL_HW;
+				mib[1] = HW_MACHINE;
+				sz = sizeof(machine);
+				sysctl(mib, nitems(mib), machine, &sz, NULL, 0);
+				rtld_printf(
+				    "FreeBSD ld-elf.so.1 %s\n"
+				    "FreeBSD_version %d\n"
+				    "Default lib path %s\n"
+				    "Env prefix %s\n"
+				    "Hint file %s\n"
+				    "libmap file %s\n",
+				    machine,
+				    __FreeBSD_version, ld_standard_library_path,
+				    ld_env_prefix, ld_elf_hints_default,
+				    ld_path_libmap_conf);
+				_exit(0);
 			} else {
 				_rtld_error("Invalid argument: '%s'", arg);
 				print_usage(argv[0]);
@@ -5670,6 +5779,8 @@ parse_args(char* argv[], int argc, bool *use_pathp, int *fdp)
 		}
 	}
 
+	if (!seen_b)
+		*argv0 = argv[i];
 	return (i);
 }
 
@@ -5704,15 +5815,18 @@ static void
 print_usage(const char *argv0)
 {
 
-	rtld_printf("Usage: %s [-h] [-f <FD>] [--] <binary> [<args>]\n"
-		"\n"
-		"Options:\n"
-		"  -h        Display this help message\n"
-		"  -p        Search in PATH for named binary\n"
-		"  -f <FD>   Execute <FD> instead of searching for <binary>\n"
-		"  --        End of RTLD options\n"
-		"  <binary>  Name of process to execute\n"
-		"  <args>    Arguments to the executed process\n", argv0);
+	rtld_printf(
+	    "Usage: %s [-h] [-b <exe>] [-f <FD>] [-p] [--] <binary> [<args>]\n"
+	    "\n"
+	    "Options:\n"
+	    "  -h        Display this help message\n"
+	    "  -b <exe>  Execute <exe> instead of <binary>, arg0 is <binary>\n"
+	    "  -f <FD>   Execute <FD> instead of searching for <binary>\n"
+	    "  -p        Search in PATH for named binary\n"
+	    "  -v        Display identification information\n"
+	    "  --        End of RTLD options\n"
+	    "  <binary>  Name of process to execute\n"
+	    "  <args>    Arguments to the executed process\n", argv0);
 }
 
 /*
@@ -5775,3 +5889,9 @@ realloc(void *cp, size_t nbytes)
 
 	return (__crt_realloc(cp, nbytes));
 }
+
+extern int _rtld_version__FreeBSD_version __exported;
+int _rtld_version__FreeBSD_version = __FreeBSD_version;
+
+extern char _rtld_version_laddr_offset __exported;
+char _rtld_version_laddr_offset;

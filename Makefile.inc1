@@ -250,9 +250,6 @@ USING_SYSTEM_COMPILER=	yes
 # Which linker is expected to be used?
 .if ${MK_LLD_BOOTSTRAP} == "yes"
 WANT_LINKER_TYPE=		lld
-.elif ${MK_BINUTILS_BOOTSTRAP} == "yes"
-# Note that there's no support for bfd in WITH_SYSTEM_LINKER.
-WANT_LINKER_TYPE=	bfd
 .else
 WANT_LINKER_TYPE=
 .endif
@@ -303,7 +300,7 @@ TEST_SYSTEM_COMPILER_VARS= \
 	X_COMPILER_FREEBSD_VERSION
 TEST_SYSTEM_LINKER_VARS= \
 	USING_SYSTEM_LINKER MK_SYSTEM_LINKER \
-	MK_LLD_BOOTSTRAP MK_BINUTILS_BOOTSTRAP \
+	MK_LLD_BOOTSTRAP \
 	WANT_LINKER_TYPE WANT_LINKER_VERSION WANT_LINKER_VERSION_FILE \
 	WANT_LINKER_FREEBSD_VERSION WANT_LINKER_FREEBSD_VERSION_FILE \
 	LD LINKER_TYPE LINKER_FEATURES LINKER_VERSION \
@@ -679,7 +676,7 @@ BSARGS= 	DESTDIR= \
 		MK_HTML=no NO_LINT=yes MK_MAN=no \
 		-DNO_PIC MK_PROFILE=no -DNO_SHARED \
 		-DNO_CPU_CFLAGS MK_WARNS=no MK_CTF=no \
-		MK_CLANG_EXTRAS=no MK_CLANG_FULL=no \
+		MK_CLANG_EXTRAS=no MK_CLANG_FORMAT=no MK_CLANG_FULL=no \
 		MK_LLDB=no MK_RETPOLINE=no MK_TESTS=no \
 		MK_INCLUDES=yes
 
@@ -700,7 +697,7 @@ TMAKE=		\
 		SSP_CFLAGS= \
 		-DNO_LINT \
 		-DNO_CPU_CFLAGS MK_WARNS=no MK_CTF=no \
-		MK_CLANG_EXTRAS=no MK_CLANG_FULL=no \
+		MK_CLANG_EXTRAS=no MK_CLANG_FORMAT=no MK_CLANG_FULL=no \
 		MK_LLDB=no MK_RETPOLINE=no MK_TESTS=no
 
 # cross-tools stage
@@ -955,15 +952,6 @@ _cleanobj_fast_depend_hack: .PHONY
 		rm -f ${LIBCOMPAT_OBJTOP}/lib/libc/.depend.${f}.*; \
 	fi
 .endif
-.endfor
-# 20190916  r352703  shm_open
-.for f in shm_open
-	@if [ -e "${OBJTOP}/lib/libc/.depend.${f}.o" ] && \
-	    egrep -qw '${f}\.[sS]' ${OBJTOP}/lib/libc/.depend.${f}.o; then \
-		echo "Removing stale dependencies for ${f} syscall wrappers"; \
-		rm -f ${OBJTOP}/lib/libc/.depend.${f}.* \
-		   ${_LIBCOMPAT:D${LIBCOMPAT_OBJTOP}/lib/libc/.depend.${f}.*}; \
-	fi
 .endfor
 
 _worldtmp: .PHONY
@@ -1571,12 +1559,6 @@ INSTALLKERNEL= ${_kernel}
 .endfor
 
 _cleankernobj_fast_depend_hack: .PHONY
-# 20180320 remove stale generated assym.s after renaming to .inc in r331254
-	@if [ -e "${OBJTOP}/sys/${KERNCONF}/assym.s" ]; then \
-		echo "Removing stale generated assym files"; \
-		rm -f ${OBJTOP}/sys/${KERNCONF}/assym.* \
-		    ${OBJTOP}/sys/${KERNCONF}/.depend.assym.*; \
-	fi
 # 20191009  r353340  removal of opensolaris_atomic.S (also r353381)
 .if ${MACHINE} != i386
 .for f in opensolaris_atomic
@@ -1898,7 +1880,7 @@ create-world-package-${pkgname}: .PHONY
 _default_flavor=	-default
 .if make(*package*) && exists(${KSTAGEDIR}/kernel.meta)
 . if ${MK_DEBUG_FILES} != "no"
-_debug=-debug
+_debug=-dbg
 . endif
 create-kernel-packages:	.PHONY
 . for flavor in "" ${_debug}
@@ -1932,7 +1914,7 @@ create-kernel-packages-flavor${flavor:C,^""$,${_default_flavor},}: _pkgbootstrap
 . for _kernel in ${BUILDKERNELS:[2..-1]}
 .  if exists(${KSTAGEDIR}/kernel.${_kernel}.meta)
 .   if ${MK_DEBUG_FILES} != "no"
-_debug=-debug
+_debug=-dbg
 .   endif
 .   for flavor in "" ${_debug}
 create-kernel-packages: create-kernel-packages-extra-flavor${flavor:C,^""$,${_default_flavor},}-${_kernel}
@@ -2130,8 +2112,8 @@ ${_bt}-lib/libdwarf: ${_bt_m4_depend}
 # 13.0-CURRENT cycle, thus needs to be built on -older releases and stable
 # branches.
 .if ${BOOTSTRAPPING} < 1300059
-${_bt}-libexec/flua: ${_bt}-lib/liblua
-_flua= lib/liblua libexec/flua
+${_bt}-libexec/flua: ${_bt}-lib/liblua ${_bt}-lib/libucl
+_flua= lib/liblua lib/libucl libexec/flua
 .endif
 
 # r245440 mtree -N support added
@@ -2439,9 +2421,6 @@ _dtrace_tools= cddl/lib/libctf cddl/usr.bin/ctfconvert \
 
 # If we're given an XAS, don't build binutils.
 .if ${XAS:M/*} == ""
-.if ${MK_BINUTILS_BOOTSTRAP} != "no"
-_binutils=	gnu/usr.bin/binutils
-.endif
 .if ${MK_ELFTOOLCHAIN_BOOTSTRAP} != "no"
 _elftctools=	lib/libelftc \
 		lib/libpe \
@@ -2485,7 +2464,6 @@ cross-tools: .MAKE .PHONY
     ${_clang_libs} \
     ${_clang} \
     ${_lld} \
-    ${_binutils} \
     ${_elftctools} \
     ${_dtrace_tools} \
     ${_btxld} \
@@ -2583,9 +2561,6 @@ SUBDIR_DEPEND_usr.bin/clang=	lib/clang
 NXBDIRS+=	lib/clang
 NXBDIRS+=	usr.bin/clang
 .endif
-.if ${MK_BINUTILS} != "no"
-NXBDIRS+=	gnu/usr.bin/binutils
-.endif
 # XXX: native-xtools passes along ${NXBDIRS} in SUBDIR_OVERRIDE that needs
 # to be evaluated after NXBDIRS is set.
 .if make(install) && !empty(SUBDIR_OVERRIDE)
@@ -2602,6 +2577,7 @@ NXBMAKEARGS+= \
 	SSP_CFLAGS= \
 	MK_CASPER=no \
 	MK_CLANG_EXTRAS=no \
+	MK_CLANG_FORMAT=no \
 	MK_CLANG_FULL=no \
 	MK_CTF=no \
 	MK_DEBUG_FILES=no \
@@ -2769,7 +2745,7 @@ gnu/lib/libdialog__L: lib/msun__L lib/ncurses/ncursesw__L
 _prebuild_libs+= lib/libc++
 .endif
 
-lib/libgeom__L: lib/libexpat__L
+lib/libgeom__L: lib/libexpat__L lib/libsbuf__L
 lib/libkvm__L: lib/libelf__L
 
 .if ${MK_LIBTHR} != "no"
@@ -2799,7 +2775,7 @@ _lib_casper=	lib/libcasper
 
 lib/libpjdlog__L: lib/libutil__L
 lib/libcasper__L: lib/libnv__L
-lib/liblzma__L: lib/libthr__L
+lib/liblzma__L: lib/libmd__L lib/libthr__L
 lib/libzstd__L: lib/libthr__L
 
 _generic_libs=	${_cddl_lib} gnu/lib ${_kerberos5_lib} lib ${_secure_lib}
@@ -3291,7 +3267,6 @@ _xb-build-tools: .PHONY
 XDEVDIRS= \
     ${_clang_libs} \
     ${_lld} \
-    ${_binutils} \
     ${_elftctools} \
     usr.bin/ar \
     ${_clang}

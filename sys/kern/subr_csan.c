@@ -350,19 +350,11 @@ kcsan_strlen(const char *str)
 	return (s - str);
 }
 
-#undef copystr
 #undef copyin
 #undef copyin_nofault
 #undef copyinstr
 #undef copyout
 #undef copyout_nofault
-
-int
-kcsan_copystr(const void *kfaddr, void *kdaddr, size_t len, size_t *done)
-{
-	kcsan_access((uintptr_t)kdaddr, len, true, false, __RET_ADDR);
-	return copystr(kfaddr, kdaddr, len, done);
-}
 
 int
 kcsan_copyin(const void *uaddr, void *kaddr, size_t len)
@@ -596,6 +588,38 @@ CSAN_ATOMIC_FUNC_SWAP(64, uint64_t)
 #if !defined(__aarch64__)
 CSAN_ATOMIC_FUNC_TESTANDCLEAR(64, uint64_t)
 CSAN_ATOMIC_FUNC_TESTANDSET(64, uint64_t)
+#endif
+
+CSAN_ATOMIC_FUNC_ADD(char, uint8_t)
+CSAN_ATOMIC_FUNC_CLEAR(char, uint8_t)
+CSAN_ATOMIC_FUNC_CMPSET(char, uint8_t)
+CSAN_ATOMIC_FUNC_FCMPSET(char, uint8_t)
+CSAN_ATOMIC_FUNC_LOAD(char, uint8_t)
+CSAN_ATOMIC_FUNC_SET(char, uint8_t)
+CSAN_ATOMIC_FUNC_SUBTRACT(char, uint8_t)
+_CSAN_ATOMIC_FUNC_STORE(char, uint8_t)
+#if 0
+CSAN_ATOMIC_FUNC_FETCHADD(char, uint8_t)
+CSAN_ATOMIC_FUNC_READANDCLEAR(char, uint8_t)
+CSAN_ATOMIC_FUNC_SWAP(char, uint8_t)
+CSAN_ATOMIC_FUNC_TESTANDCLEAR(char, uint8_t)
+CSAN_ATOMIC_FUNC_TESTANDSET(char, uint8_t)
+#endif
+
+CSAN_ATOMIC_FUNC_ADD(short, uint16_t)
+CSAN_ATOMIC_FUNC_CLEAR(short, uint16_t)
+CSAN_ATOMIC_FUNC_CMPSET(short, uint16_t)
+CSAN_ATOMIC_FUNC_FCMPSET(short, uint16_t)
+CSAN_ATOMIC_FUNC_LOAD(short, uint16_t)
+CSAN_ATOMIC_FUNC_SET(short, uint16_t)
+CSAN_ATOMIC_FUNC_SUBTRACT(short, uint16_t)
+_CSAN_ATOMIC_FUNC_STORE(short, uint16_t)
+#if 0
+CSAN_ATOMIC_FUNC_FETCHADD(short, uint16_t)
+CSAN_ATOMIC_FUNC_READANDCLEAR(short, uint16_t)
+CSAN_ATOMIC_FUNC_SWAP(short, uint16_t)
+CSAN_ATOMIC_FUNC_TESTANDCLEAR(short, uint16_t)
+CSAN_ATOMIC_FUNC_TESTANDSET(short, uint16_t)
 #endif
 
 CSAN_ATOMIC_FUNC_ADD(int, u_int)

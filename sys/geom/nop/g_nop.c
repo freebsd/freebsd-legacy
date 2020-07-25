@@ -346,6 +346,7 @@ g_nop_create(struct gctl_req *req, struct g_class *mp, struct g_provider *pp,
 	struct g_geom *gp;
 	struct g_provider *newpp;
 	struct g_consumer *cp;
+	struct g_geom_alias *gap;
 	char name[64];
 	int error, n;
 	off_t explicitsize;
@@ -458,6 +459,8 @@ g_nop_create(struct gctl_req *req, struct g_class *mp, struct g_provider *pp,
 	newpp->sectorsize = secsize;
 	newpp->stripesize = stripesize;
 	newpp->stripeoffset = stripeoffset;
+	LIST_FOREACH(gap, &pp->aliases, ga_next)
+		g_provider_add_alias(newpp, "%s%s", gap->ga_alias, G_NOP_SUFFIX);
 
 	cp = g_new_consumer(gp);
 	cp->flags |= G_CF_DIRECT_SEND | G_CF_DIRECT_RECEIVE;
@@ -541,7 +544,7 @@ g_nop_ctl_create(struct gctl_req *req, struct g_class *mp)
 	intmax_t *val, error, rfailprob, wfailprob, count_until_fail, offset,
 	    secsize, size, stripesize, stripeoffset, delaymsec,
 	    rdelayprob, wdelayprob;
-	const char *name, *physpath, *gnopname;
+	const char *physpath, *gnopname;
 	char param[16];
 	int i, *nargs;
 
@@ -668,19 +671,9 @@ g_nop_ctl_create(struct gctl_req *req, struct g_class *mp)
 
 	for (i = 0; i < *nargs; i++) {
 		snprintf(param, sizeof(param), "arg%d", i);
-		name = gctl_get_asciiparam(req, param);
-		if (name == NULL) {
-			gctl_error(req, "No 'arg%d' argument", i);
+		pp = gctl_get_provider(req, param);
+		if (pp == NULL)
 			return;
-		}
-		if (strncmp(name, "/dev/", strlen("/dev/")) == 0)
-			name += strlen("/dev/");
-		pp = g_provider_by_name(name);
-		if (pp == NULL) {
-			G_NOP_DEBUG(1, "Provider %s is invalid.", name);
-			gctl_error(req, "Provider %s is invalid.", name);
-			return;
-		}
 		if (g_nop_create(req, mp, pp,
 		    gnopname,
 		    error == -1 ? EIO : (int)error,
@@ -705,7 +698,6 @@ g_nop_ctl_configure(struct gctl_req *req, struct g_class *mp)
 	struct g_provider *pp;
 	intmax_t *val, delaymsec, error, rdelayprob, rfailprob, wdelayprob,
 	    wfailprob, count_until_fail;
-	const char *name;
 	char param[16];
 	int i, *nargs;
 
@@ -779,17 +771,12 @@ g_nop_ctl_configure(struct gctl_req *req, struct g_class *mp)
 
 	for (i = 0; i < *nargs; i++) {
 		snprintf(param, sizeof(param), "arg%d", i);
-		name = gctl_get_asciiparam(req, param);
-		if (name == NULL) {
-			gctl_error(req, "No 'arg%d' argument", i);
+		pp = gctl_get_provider(req, param);
+		if (pp == NULL)
 			return;
-		}
-		if (strncmp(name, "/dev/", strlen("/dev/")) == 0)
-			name += strlen("/dev/");
-		pp = g_provider_by_name(name);
-		if (pp == NULL || pp->geom->class != mp) {
-			G_NOP_DEBUG(1, "Provider %s is invalid.", name);
-			gctl_error(req, "Provider %s is invalid.", name);
+		if (pp->geom->class != mp) {
+			G_NOP_DEBUG(1, "Provider %s is invalid.", pp->name);
+			gctl_error(req, "Provider %s is invalid.", pp->name);
 			return;
 		}
 		sc = pp->geom->softc;
@@ -854,8 +841,8 @@ g_nop_ctl_destroy(struct gctl_req *req, struct g_class *mp)
 			gctl_error(req, "No 'arg%d' argument", i);
 			return;
 		}
-		if (strncmp(name, "/dev/", strlen("/dev/")) == 0)
-			name += strlen("/dev/");
+		if (strncmp(name, _PATH_DEV, strlen(_PATH_DEV)) == 0)
+			name += strlen(_PATH_DEV);
 		gp = g_nop_find_geom(mp, name);
 		if (gp == NULL) {
 			G_NOP_DEBUG(1, "Device %s is invalid.", name);
@@ -876,7 +863,6 @@ g_nop_ctl_reset(struct gctl_req *req, struct g_class *mp)
 {
 	struct g_nop_softc *sc;
 	struct g_provider *pp;
-	const char *name;
 	char param[16];
 	int i, *nargs;
 
@@ -894,17 +880,12 @@ g_nop_ctl_reset(struct gctl_req *req, struct g_class *mp)
 
 	for (i = 0; i < *nargs; i++) {
 		snprintf(param, sizeof(param), "arg%d", i);
-		name = gctl_get_asciiparam(req, param);
-		if (name == NULL) {
-			gctl_error(req, "No 'arg%d' argument", i);
+		pp = gctl_get_provider(req, param);
+		if (pp == NULL)
 			return;
-		}
-		if (strncmp(name, "/dev/", strlen("/dev/")) == 0)
-			name += strlen("/dev/");
-		pp = g_provider_by_name(name);
-		if (pp == NULL || pp->geom->class != mp) {
-			G_NOP_DEBUG(1, "Provider %s is invalid.", name);
-			gctl_error(req, "Provider %s is invalid.", name);
+		if (pp->geom->class != mp) {
+			G_NOP_DEBUG(1, "Provider %s is invalid.", pp->name);
+			gctl_error(req, "Provider %s is invalid.", pp->name);
 			return;
 		}
 		sc = pp->geom->softc;

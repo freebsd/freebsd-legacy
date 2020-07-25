@@ -233,7 +233,7 @@ struct fexecve_args {
 	int	fd;
 	char	**argv;
 	char	**envv;
-}
+};
 #endif
 int
 sys_fexecve(struct thread *td, struct fexecve_args *uap)
@@ -1208,7 +1208,7 @@ exec_copyin_data_fds(struct thread *td, struct image_args *args,
 
 	memset(args, '\0', sizeof(*args));
 	ofdp = td->td_proc->p_fd;
-	if (datalen >= ARG_MAX || fdslen > ofdp->fd_lastfile + 1)
+	if (datalen >= ARG_MAX || fdslen >= ofdp->fd_nfiles)
 		return (E2BIG);
 	error = exec_alloc_args(args);
 	if (error != 0)
@@ -1546,6 +1546,7 @@ exec_copyout_strings(struct image_params *imgp, uintptr_t *stack_base)
 	p = imgp->proc;
 	szsigcode = 0;
 	arginfo = (struct ps_strings *)p->p_sysent->sv_psstrings;
+	imgp->ps_strings = arginfo;
 	if (p->p_sysent->sv_sigcode_base == 0) {
 		if (p->p_sysent->sv_szsigcode != NULL)
 			szsigcode = *(p->p_sysent->sv_szsigcode);
@@ -1570,8 +1571,8 @@ exec_copyout_strings(struct image_params *imgp, uintptr_t *stack_base)
 	if (execpath_len != 0) {
 		destp -= execpath_len;
 		destp = rounddown2(destp, sizeof(void *));
-		imgp->execpathp = destp;
-		error = copyout(imgp->execpath, (void *)destp, execpath_len);
+		imgp->execpathp = (void *)destp;
+		error = copyout(imgp->execpath, imgp->execpathp, execpath_len);
 		if (error != 0)
 			return (error);
 	}
@@ -1581,8 +1582,8 @@ exec_copyout_strings(struct image_params *imgp, uintptr_t *stack_base)
 	 */
 	arc4rand(canary, sizeof(canary), 0);
 	destp -= sizeof(canary);
-	imgp->canary = destp;
-	error = copyout(canary, (void *)destp, sizeof(canary));
+	imgp->canary = (void *)destp;
+	error = copyout(canary, imgp->canary, sizeof(canary));
 	if (error != 0)
 		return (error);
 	imgp->canarylen = sizeof(canary);
@@ -1592,8 +1593,8 @@ exec_copyout_strings(struct image_params *imgp, uintptr_t *stack_base)
 	 */
 	destp -= szps;
 	destp = rounddown2(destp, sizeof(void *));
-	imgp->pagesizes = destp;
-	error = copyout(pagesizes, (void *)destp, szps);
+	imgp->pagesizes = (void *)destp;
+	error = copyout(pagesizes, imgp->pagesizes, szps);
 	if (error != 0)
 		return (error);
 	imgp->pagesizeslen = szps;
@@ -1645,6 +1646,7 @@ exec_copyout_strings(struct image_params *imgp, uintptr_t *stack_base)
 	/*
 	 * Fill in "ps_strings" struct for ps, w, etc.
 	 */
+	imgp->argv = vectp;
 	if (suword(&arginfo->ps_argvstr, (long)(intptr_t)vectp) != 0 ||
 	    suword32(&arginfo->ps_nargvstr, argc) != 0)
 		return (EFAULT);
@@ -1664,6 +1666,7 @@ exec_copyout_strings(struct image_params *imgp, uintptr_t *stack_base)
 	if (suword(vectp++, 0) != 0)
 		return (EFAULT);
 
+	imgp->envv = vectp;
 	if (suword(&arginfo->ps_envstr, (long)(intptr_t)vectp) != 0 ||
 	    suword32(&arginfo->ps_nenvstr, envc) != 0)
 		return (EFAULT);

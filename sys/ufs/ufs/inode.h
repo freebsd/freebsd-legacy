@@ -43,6 +43,7 @@
 #include <sys/lock.h>
 #include <sys/queue.h>
 #include <ufs/ufs/dinode.h>
+#include <sys/seqc.h>
 
 /*
  * This must agree with the definition in <ufs/ufs/dir.h>.
@@ -127,25 +128,35 @@ struct inode {
 #define	IN_LAZYMOD	0x0020		/* Modified, but don't write yet. */
 #define	IN_LAZYACCESS	0x0040		/* Process IN_ACCESS after the
 					   suspension finished */
-#define	IN_EA_LOCKED	0x0080
-#define	IN_EA_LOCKWAIT	0x0100
-
+#define	IN_EA_LOCKED	0x0080		/* Extended attributes locked */
+#define	IN_EA_LOCKWAIT	0x0100		/* Want extended attributes lock */
 #define	IN_TRUNCATED	0x0200		/* Journaled truncation pending. */
-
 #define	IN_UFS2		0x0400		/* UFS2 vs UFS1 */
+#define	IN_IBLKDATA	0x0800		/* datasync requires inode block
+					   update */
+#define	IN_SIZEMOD	0x1000		/* Inode size has been modified */
 
-#define PRINT_INODE_FLAGS "\20\20b16\17b15\16b14\15b13" \
-	"\14b12\13is_ufs2\12truncated\11ea_lockwait\10ea_locked" \
+#define PRINT_INODE_FLAGS "\20\20b16\17b15\16b14\15sizemod" \
+	"\14iblkdata\13is_ufs2\12truncated\11ea_lockwait\10ea_locked" \
 	"\7lazyaccess\6lazymod\5needsync\4modified\3update\2change\1access"
 
 #define UFS_INODE_FLAG_LAZY_MASK	\
-	(IN_ACCESS | IN_CHANGE | IN_MODIFIED | IN_UPDATE | IN_LAZYMOD | IN_LAZYACCESS)
+	(IN_ACCESS | IN_CHANGE | IN_MODIFIED | IN_UPDATE | IN_LAZYMOD | \
+	 IN_LAZYACCESS)
 /*
  * Some flags can persist a vnode transitioning to 0 hold count and being tkaen
  * off the list.
  */
 #define UFS_INODE_FLAG_LAZY_MASK_ASSERTABLE \
 	(UFS_INODE_FLAG_LAZY_MASK & ~(IN_LAZYMOD | IN_LAZYACCESS))
+
+#define UFS_INODE_SET_MODE(ip, mode) do {			\
+	struct inode *_ip = (ip);				\
+	int _mode = (mode);					\
+								\
+	ASSERT_VOP_IN_SEQC(ITOV(_ip));				\
+	atomic_store_short(&(_ip)->i_mode, _mode);		\
+} while (0)
 
 #define UFS_INODE_SET_FLAG(ip, flags) do {			\
 	struct inode *_ip = (ip);				\
@@ -227,6 +238,7 @@ struct indir {
 
 /* Convert between inode pointers and vnode pointers. */
 #define	VTOI(vp)	((struct inode *)(vp)->v_data)
+#define	VTOI_SMR(vp)	((struct inode *)vn_load_v_data_smr(vp))
 #define	ITOV(ip)	((ip)->i_vnode)
 
 /* Determine if soft dependencies are being done */

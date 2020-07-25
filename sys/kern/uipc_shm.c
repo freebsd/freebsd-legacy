@@ -313,6 +313,7 @@ shm_write(struct file *fp, struct uio *uio, struct ucred *active_cred,
 	struct shmfd *shmfd;
 	void *rl_cookie;
 	int error;
+	off_t size;
 
 	shmfd = fp->f_data;
 #ifdef MAC
@@ -321,17 +322,42 @@ shm_write(struct file *fp, struct uio *uio, struct ucred *active_cred,
 		return (error);
 #endif
 	foffset_lock_uio(fp, uio, flags);
+	if (uio->uio_resid > OFF_MAX - uio->uio_offset) {
+		/*
+		 * Overflow is only an error if we're supposed to expand on
+		 * write.  Otherwise, we'll just truncate the write to the
+		 * size of the file, which can only grow up to OFF_MAX.
+		 */
+		if ((shmfd->shm_flags & SHM_GROW_ON_WRITE) != 0) {
+			foffset_unlock_uio(fp, uio, flags);
+			return (EFBIG);
+		}
+
+		size = shmfd->shm_size;
+	} else {
+		size = uio->uio_offset + uio->uio_resid;
+	}
 	if ((flags & FOF_OFFSET) == 0) {
 		rl_cookie = rangelock_wlock(&shmfd->shm_rl, 0, OFF_MAX,
 		    &shmfd->shm_mtx);
 	} else {
 		rl_cookie = rangelock_wlock(&shmfd->shm_rl, uio->uio_offset,
-		    uio->uio_offset + uio->uio_resid, &shmfd->shm_mtx);
+		    size, &shmfd->shm_mtx);
 	}
-	if ((shmfd->shm_seals & F_SEAL_WRITE) != 0)
+	if ((shmfd->shm_seals & F_SEAL_WRITE) != 0) {
 		error = EPERM;
-	else
-		error = uiomove_object(shmfd->shm_object, shmfd->shm_size, uio);
+	} else {
+		error = 0;
+		if ((shmfd->shm_flags & SHM_GROW_ON_WRITE) != 0 &&
+		    size > shmfd->shm_size) {
+			VM_OBJECT_WLOCK(shmfd->shm_object);
+			error = shm_dotruncate_locked(shmfd, size, rl_cookie);
+			VM_OBJECT_WUNLOCK(shmfd->shm_object);
+		}
+		if (error == 0)
+			error = uiomove_object(shmfd->shm_object,
+			    shmfd->shm_size, uio);
+	}
 	rangelock_unlock(&shmfd->shm_rl, rl_cookie, &shmfd->shm_mtx);
 	foffset_unlock_uio(fp, uio, flags);
 	return (error);
@@ -540,14 +566,9 @@ retry:
 		}
 		delta = IDX_TO_OFF(object->size - nobjsize);
 
-		/* Toss in memory pages. */
 		if (nobjsize < object->size)
 			vm_object_page_remove(object, nobjsize, object->size,
 			    0);
-
-		/* Toss pages from swap. */
-		if (object->type == OBJT_SWAP)
-			swap_pager_freespace(object, nobjsize, delta);
 
 		/* Free the swap accounted for shm */
 		swap_release_by_cred(delta, object->cred);
@@ -753,7 +774,7 @@ kern_shm_open2(struct thread *td, const char *userpath, int flags, mode_t mode,
 	mode_t cmode;
 	int error, fd, initial_seals;
 
-	if ((shmflags & ~SHM_ALLOW_SEALING) != 0)
+	if ((shmflags & ~(SHM_ALLOW_SEALING | SHM_GROW_ON_WRITE)) != 0)
 		return (EINVAL);
 
 	initial_seals = F_SEAL_SEAL;
@@ -926,6 +947,7 @@ kern_shm_open2(struct thread *td, const char *userpath, int flags, mode_t mode,
 		}
 	}
 
+	shmfd->shm_flags = shmflags;
 	finit(fp, FFLAGS(flags & O_ACCMODE), DTYPE_SHM, shmfd, &shm_ops);
 
 	td->td_retval[0] = fd;
@@ -1136,23 +1158,30 @@ shm_mmap(struct file *fp, vm_map_t map, vm_offset_t *addr, vm_size_t objsize,
 
 	/*
 	 * If FWRITE's set, we can allow VM_PROT_WRITE unless it's a shared
-	 * mapping with a write seal applied.
+	 * mapping with a write seal applied.  Private mappings are always
+	 * writeable.
 	 */
-	if ((fp->f_flag & FWRITE) != 0 && ((flags & MAP_SHARED) == 0 ||
-	    (shmfd->shm_seals & F_SEAL_WRITE) == 0))
+	if ((flags & MAP_SHARED) == 0) {
+		cap_maxprot |= VM_PROT_WRITE;
 		maxprot |= VM_PROT_WRITE;
+		writecnt = false;
+	} else {
+		if ((fp->f_flag & FWRITE) != 0 &&
+		    (shmfd->shm_seals & F_SEAL_WRITE) == 0)
+			maxprot |= VM_PROT_WRITE;
 
-	writecnt = (flags & MAP_SHARED) != 0 && (prot & VM_PROT_WRITE) != 0;
-
-	if (writecnt && (shmfd->shm_seals & F_SEAL_WRITE) != 0) {
-		error = EPERM;
-		goto out;
-	}
-
-	/* Don't permit shared writable mappings on read-only descriptors. */
-	if (writecnt && (maxprot & VM_PROT_WRITE) == 0) {
-		error = EACCES;
-		goto out;
+		/*
+		 * Any mappings from a writable descriptor may be upgraded to
+		 * VM_PROT_WRITE with mprotect(2), unless a write-seal was
+		 * applied between the open and subsequent mmap(2).  We want to
+		 * reject application of a write seal as long as any such
+		 * mapping exists so that the seal cannot be trivially bypassed.
+		 */
+		writecnt = (maxprot & VM_PROT_WRITE) != 0;
+		if (!writecnt && (prot & VM_PROT_WRITE) != 0) {
+			error = EACCES;
+			goto out;
+		}
 	}
 	maxprot &= cap_maxprot;
 

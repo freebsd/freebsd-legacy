@@ -261,12 +261,14 @@ struct buf {
  */
 #define	BX_VNDIRTY	0x00000001	/* On vnode dirty list */
 #define	BX_VNCLEAN	0x00000002	/* On vnode clean list */
+#define	BX_CVTENXIO	0x00000004	/* Convert errors to ENXIO */
 #define	BX_BKGRDWRITE	0x00000010	/* Do writes in background */
 #define	BX_BKGRDMARKER	0x00000020	/* Mark buffer for splay tree */
 #define	BX_ALTDATA	0x00000040	/* Holds extended data */
 #define	BX_FSPRIV	0x00FF0000	/* Filesystem-specific flags mask */
 
-#define	PRINT_BUF_XFLAGS "\20\7altdata\6bkgrdmarker\5bkgrdwrite\2clean\1dirty"
+#define	PRINT_BUF_XFLAGS "\20\7altdata\6bkgrdmarker\5bkgrdwrite\3cvtenxio" \
+	"\2clean\1dirty"
 
 #define	NOOFFSET	(-1LL)		/* No buffer offset calculated yet */
 
@@ -324,6 +326,9 @@ extern const char *buf_wmesg;		/* Default buffer lock message */
 	KASSERT(((bp)->b_flags & B_REMFREE) == 0,			\
 	    ("BUF_UNLOCK %p while B_REMFREE is still set.", (bp)));	\
 									\
+	BUF_UNLOCK_RAW((bp));						\
+} while (0)
+#define	BUF_UNLOCK_RAW(bp) do {						\
 	(void)_lockmgr_args(&(bp)->b_lock, LK_RELEASE, NULL,		\
 	    LK_WMESG_DEFAULT, LK_PRIO_DEFAULT, LK_TIMO_DEFAULT,		\
 	    LOCK_FILE, LOCK_LINE);					\
@@ -487,6 +492,7 @@ buf_track(struct buf *bp __unused, const char *location __unused)
 #define	GB_KVAALLOC	0x0010		/* But allocate KVA. */
 #define	GB_CKHASH	0x0020		/* If reading, calc checksum hash */
 #define	GB_NOSPARSE	0x0040		/* Do not instantiate holes */
+#define	GB_CVTENXIO	0x0080		/* Convert errors to ENXIO */
 
 #ifdef _KERNEL
 extern int	nbuf;			/* The number of buffer headers */
@@ -544,6 +550,7 @@ void	vfs_busy_pages_acquire(struct buf *bp);
 void	vfs_busy_pages_release(struct buf *bp);
 struct buf *incore(struct bufobj *, daddr_t);
 struct buf *gbincore(struct bufobj *, daddr_t);
+struct buf *gbincore_unlocked(struct bufobj *, daddr_t);
 struct buf *getblk(struct vnode *, daddr_t, int, int, int, int);
 int	getblkx(struct vnode *vp, daddr_t blkno, daddr_t dblkno, int size,
 	    int slpflag, int slptimeo, int flags, struct buf **bpp);

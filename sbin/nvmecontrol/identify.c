@@ -151,15 +151,15 @@ print_namespace(struct nvme_namespace_data *nsdata)
 	   uint128_to_str(to128(nsdata->nvmcap), cbuf, sizeof(cbuf)));
 	if ((nsdata->nsfeat >> NVME_NS_DATA_NSFEAT_NPVALID_SHIFT) &
 	    NVME_NS_DATA_NSFEAT_NPVALID_MASK) {
-		printf("Preferred Write Granularity: %u blocks",
+		printf("Preferred Write Granularity: %u blocks\n",
 		    nsdata->npwg + 1);
-		printf("Preferred Write Alignment:   %u blocks",
+		printf("Preferred Write Alignment:   %u blocks\n",
 		    nsdata->npwa + 1);
-		printf("Preferred Deallocate Granul: %u blocks",
+		printf("Preferred Deallocate Granul: %u blocks\n",
 		    nsdata->npdg + 1);
-		printf("Preferred Deallocate Align:  %u blocks",
+		printf("Preferred Deallocate Align:  %u blocks\n",
 		    nsdata->npda + 1);
-		printf("Optimal Write Size:          %u blocks",
+		printf("Optimal Write Size:          %u blocks\n",
 		    nsdata->nows + 1);
 	}
 	printf("Globally Unique Identifier:  ");
@@ -241,7 +241,7 @@ identify(const struct cmd *f, int argc, char *argv[])
 	if (arg_parse(argc, argv, f))
 		return;
 
-	open_dev(opt.dev, &fd, 1, 1);
+	open_dev(opt.dev, &fd, 0, 1);
 	get_nsid(fd, &path, &nsid);
 	if (nsid != 0) {
 		/*
@@ -251,7 +251,7 @@ identify(const struct cmd *f, int argc, char *argv[])
 		 * the IDENTIFY command itself.
 		 */
 		close(fd);
-		open_dev(path, &fd, 1, 1);
+		open_dev(path, &fd, 0, 1);
 	}
 	free(path);
 	if (opt.nsid != NONE)

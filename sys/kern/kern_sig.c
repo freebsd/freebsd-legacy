@@ -3454,8 +3454,9 @@ corefile_open_last(struct thread *td, char *name, int indexpos,
 		    (lasttime.tv_sec == vattr.va_mtime.tv_sec &&
 		    lasttime.tv_nsec >= vattr.va_mtime.tv_nsec)) {
 			if (oldvp != NULL)
-				vnode_close_locked(td, oldvp);
+				vn_close(oldvp, FWRITE, td->td_ucred, td);
 			oldvp = vp;
+			VOP_UNLOCK(oldvp);
 			lasttime = vattr.va_mtime;
 		} else {
 			vnode_close_locked(td, vp);
@@ -3466,12 +3467,18 @@ corefile_open_last(struct thread *td, char *name, int indexpos,
 		if (nextvp == NULL) {
 			if ((td->td_proc->p_flag & P_SUGID) != 0) {
 				error = EFAULT;
-				vnode_close_locked(td, oldvp);
+				vn_close(oldvp, FWRITE, td->td_ucred, td);
 			} else {
 				nextvp = oldvp;
+				error = vn_lock(nextvp, LK_EXCLUSIVE);
+				if (error != 0) {
+					vn_close(nextvp, FWRITE, td->td_ucred,
+					    td);
+					nextvp = NULL;
+				}
 			}
 		} else {
-			vnode_close_locked(td, oldvp);
+			vn_close(oldvp, FWRITE, td->td_ucred, td);
 		}
 	}
 	if (error != 0) {
@@ -3976,6 +3983,22 @@ sigfastblock_fetch_sig(struct thread *td, bool sendsig, uint32_t *valp)
 	return (true);
 }
 
+static void
+sigfastblock_resched(struct thread *td, bool resched)
+{
+	struct proc *p;
+
+	if (resched) {
+		p = td->td_proc;
+		PROC_LOCK(p);
+		reschedule_signals(p, td->td_sigmask, 0);
+		PROC_UNLOCK(p);
+	}
+	thread_lock(td);
+	td->td_flags |= TDF_ASTPENDING | TDF_NEEDSIGCHK;
+	thread_unlock(td);
+}
+
 int
 sys_sigfastblock(struct thread *td, struct sigfastblock_args *uap)
 {
@@ -4046,11 +4069,8 @@ sys_sigfastblock(struct thread *td, struct sigfastblock_args *uap)
 		 * signals to current thread.  But notify others about
 		 * fake unblock.
 		 */
-		if (error == 0 && p->p_numthreads != 1) {
-			PROC_LOCK(p);
-			reschedule_signals(p, td->td_sigmask, 0);
-			PROC_UNLOCK(p);
-		}
+		sigfastblock_resched(td, error == 0 && p->p_numthreads != 1);
+
 		break;
 
 	case SIGFASTBLOCK_UNSETPTR:
@@ -4079,7 +4099,6 @@ sys_sigfastblock(struct thread *td, struct sigfastblock_args *uap)
 void
 sigfastblock_clear(struct thread *td)
 {
-	struct proc *p;
 	bool resched;
 
 	if ((td->td_pflags & TDP_SIGFASTBLOCK) == 0)
@@ -4088,12 +4107,7 @@ sigfastblock_clear(struct thread *td)
 	resched = (td->td_pflags & TDP_SIGFASTPENDING) != 0 ||
 	    SIGPENDING(td);
 	td->td_pflags &= ~(TDP_SIGFASTBLOCK | TDP_SIGFASTPENDING);
-	if (resched) {
-		p = td->td_proc;
-		PROC_LOCK(p);
-		reschedule_signals(p, td->td_sigmask, 0);
-		PROC_UNLOCK(p);
-	}
+	sigfastblock_resched(td, resched);
 }
 
 void

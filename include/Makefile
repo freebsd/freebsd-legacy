@@ -53,9 +53,11 @@ LSUBDIRS=	cam/ata cam/mmc cam/nvme cam/scsi \
 	geom/mirror geom/mountver geom/multipath geom/nop \
 	geom/raid geom/raid3 geom/shsec geom/stripe geom/virstor \
 	net/altq \
+	net/route \
 	netgraph/atm netgraph/netflow \
 	netinet/cc \
 	netinet/netdump \
+	netinet/tcp_stacks \
 	security/audit \
 	security/mac_biba security/mac_bsdextended security/mac_lomac \
 	security/mac_mls security/mac_partition \
@@ -233,6 +235,9 @@ copies: .PHONY .META
 .endif
 .endfor
 	cd ${SRCTOP}/sys/rpc; \
+	${INSTALL} -C ${TAG_ARGS} -o ${BINOWN} -g ${BINGRP} -m 444 rpcsec_tls.h \
+	    ${SDESTDIR}${INCLUDEDIR}/rpc
+	cd ${SRCTOP}/sys/rpc; \
 	${INSTALL} -C ${TAG_ARGS} -o ${BINOWN} -g ${BINGRP} -m 444 types.h \
 	    ${SDESTDIR}${INCLUDEDIR}/rpc
 	cd ${SRCTOP}/sys/teken; \
@@ -366,7 +371,7 @@ symlinks: .PHONY .META
 		    ${SDESTDIR}${INCLUDEDIR}/isofs/cd9660; \
 	done
 	cd ${SRCTOP}/sys/rpc; \
-	for h in types.h; do \
+	for h in rpcsec_tls.h types.h; do \
 		${INSTALL_SYMLINK} ${TAG_ARGS} ../../../sys/rpc/$$h \
 		    ${SDESTDIR}${INCLUDEDIR}/rpc; \
 	done
