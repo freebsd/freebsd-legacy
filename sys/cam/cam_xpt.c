@@ -71,7 +71,6 @@ __FBSDID("$FreeBSD$");
 #include <cam/scsi/scsi_message.h>
 #include <cam/scsi/scsi_pass.h>
 
-#include <machine/md_var.h>	/* geometry translation */
 #include <machine/stdarg.h>	/* for xpt_print below */
 
 #include "opt_cam.h"
@@ -355,7 +354,7 @@ device_is_queued(struct cam_ed *device)
 }
 
 static void
-xpt_periph_init()
+xpt_periph_init(void)
 {
 	make_dev(&xpt_cdevsw, 0, UID_ROOT, GID_OPERATOR, 0600, "xpt0");
 }
@@ -3527,22 +3526,22 @@ xpt_run_devq(struct cam_devq *devq)
 }
 
 /*
- * This function merges stuff from the slave ccb into the master ccb, while
- * keeping important fields in the master ccb constant.
+ * This function merges stuff from the src ccb into the dst ccb, while keeping
+ * important fields in the dst ccb constant.
  */
 void
-xpt_merge_ccb(union ccb *master_ccb, union ccb *slave_ccb)
+xpt_merge_ccb(union ccb *dst_ccb, union ccb *src_ccb)
 {
 
 	/*
 	 * Pull fields that are valid for peripheral drivers to set
-	 * into the master CCB along with the CCB "payload".
+	 * into the dst CCB along with the CCB "payload".
 	 */
-	master_ccb->ccb_h.retry_count = slave_ccb->ccb_h.retry_count;
-	master_ccb->ccb_h.func_code = slave_ccb->ccb_h.func_code;
-	master_ccb->ccb_h.timeout = slave_ccb->ccb_h.timeout;
-	master_ccb->ccb_h.flags = slave_ccb->ccb_h.flags;
-	bcopy(&(&slave_ccb->ccb_h)[1], &(&master_ccb->ccb_h)[1],
+	dst_ccb->ccb_h.retry_count = src_ccb->ccb_h.retry_count;
+	dst_ccb->ccb_h.func_code = src_ccb->ccb_h.func_code;
+	dst_ccb->ccb_h.timeout = src_ccb->ccb_h.timeout;
+	dst_ccb->ccb_h.flags = src_ccb->ccb_h.flags;
+	bcopy(&(&src_ccb->ccb_h)[1], &(&dst_ccb->ccb_h)[1],
 	      sizeof(union ccb) - sizeof(struct ccb_hdr));
 }
 
@@ -4670,7 +4669,7 @@ xpt_done_direct(union ccb *done_ccb)
 }
 
 union ccb *
-xpt_alloc_ccb()
+xpt_alloc_ccb(void)
 {
 	union ccb *new_ccb;
 
@@ -4679,7 +4678,7 @@ xpt_alloc_ccb()
 }
 
 union ccb *
-xpt_alloc_ccb_nowait()
+xpt_alloc_ccb_nowait(void)
 {
 	union ccb *new_ccb;
 
@@ -4960,15 +4959,17 @@ xpt_release_device(struct cam_ed *device)
 	devq = bus->sim->devq;
 	mtx_lock(&devq->send_mtx);
 	cam_devq_resize(devq, devq->send_queue.array_size - 1);
-	mtx_unlock(&devq->send_mtx);
 
 	KASSERT(SLIST_EMPTY(&device->periphs),
 	    ("destroying device, but periphs list is not empty"));
 	KASSERT(device->devq_entry.index == CAM_UNQUEUED_INDEX,
 	    ("destroying device while still queued for ccbs"));
 
+	/* The send_mtx must be held when accessing the callout */
 	if ((device->flags & CAM_DEV_REL_TIMEOUT_PENDING) != 0)
 		callout_stop(&device->callout);
+
+	mtx_unlock(&devq->send_mtx);
 
 	xpt_release_target(device->target);
 

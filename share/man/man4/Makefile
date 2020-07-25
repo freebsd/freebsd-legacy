@@ -87,7 +87,6 @@ MAN=	aac.4 \
 	bwi.4 \
 	bwn.4 \
 	${_bytgpio.4} \
-	${_chvgpio.4} \
 	capsicum.4 \
 	cardbus.4 \
 	carp.4 \
@@ -109,6 +108,7 @@ MAN=	aac.4 \
 	cfumass.4 \
 	ch.4 \
 	chromebook_platform.4 \
+	${_chvgpio.4} \
 	ciss.4 \
 	cloudabi.4 \
 	cmx.4 \
@@ -404,6 +404,7 @@ MAN=	aac.4 \
 	pccard.4 \
 	pccbb.4 \
 	pcf.4 \
+	${_pchtherm.4} \
 	pci.4 \
 	pcib.4 \
 	pcic.4 \
@@ -448,6 +449,7 @@ MAN=	aac.4 \
 	rue.4 \
 	sa.4 \
 	safe.4 \
+	safexcel.4 \
 	sbp.4 \
 	sbp_targ.4 \
 	scc.4 \
@@ -470,6 +472,7 @@ MAN=	aac.4 \
 	sk.4 \
 	${_smartpqi.4} \
 	smb.4 \
+	smbios.4 \
 	smbus.4 \
 	smp.4 \
 	smsc.4 \
@@ -815,6 +818,7 @@ _nvd.4=		nvd.4
 _nvme.4=	nvme.4
 _nvram.4=	nvram.4
 _padlock.4=	padlock.4
+_pchtherm.4=	pchtherm.4
 _rr232x.4=	rr232x.4
 _speaker.4=	speaker.4
 _spkr.4=	spkr.4
@@ -963,7 +967,6 @@ MAN+=	\
 	uart.4 \
 	uath.4 \
 	ubsa.4 \
-	ubsec.4 \
 	ubser.4 \
 	ubtbcmfw.4 \
 	uchcom.4 \

@@ -18,6 +18,7 @@ PROG?=		ld-elf.so.1
 TAGS+=		lib32
 .endif
 SRCS= \
+	crtbrand.S \
 	rtld_start.S \
 	reloc.c \
 	rtld.c \
@@ -30,6 +31,7 @@ SRCS= \
 	libmap.c
 MAN?=		rtld.1
 CSTD?=		gnu99
+ACFLAGS+=	-DLOCORE
 CFLAGS+=	-Wall -DFREEBSD_ELF -DIN_RTLD -ffreestanding
 CFLAGS+=	-I${SRCTOP}/lib/csu/common
 .if exists(${RTLD_ELF_DIR}/${MACHINE_ARCH})
@@ -49,6 +51,7 @@ MLINKS?=	rtld.1 ld-elf.so.1.1 \
 		rtld.1 ld.so.1
 
 CFLAGS+=	-fpic -DPIC $(DEBUG)
+
 LDFLAGS+=	-shared -Wl,-Bsymbolic -Wl,-z,defs -nostdlib -e ${RTLD_ENTRY}
 # Pull in the dependencies that we use from libc
 .include "rtld-libc/Makefile.inc"
@@ -75,7 +78,7 @@ beforeinstall:
 	-chflags -h noschg ${DESTDIR}/usr/libexec/${PROG}
 .endif
 
-.PATH: ${RTLD_ELF_DIR}/${RTLD_ARCH}
+.PATH: ${RTLD_ELF_DIR}/${RTLD_ARCH} ${SRCTOP}/lib/csu/common
 
 .if ${.CURDIR} == ${RTLD_ELF_DIR}
 HAS_TESTS=
@@ -90,8 +93,4 @@ ${PROG_FULL}:	${VERSION_MAP}
 # GCC warns about redeclarations even though they have __exported
 # and are therefore not identical to the ones from the system headers.
 CFLAGS+=	-Wno-redundant-decls
-.if ${COMPILER_VERSION} < 40300
-# Silence -Wshadow false positives in ancient GCC
-CFLAGS+=	-Wno-shadow
-.endif
 .endif

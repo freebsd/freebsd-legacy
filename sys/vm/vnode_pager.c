@@ -776,9 +776,13 @@ vnode_pager_local_getpages(struct vop_getpages_args *ap)
 int
 vnode_pager_local_getpages_async(struct vop_getpages_async_args *ap)
 {
+	int error;
 
-	return (vnode_pager_generic_getpages(ap->a_vp, ap->a_m, ap->a_count,
-	    ap->a_rbehind, ap->a_rahead, ap->a_iodone, ap->a_arg));
+	error = vnode_pager_generic_getpages(ap->a_vp, ap->a_m, ap->a_count,
+	    ap->a_rbehind, ap->a_rahead, ap->a_iodone, ap->a_arg);
+	if (error != 0 && ap->a_iodone != NULL)
+		ap->a_iodone(ap->a_arg, ap->a_m, ap->a_count, error);
+	return (error);
 }
 
 /*
@@ -1133,6 +1137,21 @@ vnode_pager_generic_getpages_done(struct buf *bp)
 	if (buf_mapped(bp)) {
 		pmap_qremove((vm_offset_t)bp->b_data, bp->b_npages);
 		bp->b_data = unmapped_buf;
+	}
+
+	/*
+	 * If the read failed, we must free any read ahead/behind pages here.
+	 * The requested pages are freed by the caller (for sync requests)
+	 * or by the bp->b_pgiodone callback (for async requests).
+	 */
+	if (error != 0) {
+		VM_OBJECT_WLOCK(object);
+		for (i = 0; i < bp->b_pgbefore; i++)
+			vm_page_free_invalid(bp->b_pages[i]);
+		for (i = bp->b_npages - bp->b_pgafter; i < bp->b_npages; i++)
+			vm_page_free_invalid(bp->b_pages[i]);
+		VM_OBJECT_WUNLOCK(object);
+		return (error);
 	}
 
 	/* Read lock to protect size. */

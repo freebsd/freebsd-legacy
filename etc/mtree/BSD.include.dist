@@ -208,6 +208,8 @@
     net
         altq
         ..
+        route
+        ..
     ..
     net80211
     ..
@@ -225,6 +227,8 @@
         cc
         ..
         netdump
+        ..
+        tcp_stacks
         ..
     ..
     netinet6

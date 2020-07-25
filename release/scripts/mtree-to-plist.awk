@@ -41,7 +41,7 @@
 				gsub(/package=/, "", pkgname)
 			} else if (a[i] == "config") {
 				type="config"
-			} else if (a[i] == "development" || a[i] == "profile" || a[i] == "debug" || a[i] == "docs") {
+			} else if (a[i] == "development" || a[i] == "debug" || a[i] == "docs") {
 				pkgend=a[i]
 			} else {
 				if (ext != "")
@@ -70,7 +70,7 @@
 			output=output"."_kernconf
 		}
 		if ($1 ~ /^\/usr\/lib\/debug\/boot/) {
-			output=output"-debug.plist"
+			output=output"-dbg.plist"
 		} else {
 			output=output".plist"
 		}

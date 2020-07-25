@@ -15,9 +15,10 @@ __<src.libnames.mk>__:
 _PRIVATELIBS=	\
 		atf_c \
 		atf_cxx \
+		auditd \
 		bsdstat \
 		devdctl \
-		event \
+		event1 \
 		gmock \
 		gtest \
 		gmock_main \
@@ -72,7 +73,6 @@ _LIBRARIES=	\
 		alias \
 		archive \
 		asn1 \
-		auditd \
 		avl \
 		be \
 		begemot \
@@ -222,18 +222,18 @@ _LIBRARIES+= \
 .endif
 
 .if ${MK_BEARSSL} == "yes"
-_INTERNALLIBS+= \
+_LIBRARIES+= \
 		bearssl \
 		secureboot \
 
-LIBBEARSSL?=	${LIBBEARSSLDIR}/libbearssl${PIE_SUFFIX}.a
-LIBSECUREBOOT?=	${LIBSECUREBOOTDIR}/libsecureboot${PIE_SUFFIX}.a
+LIBBEARSSL?=	${LIBBEARSSLDIR}/libbearssl.a
+LIBSECUREBOOT?=	${LIBSECUREBOOTDIR}/libsecureboot.a
 .endif
 
 .if ${MK_VERIEXEC} == "yes"
-_INTERNALLIBS+= veriexec
+_LIBRARIES+= veriexec
 
-LIBVERIEXEC?=	${LIBVERIEXECDIR}/libveriexec${PIE_SUFFIX}.a
+LIBVERIEXEC?=	${LIBVERIEXECDIR}/libveriexec.a
 .endif
 
 # Each library's LIBADD needs to be duplicated here for static linkage of
@@ -350,7 +350,7 @@ _DP_heimipcs=	heimbase roken pthread
 _DP_kafs5=	asn1 krb5 roken
 _DP_krb5+=	asn1 com_err crypt crypto hx509 roken wind heimbase heimipcc
 _DP_gssapi_krb5+=	gssapi krb5 crypto roken asn1 com_err
-_DP_lzma=	pthread
+_DP_lzma=	md pthread
 _DP_ucl=	m
 _DP_vmmapi=	util
 _DP_opencsd=	cxxrt

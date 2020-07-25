@@ -52,6 +52,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/sysproto.h>
+#include <sys/abi_compat.h>
 #include <sys/eventhandler.h>
 #include <sys/kernel.h>
 #include <sys/proc.h>
@@ -797,6 +798,13 @@ kern_semctl(struct thread *td, int semid, int semnum, int cmd,
 		bcopy(&semakptr->u, arg->buf, sizeof(struct semid_ds));
 		if (cred->cr_prison != semakptr->cred->cr_prison)
 			arg->buf->sem_perm.key = IPC_PRIVATE;
+
+		/*
+		 * Try to hide the fact that the structure layout is shared by
+		 * both the kernel and userland.  This pointer is not useful to
+		 * userspace.
+		 */
+		arg->buf->__sem_base = NULL;
 		break;
 
 	case GETNCNT:
@@ -1751,10 +1759,6 @@ sys_semsys(td, uap)
 	error = (*semcalls[uap->which])(td, &uap->a2);
 	return (error);
 }
-
-#ifndef CP
-#define CP(src, dst, fld)	do { (dst).fld = (src).fld; } while (0)
-#endif
 
 #ifndef _SYS_SYSPROTO_H_
 struct freebsd7___semctl_args {

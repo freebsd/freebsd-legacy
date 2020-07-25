@@ -87,6 +87,9 @@ restore_usersrs:
  */
 restore_kernsrs:
 	GET_CPUINFO(%r28)
+	lwz	%r29, PC_FLAGS(%r28)
+	mtcr	%r29
+	btlr	0
 	addi	%r28,%r28,PC_KERNSLB
 	ld	%r29,16(%r28)		/* One past USER_SLB_SLOT */
 	cmpdi	%r29,0
@@ -270,9 +273,13 @@ restore_kernsrs:
 	std	%r29,(savearea+CPUSAVE_R29)(%r3);			\
 	std	%r30,(savearea+CPUSAVE_R30)(%r3);			\
 	std	%r31,(savearea+CPUSAVE_R31)(%r3);			\
+	lwz	%r28,PC_FLAGS(%r3);					\
+	mtcr	%r28;							\
+	bt	0, 0f;	/* Check to skip restoring SRs. */		\
 	mflr	%r27;			/* preserve LR */		\
 	bl	restore_usersrs;	/* uses r28-r31 */		\
 	mtlr	%r27;							\
+0:									\
 	ld	%r31,(savearea+CPUSAVE_R31)(%r3);			\
 	ld	%r30,(savearea+CPUSAVE_R30)(%r3);			\
 	ld	%r29,(savearea+CPUSAVE_R29)(%r3);			\
@@ -318,7 +325,7 @@ CNAME(rstcode):
 	 * It is software reset when 46:47 = 0b00
 	 */
 	/* 0x00 */
-	ld	%r2,TRAP_ENTRY(0)	/* Real-mode &generictrap */
+	ld	%r2,TRAP_GENTRAP(0)	/* Real-mode &generictrap */
 	mfsrr1	%r9			/* Load SRR1 into r9 */
 	andis.	%r9,%r9,0x3		/* Logic AND with 46:47 bits */
 
@@ -797,6 +804,8 @@ generictrap:
 	std	%r31,(PC_TEMPSAVE+CPUSAVE_R31)(%r1)
 	mfdar	%r30
 	std	%r30,(PC_TEMPSAVE+CPUSAVE_AIM_DAR)(%r1)
+	mfdsisr	%r30
+	std	%r30,(PC_TEMPSAVE+CPUSAVE_AIM_DSISR)(%r1)
 	mfsprg1	%r1			/* restore SP, in case of branch */
 	mfsprg2	%r28			/* save LR */
 	mfcr	%r29			/* save CR */

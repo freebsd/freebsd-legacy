@@ -38,6 +38,7 @@
 #include <sys/vfs.h>
 #include <sys/vm.h>
 #include <sys/vnode.h>
+#include <sys/smr.h>
 #include <sys/file.h>
 #include <sys/stat.h>
 #include <sys/kmem.h>
@@ -77,6 +78,8 @@
 #include <sys/vmmeter.h>
 #include <vm/vm_param.h>
 #include <sys/zil.h>
+
+VFS_SMR_DECLARE;
 
 /*
  * Programming rules.
@@ -645,6 +648,12 @@ zfs_read(vnode_t *vp, uio_t *uio, int ioflag, cred_t *cr, caller_context_t *ct)
 
 	ZFS_ENTER(zfsvfs);
 	ZFS_VERIFY_ZP(zp);
+
+	/* We don't copy out anything useful for directories. */
+	if (vp->v_type == VDIR) {
+		ZFS_EXIT(zfsvfs);
+		return (SET_ERROR(EISDIR));
+	}
 
 	if (zp->z_pflags & ZFS_AV_QUARANTINED) {
 		ZFS_EXIT(zfsvfs);
@@ -3692,6 +3701,7 @@ zfs_rename(vnode_t *sdvp, vnode_t **svpp, struct componentname *scnp,
 	char		*snm = scnp->cn_nameptr;
 	char		*tnm = tcnp->cn_nameptr;
 	int		error = 0;
+	bool		want_seqc_end = false;
 
 	/* Reject renames across filesystems. */
 	if ((*svpp)->v_mount != tdvp->v_mount ||
@@ -3822,6 +3832,14 @@ zfs_rename(vnode_t *sdvp, vnode_t **svpp, struct componentname *scnp,
 		}
 	}
 
+	vn_seqc_write_begin(*svpp);
+	vn_seqc_write_begin(sdvp);
+	if (*tvpp != NULL)
+		vn_seqc_write_begin(*tvpp);
+	if (tdvp != *tvpp)
+		vn_seqc_write_begin(tdvp);
+	want_seqc_end = true;
+
 	vnevent_rename_src(*svpp, sdvp, scnp->cn_nameptr, ct);
 	if (tzp)
 		vnevent_rename_dest(*tvpp, tdvp, tnm, ct);
@@ -3908,10 +3926,20 @@ zfs_rename(vnode_t *sdvp, vnode_t **svpp, struct componentname *scnp,
 
 unlockout:			/* all 4 vnodes are locked, ZFS_ENTER called */
 	ZFS_EXIT(zfsvfs);
+	if (want_seqc_end) {
+		vn_seqc_write_end(*svpp);
+		vn_seqc_write_end(sdvp);
+		if (*tvpp != NULL)
+			vn_seqc_write_end(*tvpp);
+		if (tdvp != *tvpp)
+			vn_seqc_write_end(tdvp);
+		want_seqc_end = false;
+	}
 	VOP_UNLOCK(*svpp);
 	VOP_UNLOCK(sdvp);
 
 out:				/* original two vnodes are locked */
+	MPASS(!want_seqc_end);
 	if (error == 0 && zfsvfs->z_os->os_sync == ZFS_SYNC_ALWAYS)
 		zil_commit(zilog, 0);
 
@@ -4492,13 +4520,27 @@ zfs_getpages(struct vnode *vp, vm_page_t *ma, int count, int *rbehind,
 	end = IDX_TO_OFF(ma[count - 1]->pindex + 1);
 
 	/*
-	 * Lock a range covering all required and optional pages.
-	 * Note that we need to handle the case of the block size growing.
+	 * Try to lock a range covering all required and optional pages, to
+	 * handle the case of the block size growing.  It is not safe to block
+	 * on the range lock since the owner may be waiting for the fault page
+	 * to be unbusied.
 	 */
 	for (;;) {
 		blksz = zp->z_blksz;
-		lr = rangelock_enter(&zp->z_rangelock, rounddown(start, blksz),
+		lr = rangelock_tryenter(&zp->z_rangelock,
+		    rounddown(start, blksz),
 		    roundup(end, blksz) - rounddown(start, blksz), RL_READER);
+		if (lr == NULL) {
+			if (rahead != NULL) {
+				*rahead = 0;
+				rahead = NULL;
+			}
+			if (rbehind != NULL) {
+				*rbehind = 0;
+				rbehind = NULL;
+			}
+			break;
+		}
 		if (blksz == zp->z_blksz)
 			break;
 		rangelock_exit(lr);
@@ -4509,7 +4551,8 @@ zfs_getpages(struct vnode *vp, vm_page_t *ma, int count, int *rbehind,
 	obj_size = object->un_pager.vnp.vnp_size;
 	zfs_vmobject_wunlock(object);
 	if (IDX_TO_OFF(ma[count - 1]->pindex) >= obj_size) {
-		rangelock_exit(lr);
+		if (lr != NULL)
+			rangelock_exit(lr);
 		ZFS_EXIT(zfsvfs);
 		return (zfs_vm_pagerret_bad);
 	}
@@ -4537,7 +4580,8 @@ zfs_getpages(struct vnode *vp, vm_page_t *ma, int count, int *rbehind,
 	error = dmu_read_pages(os, zp->z_id, ma, count, &pgsin_b, &pgsin_a,
 	    MIN(end, obj_size) - (end - PAGE_SIZE));
 
-	rangelock_exit(lr);
+	if (lr != NULL)
+		rangelock_exit(lr);
 	ZFS_ACCESSTIME_STAMP(zfsvfs, zp);
 	ZFS_EXIT(zfsvfs);
 
@@ -4837,6 +4881,31 @@ zfs_freebsd_write(ap)
 
 	return (zfs_write(ap->a_vp, ap->a_uio, ioflags(ap->a_ioflag),
 	    ap->a_cred, NULL));
+}
+
+/*
+ * VOP_FPLOOKUP_VEXEC routines are subject to special circumstances, see
+ * the comment above cache_fplookup for details.
+ */
+static int
+zfs_freebsd_fplookup_vexec(struct vop_fplookup_vexec_args *v)
+{
+	vnode_t *vp;
+	znode_t *zp;
+	uint64_t pflags;
+
+	vp = v->a_vp;
+	zp = VTOZ_SMR(vp);
+	if (__predict_false(zp == NULL))
+		return (EAGAIN);
+	pflags = atomic_load_64(&zp->z_pflags);
+	if (pflags & ZFS_AV_QUARANTINED)
+		return (EAGAIN);
+	if (pflags & ZFS_XATTR)
+		return (EAGAIN);
+	if ((pflags & ZFS_NO_EXECS_DENIED) == 0)
+		return (EAGAIN);
+	return (0);
 }
 
 static int
@@ -5976,6 +6045,7 @@ struct vop_vector zfs_vnodeops = {
 	.vop_inactive =		zfs_freebsd_inactive,
 	.vop_need_inactive =	zfs_freebsd_need_inactive,
 	.vop_reclaim =		zfs_freebsd_reclaim,
+	.vop_fplookup_vexec =	zfs_freebsd_fplookup_vexec,
 	.vop_access =		zfs_freebsd_access,
 	.vop_allocate =		VOP_EINVAL,
 	.vop_lookup =		zfs_cache_lookup,
@@ -6044,6 +6114,7 @@ VFS_VOP_VECTOR_REGISTER(zfs_fifoops);
  */
 struct vop_vector zfs_shareops = {
 	.vop_default =		&default_vnodeops,
+	.vop_fplookup_vexec =	zfs_freebsd_fplookup_vexec,
 	.vop_access =		zfs_freebsd_access,
 	.vop_inactive =		zfs_freebsd_inactive,
 	.vop_reclaim =		zfs_freebsd_reclaim,

@@ -1,4 +1,161 @@
 ----------------------------------------
+
+
+17 July 2020. Summary of changes for version 20200717:
+
+This release is available at https://acpica.org/downloads
+
+
+1) ACPICA kernel-resident subsystem:
+
+Do not increment OperationRegion reference counts for field units. Recent 
+server firmware has revealed that this reference count can overflow on 
+large servers that declare many field units (thousands) under the same 
+OperationRegion. This occurs because each field unit declaration will add 
+a reference count to the source OperationRegion. This release solves the 
+reference count overflow for OperationRegion objects by preventing 
+fieldUnits from incrementing their parent OperationRegion's reference 
+count.
+
+Replaced one-element arrays with flexible-arrays, which were introduced 
+in C99.
+
+Restored the readme file containing the directions for generation of 
+ACPICA from source on MSVC 2017. Updated the file for MSVC 2017. File is 
+located at: generate/msvc2017/readme.txt
+
+2) iASL Compiler/Disassembler and ACPICA tools: 
+
+iASL: Fixed a regression found in version 20200214. Prevent iASL from 
+emitting an extra byte of garbage data when control methods declared a 
+single parameter type without using braces. This extra byte is known to 
+cause a blue screen on the Windows AML interpreter.
+
+iASL: Made a change to allow external declarations to specify the type of 
+a named object even when some name segments are not defined.
+This change allows the following ASL code to compile (When DEV0 is not 
+defined or not defined yet):
+
+    External (\_SB.DEV0.OBJ1, IntObj)
+    External (\_SB.DEV0, DeviceObj)
+
+iASL: Fixed a problem where method names in "Alias ()" statement could be 
+misinterpreted. They are now interpreted correctly as method invocations.
+
+iASL: capture a method parameter count (Within the Method info segment, 
+as well as the argument node) when using parameter type lists.
+
+----------------------------------------
+
+
+28 May 2020. Summary of changes for version 20200528:
+
+
+1) ACPICA kernel-resident subsystem:
+
+Removed old/obsolete Visual Studio files which were used to build the 
+Windows versions of the ACPICA tools. Since we have moved to Visual 
+Studio 2017, we are no longer supporting Visual Studio 2006 and 2009 
+project files. The new subdirectory and solution file are located at:
+
+    acpica/generate/msvc2017/AcpiComponents.sln
+
+
+2) iASL Compiler/Disassembler and ACPICA tools: 
+
+iASL: added support for a new OperationRegion Address Space (subtype): 
+PlatformRtMechanism. Support for this new keyword is being released for 
+early prototyping. It will appear in the next release of the ACPI 
+specification.
+
+iASL: do not optimize the NameString parameter of the CondRefOf operator. 
+In the previous iASL compiler release, the NameString parameter of the 
+CondRefOf was optimized. There is evidence that some implementations of 
+the AML interpreter do not perform the recursive search-to-parent search 
+during the execution of the CondRefOf operator. Therefore, the CondRefOf 
+operator behaves differently when the NameString parameter is a single 
+name segment (a NameSeg) as opposed to a full NamePath (starting at the 
+root scope) or a NameString containing parent prefixes.
+
+iASL: Prevent an inadvertent remark message. This change prevents a 
+remark if within a control method the following exist:
+1) An Operation Region is defined, and
+2) A Field operator is defined that refers to the region.
+This happens because at the top level, the Field operator does not 
+actually create a new named object, it simply references the operation 
+region.
+
+Removed support for the acpinames utility. The acpinames was a simple 
+utility used to populate and display the ACPI namespace without executing 
+any AML code. However, ACPICA now supports executable opcodes outside of 
+control methods. This means that executable AML opcodes such as If and 
+Store opcodes need to be executed during table load. Therefore, acpinames 
+would need to be updated to match the same behavior as the acpiexec 
+utility and since acpiexec can already dump the entire namespace (via the 
+'namespace' command), we no longer have the need to maintain acpinames.
+
+    In order to dump the contents of the ACPI namepsace using acpiexec, 
+execute the following command from the command line:
+
+        acpiexec -b "n" [aml files]
+
+----------------------------------------
+
+
+30 April 2020. Summary of changes for version 20200430:
+
+1) ACPICA kernel-resident subsystem:
+
+Cleaned up the coding style of a couple of global variables 
+(AcpiGbl_NextCmdNum and AcpiProtocolLengths) caught by static analyzers. 
+AcpiProtocolLengths was made static, and the definition of 
+AcpiGbl_NextCmdNum was moved to acglobal.h.
+
+
+2) iASL Compiler/Disassembler and ACPICA tools: 
+
+iASL DataTable Compiler:  Fixed a segfault on errors that aren't directly 
+associated with a field.
+
+Disassembler: has been made more resilient so that it will continue to 
+parse AML even if the AML generates ACPI namespace errors. This enables 
+iASL to disassemble some AML that may have been compiled using older 
+versions of iASL that no longer compile with newer versions of iASL.
+
+iASL: Fixed the required parameters for _NIH and _NIG. Previously, there 
+was a mixup where _NIG required one parameter and _NIH required zero 
+parameters. This change swaps these parameter requirements. Now it is 
+required that _NIH must be called with one parameter and _NIG requires 
+zero parameters.
+
+iASL: Allow use of undefined externals as long as they are protected by 
+an if (CondRefOf (...)) block when compiling multiple definition blocks.
+
+iASL: Fixed the type override behavior of named objects that are declared 
+as External. External declarations will no longer override the type of 
+the actual definition if it already exists.
+
+AcpiNames: Added setargv.obj to the MSVC 2017 link sequence to enable 
+command line wildcard support on Windows. Note: the AcpiNames utility is 
+essentially redundant with the AcpiExec utility (using the "namespace" 
+command) and is therefore deprecated. It will be removed in future 
+releases of ACPICA.
+
+Disassembler: ignore AE_ALREADY_EXISTS status when parsing create* 
+operators. The disassembler is intended to emit existing ASL code as-is. 
+Therefore, error messages emitted during disassembly should be ignored or 
+handled in a way such that the disassembler can continue to parse the 
+AML. This change ignores AE_ALREADY_EXISTS errors during the deferred Op 
+parsing for create operators in order to complete parsing ASL termlists.
+
+iASL DataTable Compiler: IVRS table: fix potentially uninitialized 
+variable warning. Some compilers catch potential uninitialized variables. 
+This is done by examining branches of if/else statements. This change 
+replaces an "else if" with an "else" to fix the uninitialized variable 
+warning.
+
+
+----------------------------------------
 26 March 2020. Summary of changes for version 20200326:
 
 
@@ -674,7 +831,7 @@ temporary.
 
 iASL: Emit error for creation of a zero-length operation region. Such a 
 region is rather pointless. If encountered, a runtime error is also 
-implemented in the interpeter.
+implemented in the interpreter.
 
 Debugger: Fix a possible fault with the "test objects" command.
 

@@ -2511,7 +2511,7 @@ g_journal_find_device(struct g_class *mp, const char *name)
 	struct g_geom *gp;
 	struct g_provider *pp;
 
-	if (strncmp(name, "/dev/", 5) == 0)
+	if (strncmp(name, _PATH_DEV, 5) == 0)
 		name += 5;
 	LIST_FOREACH(gp, &mp->geom, geom) {
 		sc = gp->softc;
@@ -2757,7 +2757,8 @@ g_journal_fini(struct g_class *mp)
 	}
 	if (g_journal_event_lowmem != NULL)
 		EVENTHANDLER_DEREGISTER(vm_lowmem, g_journal_event_lowmem);
-	g_journal_stop_switcher();
+	if (g_journal_switcher_proc != NULL)
+		g_journal_stop_switcher();
 }
 
 DECLARE_GEOM_CLASS(g_journal_class, g_journal);

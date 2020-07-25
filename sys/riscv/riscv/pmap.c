@@ -129,6 +129,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/mman.h>
 #include <sys/msgbuf.h>
 #include <sys/mutex.h>
+#include <sys/physmem.h>
 #include <sys/proc.h>
 #include <sys/rwlock.h>
 #include <sys/sbuf.h>
@@ -338,7 +339,8 @@ pagezero(void *p)
 #define	pmap_l2_index(va)	(((va) >> L2_SHIFT) & Ln_ADDR_MASK)
 #define	pmap_l3_index(va)	(((va) >> L3_SHIFT) & Ln_ADDR_MASK)
 
-#define	PTE_TO_PHYS(pte)	((pte >> PTE_PPN0_S) * PAGE_SIZE)
+#define	PTE_TO_PHYS(pte) \
+    ((((pte) & ~PTE_HI_MASK) >> PTE_PPN0_S) * PAGE_SIZE)
 
 static __inline pd_entry_t *
 pmap_l1(pmap_t pmap, vm_offset_t va)
@@ -554,15 +556,14 @@ pmap_bootstrap_l3(vm_offset_t l1pt, vm_offset_t va, vm_offset_t l3_start)
 void
 pmap_bootstrap(vm_offset_t l1pt, vm_paddr_t kernstart, vm_size_t kernlen)
 {
-	u_int l1_slot, l2_slot, avail_slot, map_slot;
+	u_int l1_slot, l2_slot;
 	vm_offset_t freemempos;
 	vm_offset_t dpcpu, msgbufpv;
-	vm_paddr_t end, max_pa, min_pa, pa, start;
+	vm_paddr_t max_pa, min_pa, pa;
+	pt_entry_t *l2p;
 	int i;
 
 	printf("pmap_bootstrap %lx %lx %lx\n", l1pt, kernstart, kernlen);
-	printf("%lx\n", l1pt);
-	printf("%lx\n", (KERNBASE >> L1_SHIFT) & Ln_ADDR_MASK);
 
 	/* Set this early so we can use the pagetable walking functions */
 	kernel_pmap_store.pm_l1 = (pd_entry_t *)l1pt;
@@ -574,6 +575,9 @@ pmap_bootstrap(vm_offset_t l1pt, vm_paddr_t kernstart, vm_size_t kernlen)
 
 	/* Assume the address we were loaded to is a valid physical address. */
 	min_pa = max_pa = kernstart;
+
+	physmap_idx = physmem_avail(physmap, nitems(physmap));
+	physmap_idx /= 2;
 
 	/*
 	 * Find the minimum physical address. physmap is sorted,
@@ -610,6 +614,15 @@ pmap_bootstrap(vm_offset_t l1pt, vm_paddr_t kernstart, vm_size_t kernlen)
 	freemempos = pmap_bootstrap_l3(l1pt,
 	    VM_MAX_KERNEL_ADDRESS - L2_SIZE, freemempos);
 
+	/*
+	 * Invalidate the mapping we created for the DTB. At this point a copy
+	 * has been created, and we no longer need it. We want to avoid the
+	 * possibility of an aliased mapping in the future.
+	 */
+	l2p = pmap_l2(kernel_pmap, VM_EARLY_DTB_ADDRESS);
+	if ((pmap_load(l2p) & PTE_V) != 0)
+		pmap_clear(l2p);
+
 	sfence_vma();
 
 #define alloc_pages(var, np)						\
@@ -631,46 +644,7 @@ pmap_bootstrap(vm_offset_t l1pt, vm_paddr_t kernstart, vm_size_t kernlen)
 	
 	pa = pmap_early_vtophys(l1pt, freemempos);
 
-	/* Initialize phys_avail and dump_avail. */
-	for (avail_slot = map_slot = physmem = 0; map_slot < physmap_idx * 2;
-	    map_slot += 2) {
-		start = physmap[map_slot];
-		end = physmap[map_slot + 1];
-
-		if (start == end)
-			continue;
-		dump_avail[map_slot] = start;
-		dump_avail[map_slot + 1] = end;
-		realmem += atop((vm_offset_t)(end - start));
-
-		if (start >= kernstart && end <= pa)
-			continue;
-
-		if (start < kernstart && end > kernstart)
-			end = kernstart;
-		else if (start < pa && end > pa)
-			start = pa;
-		phys_avail[avail_slot] = start;
-		phys_avail[avail_slot + 1] = end;
-		physmem += (end - start) >> PAGE_SHIFT;
-		avail_slot += 2;
-
-		if (end != physmap[map_slot + 1] && end > pa) {
-			phys_avail[avail_slot] = pa;
-			phys_avail[avail_slot + 1] = physmap[map_slot + 1];
-			physmem += (physmap[map_slot + 1] - pa) >> PAGE_SHIFT;
-			avail_slot += 2;
-		}
-	}
-	phys_avail[avail_slot] = 0;
-	phys_avail[avail_slot + 1] = 0;
-
-	/*
-	 * Maxmem isn't the "maximum memory", it's one larger than the
-	 * highest page of the physical address space.  It should be
-	 * called something like "Maxphyspage".
-	 */
-	Maxmem = atop(phys_avail[avail_slot - 1]);
+	physmem_exclude_region(kernstart, pa - kernstart, EXFLAG_NOALLOC);
 }
 
 /*
@@ -2354,6 +2328,7 @@ retryl2:
 				if (!atomic_fcmpset_long(l2, &l2e, l2e & ~mask))
 					goto retryl2;
 				anychanged = true;
+				continue;
 			} else {
 				if (!pv_lists_locked) {
 					pv_lists_locked = true;
@@ -2416,7 +2391,7 @@ pmap_fault_fixup(pmap_t pmap, vm_offset_t va, vm_prot_t ftype)
 		goto done;
 	if ((l2e & PTE_RWX) == 0) {
 		pte = pmap_l2_to_l3(l2, va);
-		if (pte == NULL || ((oldpte = pmap_load(pte) & PTE_V)) == 0)
+		if (pte == NULL || ((oldpte = pmap_load(pte)) & PTE_V) == 0)
 			goto done;
 	} else {
 		pte = l2;
@@ -4335,13 +4310,20 @@ pmap_sync_icache(pmap_t pmap, vm_offset_t va, vm_size_t sz)
 	 * RISC-V harts, the writing hart has to execute a data FENCE
 	 * before requesting that all remote RISC-V harts execute a
 	 * FENCE.I."
+	 *
+	 * However, this is slightly misleading; we still need to
+	 * perform a FENCE.I for the local hart, as FENCE does nothing
+	 * for its icache. FENCE.I alone is also sufficient for the
+	 * local hart.
 	 */
 	sched_pin();
 	mask = all_harts;
 	CPU_CLR(PCPU_GET(hart), &mask);
-	fence();
-	if (!CPU_EMPTY(&mask) && smp_started)
+	fence_i();
+	if (!CPU_EMPTY(&mask) && smp_started) {
+		fence();
 		sbi_remote_fence_i(mask.__bits);
+	}
 	sched_unpin();
 }
 

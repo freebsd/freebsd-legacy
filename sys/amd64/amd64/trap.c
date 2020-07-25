@@ -57,7 +57,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/bus.h>
 #include <sys/systm.h>
 #include <sys/proc.h>
-#include <sys/pioctl.h>
 #include <sys/ptrace.h>
 #include <sys/kdb.h>
 #include <sys/kernel.h>
@@ -351,11 +350,9 @@ trap(struct trapframe *frame)
 			signo = SIGFPE;
 			break;
 
-#ifdef DEV_ISA
 		case T_NMI:
 			nmi_handle_intr(type, frame);
 			return;
-#endif
 
 		case T_OFLOW:		/* integer overflow fault */
 			ucode = FPE_INTOVF;
@@ -581,11 +578,9 @@ trap(struct trapframe *frame)
 #endif
 			break;
 
-#ifdef DEV_ISA
 		case T_NMI:
 			nmi_handle_intr(type, frame);
 			return;
-#endif
 		}
 
 		trap_fatal(frame, 0);

@@ -63,6 +63,7 @@ __FBSDID("$FreeBSD$");
 #include <net/netisr.h>
 #include <net/ethernet.h>
 #include <net/route.h>
+#include <net/route/nhop.h>
 #include <net/vnet.h>
 
 #include <netinet/in.h>
@@ -804,7 +805,7 @@ in_arpinput(struct mbuf *m)
 	int carped;
 	struct sockaddr_in sin;
 	struct sockaddr *dst;
-	struct nhop4_basic nh4;
+	struct nhop_object *nh;
 	uint8_t linkhdr[LLE_MAX_LINKHDR];
 	struct route ro;
 	size_t linkhdrsize;
@@ -1044,7 +1045,11 @@ reply:
 		(void)memcpy(ar_tha(ah), ar_sha(ah), ah->ar_hln);
 		(void)memcpy(ar_sha(ah), enaddr, ah->ar_hln);
 	} else {
-		struct llentry *lle = NULL;
+		/*
+		 * Destination address is not ours. Check if
+		 * proxyarp entry exists or proxyarp is turned on globally.
+		 */
+		struct llentry *lle;
 
 		sin.sin_addr = itaddr;
 		lle = lla_lookup(LLTABLE(ifp), 0, (struct sockaddr *)&sin);
@@ -1061,8 +1066,9 @@ reply:
 			if (!V_arp_proxyall)
 				goto drop;
 
-			/* XXX MRT use table 0 for arp reply  */
-			if (fib4_lookup_nh_basic(0, itaddr, 0, 0, &nh4) != 0)
+			NET_EPOCH_ASSERT();
+			nh = fib4_lookup(ifp->if_fib, itaddr, 0, 0, 0);
+			if (nh == NULL)
 				goto drop;
 
 			/*
@@ -1070,7 +1076,7 @@ reply:
 			 * as this one came out of, or we'll get into a fight
 			 * over who claims what Ether address.
 			 */
-			if (nh4.nh_ifp == ifp)
+			if (nh->nh_ifp == ifp)
 				goto drop;
 
 			(void)memcpy(ar_tha(ah), ar_sha(ah), ah->ar_hln);
@@ -1083,10 +1089,10 @@ reply:
 			 * wrong network.
 			 */
 
-			/* XXX MRT use table 0 for arp checks */
-			if (fib4_lookup_nh_basic(0, isaddr, 0, 0, &nh4) != 0)
+			nh = fib4_lookup(ifp->if_fib, isaddr, 0, 0, 0);
+			if (nh == NULL)
 				goto drop;
-			if (nh4.nh_ifp != ifp) {
+			if (nh->nh_ifp != ifp) {
 				ARP_LOG(LOG_INFO, "proxy: ignoring request"
 				    " from %s via %s\n",
 				    inet_ntoa_r(isaddr, addrbuf),

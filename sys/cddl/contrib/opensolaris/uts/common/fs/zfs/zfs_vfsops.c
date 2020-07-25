@@ -101,8 +101,8 @@ static int zfs_root(vfs_t *vfsp, int flags, vnode_t **vpp);
 static int zfs_statfs(vfs_t *vfsp, struct statfs *statp);
 static int zfs_vget(vfs_t *vfsp, ino_t ino, int flags, vnode_t **vpp);
 static int zfs_sync(vfs_t *vfsp, int waitfor);
-static int zfs_checkexp(vfs_t *vfsp, struct sockaddr *nam, int *extflagsp,
-    struct ucred **credanonp, int *numsecflavors, int **secflavors);
+static int zfs_checkexp(vfs_t *vfsp, struct sockaddr *nam, uint64_t *extflagsp,
+    struct ucred **credanonp, int *numsecflavors, int *secflavors);
 static int zfs_fhtovp(vfs_t *vfsp, fid_t *fidp, int flags, vnode_t **vpp);
 static void zfs_objset_close(zfsvfs_t *zfsvfs);
 static void zfs_freevfs(vfs_t *vfsp);
@@ -267,7 +267,7 @@ zfs_quotactl(vfs_t *vfsp, int cmds, uid_t id, void *arg)
 		vfs_unbusy(vfsp);
 		break;
 	case Q_SETQUOTA:
-		error = copyin(&dqblk, arg, sizeof(dqblk));
+		error = copyin(arg, &dqblk, sizeof(dqblk));
 		if (error == 0)
 			error = zfs_set_userquota(zfsvfs, quota_type,
 						  "", id, dbtob(dqblk.dqb_bhardlimit));
@@ -1391,6 +1391,9 @@ zfs_domount(vfs_t *vfsp, char *osname)
 
 	vfsp->vfs_data = zfsvfs;
 	vfsp->mnt_flag |= MNT_LOCAL;
+#if defined(_KERNEL) && !defined(KMEM_DEBUG)
+	vfsp->mnt_kern_flag |= MNTK_FPLOOKUP;
+#endif
 	vfsp->mnt_kern_flag |= MNTK_LOOKUP_SHARED;
 	vfsp->mnt_kern_flag |= MNTK_SHARED_WRITES;
 	vfsp->mnt_kern_flag |= MNTK_EXTENDED_SHARED;
@@ -2268,8 +2271,8 @@ zfs_vget(vfs_t *vfsp, ino_t ino, int flags, vnode_t **vpp)
 }
 
 static int
-zfs_checkexp(vfs_t *vfsp, struct sockaddr *nam, int *extflagsp,
-    struct ucred **credanonp, int *numsecflavors, int **secflavors)
+zfs_checkexp(vfs_t *vfsp, struct sockaddr *nam, uint64_t *extflagsp,
+    struct ucred **credanonp, int *numsecflavors, int *secflavors)
 {
 	zfsvfs_t *zfsvfs = vfsp->vfs_data;
 

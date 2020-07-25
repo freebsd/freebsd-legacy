@@ -162,39 +162,51 @@ struct ccr_session_blkcipher {
 	char deckey[CHCR_AES_MAX_KEY_LEN];
 };
 
+struct ccr_port {
+	struct sge_wrq *txq;
+	struct sge_rxq *rxq;
+	int tx_channel_id;
+	u_int active_sessions;
+};
+
 struct ccr_session {
-	bool active;
+#ifdef INVARIANTS
 	int pending;
+#endif
 	enum { HASH, HMAC, BLKCIPHER, ETA, GCM, CCM } mode;
+	struct ccr_port *port;
 	union {
 		struct ccr_session_hmac hmac;
 		struct ccr_session_gmac gmac;
 		struct ccr_session_ccm_mac ccm_mac;
 	};
 	struct ccr_session_blkcipher blkcipher;
+	struct mtx lock;
+
+	/*
+	 * Pre-allocate S/G lists used when preparing a work request.
+	 * 'sg_input' contains an sglist describing the entire input
+	 * buffer for a 'struct cryptop'.  'sg_output' contains an
+	 * sglist describing the entire output buffer.  'sg_ulptx' is
+	 * used to describe the data the engine should DMA as input
+	 * via ULPTX_SGL.  'sg_dsgl' is used to describe the
+	 * destination that cipher text and a tag should be written
+	 * to.
+	 */
+	struct sglist *sg_input;
+	struct sglist *sg_output;
+	struct sglist *sg_ulptx;
+	struct sglist *sg_dsgl;
 };
 
 struct ccr_softc {
 	struct adapter *adapter;
 	device_t dev;
 	uint32_t cid;
-	int tx_channel_id;
 	struct mtx lock;
 	bool detaching;
-	struct sge_wrq *txq;
-	struct sge_rxq *rxq;
-
-	/*
-	 * Pre-allocate S/G lists used when preparing a work request.
-	 * 'sg_crp' contains an sglist describing the entire buffer
-	 * for a 'struct cryptop'.  'sg_ulptx' is used to describe
-	 * the data the engine should DMA as input via ULPTX_SGL.
-	 * 'sg_dsgl' is used to describe the destination that cipher
-	 * text and a tag should be written to.
-	 */
-	struct sglist *sg_crp;
-	struct sglist *sg_ulptx;
-	struct sglist *sg_dsgl;
+	struct ccr_port ports[MAX_NPORTS];
+	u_int port_mask;
 
 	/*
 	 * Pre-allocate a dummy output buffer for the IV and AAD for
@@ -204,24 +216,23 @@ struct ccr_softc {
 	struct sglist *sg_iv_aad;
 
 	/* Statistics. */
-	uint64_t stats_blkcipher_encrypt;
-	uint64_t stats_blkcipher_decrypt;
-	uint64_t stats_hash;
-	uint64_t stats_hmac;
-	uint64_t stats_eta_encrypt;
-	uint64_t stats_eta_decrypt;
-	uint64_t stats_gcm_encrypt;
-	uint64_t stats_gcm_decrypt;
-	uint64_t stats_ccm_encrypt;
-	uint64_t stats_ccm_decrypt;
-	uint64_t stats_wr_nomem;
-	uint64_t stats_inflight;
-	uint64_t stats_mac_error;
-	uint64_t stats_pad_error;
-	uint64_t stats_bad_session;
-	uint64_t stats_sglist_error;
-	uint64_t stats_process_error;
-	uint64_t stats_sw_fallback;
+	counter_u64_t stats_blkcipher_encrypt;
+	counter_u64_t stats_blkcipher_decrypt;
+	counter_u64_t stats_hash;
+	counter_u64_t stats_hmac;
+	counter_u64_t stats_eta_encrypt;
+	counter_u64_t stats_eta_decrypt;
+	counter_u64_t stats_gcm_encrypt;
+	counter_u64_t stats_gcm_decrypt;
+	counter_u64_t stats_ccm_encrypt;
+	counter_u64_t stats_ccm_decrypt;
+	counter_u64_t stats_wr_nomem;
+	counter_u64_t stats_inflight;
+	counter_u64_t stats_mac_error;
+	counter_u64_t stats_pad_error;
+	counter_u64_t stats_sglist_error;
+	counter_u64_t stats_process_error;
+	counter_u64_t stats_sw_fallback;
 };
 
 /*
@@ -240,26 +251,26 @@ struct ccr_softc {
  * requests.
  *
  * These scatter/gather lists can describe different subsets of the
- * buffer described by the crypto operation.  ccr_populate_sglist()
- * generates a scatter/gather list that covers the entire crypto
+ * buffers described by the crypto operation.  ccr_populate_sglist()
+ * generates a scatter/gather list that covers an entire crypto
  * operation buffer that is then used to construct the other
  * scatter/gather lists.
  */
 static int
-ccr_populate_sglist(struct sglist *sg, struct cryptop *crp)
+ccr_populate_sglist(struct sglist *sg, struct crypto_buffer *cb)
 {
 	int error;
 
 	sglist_reset(sg);
-	switch (crp->crp_buf_type) {
+	switch (cb->cb_type) {
 	case CRYPTO_BUF_MBUF:
-		error = sglist_append_mbuf(sg, crp->crp_mbuf);
+		error = sglist_append_mbuf(sg, cb->cb_mbuf);
 		break;
 	case CRYPTO_BUF_UIO:
-		error = sglist_append_uio(sg, crp->crp_uio);
+		error = sglist_append_uio(sg, cb->cb_uio);
 		break;
 	case CRYPTO_BUF_CONTIG:
-		error = sglist_append(sg, crp->crp_buf, crp->crp_ilen);
+		error = sglist_append(sg, cb->cb_buf, cb->cb_buf_len);
 		break;
 	default:
 		error = EINVAL;
@@ -297,7 +308,7 @@ ccr_phys_dsgl_len(int nsegs)
 }
 
 static void
-ccr_write_phys_dsgl(struct ccr_softc *sc, void *dst, int nsegs)
+ccr_write_phys_dsgl(struct ccr_session *s, void *dst, int nsegs)
 {
 	struct sglist *sg;
 	struct cpl_rx_phys_dsgl *cpl;
@@ -306,7 +317,7 @@ ccr_write_phys_dsgl(struct ccr_softc *sc, void *dst, int nsegs)
 	size_t seglen;
 	u_int i, j;
 
-	sg = sc->sg_dsgl;
+	sg = s->sg_dsgl;
 	cpl = dst;
 	cpl->op_to_tid = htobe32(V_CPL_RX_PHYS_DSGL_OPCODE(CPL_RX_PHYS_DSGL) |
 	    V_CPL_RX_PHYS_DSGL_ISRDMA(0));
@@ -316,7 +327,7 @@ ccr_write_phys_dsgl(struct ccr_softc *sc, void *dst, int nsegs)
 	    V_CPL_RX_PHYS_DSGL_PCITPHNTENB(0) | V_CPL_RX_PHYS_DSGL_DCAID(0) |
 	    V_CPL_RX_PHYS_DSGL_NOOFSGENTR(nsegs));
 	cpl->rss_hdr_int.opcode = CPL_RX_PHYS_ADDR;
-	cpl->rss_hdr_int.qid = htobe16(sc->rxq->iq.abs_id);
+	cpl->rss_hdr_int.qid = htobe16(s->port->rxq->iq.abs_id);
 	cpl->rss_hdr_int.hash_val = 0;
 	sgl = (struct phys_sge_pairs *)(cpl + 1);
 	j = 0;
@@ -355,14 +366,14 @@ ccr_ulptx_sgl_len(int nsegs)
 }
 
 static void
-ccr_write_ulptx_sgl(struct ccr_softc *sc, void *dst, int nsegs)
+ccr_write_ulptx_sgl(struct ccr_session *s, void *dst, int nsegs)
 {
 	struct ulptx_sgl *usgl;
 	struct sglist *sg;
 	struct sglist_seg *ss;
 	int i;
 
-	sg = sc->sg_ulptx;
+	sg = s->sg_ulptx;
 	MPASS(nsegs == sg->sg_nseg);
 	ss = &sg->sg_segs[0];
 	usgl = dst;
@@ -376,7 +387,6 @@ ccr_write_ulptx_sgl(struct ccr_softc *sc, void *dst, int nsegs)
 		usgl->sge[i / 2].addr[i & 1] = htobe64(ss->ss_paddr);
 		ss++;
 	}
-	
 }
 
 static bool
@@ -392,9 +402,9 @@ ccr_use_imm_data(u_int transhdr_len, u_int input_len)
 }
 
 static void
-ccr_populate_wreq(struct ccr_softc *sc, struct chcr_wr *crwr, u_int kctx_len,
-    u_int wr_len, u_int imm_len, u_int sgl_len, u_int hash_size,
-    struct cryptop *crp)
+ccr_populate_wreq(struct ccr_softc *sc, struct ccr_session *s,
+    struct chcr_wr *crwr, u_int kctx_len, u_int wr_len, u_int imm_len,
+    u_int sgl_len, u_int hash_size, struct cryptop *crp)
 {
 	u_int cctx_size, idata_len;
 
@@ -409,13 +419,13 @@ ccr_populate_wreq(struct ccr_softc *sc, struct chcr_wr *crwr, u_int kctx_len,
 	    V_FW_CRYPTO_LOOKASIDE_WR_LEN16(wr_len / 16));
 	crwr->wreq.session_id = 0;
 	crwr->wreq.rx_chid_to_rx_q_id = htobe32(
-	    V_FW_CRYPTO_LOOKASIDE_WR_RX_CHID(sc->tx_channel_id) |
+	    V_FW_CRYPTO_LOOKASIDE_WR_RX_CHID(s->port->tx_channel_id) |
 	    V_FW_CRYPTO_LOOKASIDE_WR_LCB(0) |
 	    V_FW_CRYPTO_LOOKASIDE_WR_PHASH(0) |
 	    V_FW_CRYPTO_LOOKASIDE_WR_IV(IV_NOP) |
 	    V_FW_CRYPTO_LOOKASIDE_WR_FQIDX(0) |
 	    V_FW_CRYPTO_LOOKASIDE_WR_TX_CH(0) |
-	    V_FW_CRYPTO_LOOKASIDE_WR_RX_Q_ID(sc->rxq->iq.abs_id));
+	    V_FW_CRYPTO_LOOKASIDE_WR_RX_Q_ID(s->port->rxq->iq.abs_id));
 	crwr->wreq.key_addr = 0;
 	crwr->wreq.pld_size_hash_size = htobe32(
 	    V_FW_CRYPTO_LOOKASIDE_WR_PLD_SIZE(sgl_len) |
@@ -424,8 +434,9 @@ ccr_populate_wreq(struct ccr_softc *sc, struct chcr_wr *crwr, u_int kctx_len,
 
 	crwr->ulptx.cmd_dest = htobe32(V_ULPTX_CMD(ULP_TX_PKT) |
 	    V_ULP_TXPKT_DATAMODIFY(0) |
-	    V_ULP_TXPKT_CHANNELID(sc->tx_channel_id) | V_ULP_TXPKT_DEST(0) |
-	    V_ULP_TXPKT_FID(sc->rxq->iq.abs_id) | V_ULP_TXPKT_RO(1));
+	    V_ULP_TXPKT_CHANNELID(s->port->tx_channel_id) |
+	    V_ULP_TXPKT_DEST(0) |
+	    V_ULP_TXPKT_FID(s->port->rxq->iq.abs_id) | V_ULP_TXPKT_RO(1));
 	crwr->ulptx.len = htobe32(
 	    ((wr_len - sizeof(struct fw_crypto_lookaside_wr)) / 16));
 
@@ -485,33 +496,32 @@ ccr_hash(struct ccr_softc *sc, struct ccr_session *s, struct cryptop *crp)
 		sgl_len = 0;
 	} else {
 		imm_len = 0;
-		sglist_reset(sc->sg_ulptx);
-		error = sglist_append_sglist(sc->sg_ulptx, sc->sg_crp,
+		sglist_reset(s->sg_ulptx);
+		error = sglist_append_sglist(s->sg_ulptx, s->sg_input,
 		    crp->crp_payload_start, crp->crp_payload_length);
 		if (error)
 			return (error);
-		sgl_nsegs = sc->sg_ulptx->sg_nseg;
+		sgl_nsegs = s->sg_ulptx->sg_nseg;
 		sgl_len = ccr_ulptx_sgl_len(sgl_nsegs);
 	}
 
 	wr_len = roundup2(transhdr_len, 16) + roundup2(imm_len, 16) + sgl_len;
 	if (wr_len > SGE_MAX_WR_LEN)
 		return (EFBIG);
-	wr = alloc_wrqe(wr_len, sc->txq);
+	wr = alloc_wrqe(wr_len, s->port->txq);
 	if (wr == NULL) {
-		sc->stats_wr_nomem++;
+		counter_u64_add(sc->stats_wr_nomem, 1);
 		return (ENOMEM);
 	}
 	crwr = wrtod(wr);
 	memset(crwr, 0, wr_len);
 
-	ccr_populate_wreq(sc, crwr, kctx_len, wr_len, imm_len, sgl_len,
+	ccr_populate_wreq(sc, s, crwr, kctx_len, wr_len, imm_len, sgl_len,
 	    hash_size_in_response, crp);
 
-	/* XXX: Hardcodes SGE loopback channel of 0. */
 	crwr->sec_cpl.op_ivinsrtofst = htobe32(
 	    V_CPL_TX_SEC_PDU_OPCODE(CPL_TX_SEC_PDU) |
-	    V_CPL_TX_SEC_PDU_RXCHID(sc->tx_channel_id) |
+	    V_CPL_TX_SEC_PDU_RXCHID(s->port->tx_channel_id) |
 	    V_CPL_TX_SEC_PDU_ACKFOLLOWS(0) | V_CPL_TX_SEC_PDU_ULPTXLPBK(1) |
 	    V_CPL_TX_SEC_PDU_CPLLEN(2) | V_CPL_TX_SEC_PDU_PLACEHOLDER(0) |
 	    V_CPL_TX_SEC_PDU_IVINSRTOFST(0));
@@ -554,7 +564,7 @@ ccr_hash(struct ccr_softc *sc, struct ccr_session *s, struct cryptop *crp)
 		crypto_copydata(crp, crp->crp_payload_start,
 		    crp->crp_payload_length, dst);
 	else
-		ccr_write_ulptx_sgl(sc, dst, sgl_nsegs);
+		ccr_write_ulptx_sgl(s, dst, sgl_nsegs);
 
 	/* XXX: TODO backpressure */
 	t4_wrq_tx(sc->adapter, wr);
@@ -609,13 +619,17 @@ ccr_blkcipher(struct ccr_softc *sc, struct ccr_session *s, struct cryptop *crp)
 		op_type = CHCR_ENCRYPT_OP;
 	else
 		op_type = CHCR_DECRYPT_OP;
-	
-	sglist_reset(sc->sg_dsgl);
-	error = sglist_append_sglist(sc->sg_dsgl, sc->sg_crp,
-	    crp->crp_payload_start, crp->crp_payload_length);
+
+	sglist_reset(s->sg_dsgl);
+	if (CRYPTO_HAS_OUTPUT_BUFFER(crp))
+		error = sglist_append_sglist(s->sg_dsgl, s->sg_output,
+		    crp->crp_payload_output_start, crp->crp_payload_length);
+	else
+		error = sglist_append_sglist(s->sg_dsgl, s->sg_input,
+		    crp->crp_payload_start, crp->crp_payload_length);
 	if (error)
 		return (error);
-	dsgl_nsegs = ccr_count_sgl(sc->sg_dsgl, DSGL_SGE_MAXLEN);
+	dsgl_nsegs = ccr_count_sgl(s->sg_dsgl, DSGL_SGE_MAXLEN);
 	if (dsgl_nsegs > MAX_RX_PHYS_DSGL_SGE)
 		return (EFBIG);
 	dsgl_len = ccr_phys_dsgl_len(dsgl_nsegs);
@@ -636,12 +650,12 @@ ccr_blkcipher(struct ccr_softc *sc, struct ccr_session *s, struct cryptop *crp)
 		sgl_len = 0;
 	} else {
 		imm_len = 0;
-		sglist_reset(sc->sg_ulptx);
-		error = sglist_append_sglist(sc->sg_ulptx, sc->sg_crp,
+		sglist_reset(s->sg_ulptx);
+		error = sglist_append_sglist(s->sg_ulptx, s->sg_input,
 		    crp->crp_payload_start, crp->crp_payload_length);
 		if (error)
 			return (error);
-		sgl_nsegs = sc->sg_ulptx->sg_nseg;
+		sgl_nsegs = s->sg_ulptx->sg_nseg;
 		sgl_len = ccr_ulptx_sgl_len(sgl_nsegs);
 	}
 
@@ -649,38 +663,25 @@ ccr_blkcipher(struct ccr_softc *sc, struct ccr_session *s, struct cryptop *crp)
 	    roundup2(imm_len, 16) + sgl_len;
 	if (wr_len > SGE_MAX_WR_LEN)
 		return (EFBIG);
-	wr = alloc_wrqe(wr_len, sc->txq);
+	wr = alloc_wrqe(wr_len, s->port->txq);
 	if (wr == NULL) {
-		sc->stats_wr_nomem++;
+		counter_u64_add(sc->stats_wr_nomem, 1);
 		return (ENOMEM);
 	}
 	crwr = wrtod(wr);
 	memset(crwr, 0, wr_len);
 
-	/*
-	 * Read the existing IV from the request or generate a random
-	 * one if none is provided.
-	 */
-	if (crp->crp_flags & CRYPTO_F_IV_GENERATE) {
-		arc4rand(iv, s->blkcipher.iv_len, 0);
-		crypto_copyback(crp, crp->crp_iv_start, s->blkcipher.iv_len,
-		    iv);
-	} else if (crp->crp_flags & CRYPTO_F_IV_SEPARATE)
-		memcpy(iv, crp->crp_iv, s->blkcipher.iv_len);
-	else
-		crypto_copydata(crp, crp->crp_iv_start, s->blkcipher.iv_len,
-		    iv);
+	crypto_read_iv(crp, iv);
 
 	/* Zero the remainder of the IV for AES-XTS. */
 	memset(iv + s->blkcipher.iv_len, 0, iv_len - s->blkcipher.iv_len);
 
-	ccr_populate_wreq(sc, crwr, kctx_len, wr_len, imm_len, sgl_len, 0,
+	ccr_populate_wreq(sc, s, crwr, kctx_len, wr_len, imm_len, sgl_len, 0,
 	    crp);
 
-	/* XXX: Hardcodes SGE loopback channel of 0. */
 	crwr->sec_cpl.op_ivinsrtofst = htobe32(
 	    V_CPL_TX_SEC_PDU_OPCODE(CPL_TX_SEC_PDU) |
-	    V_CPL_TX_SEC_PDU_RXCHID(sc->tx_channel_id) |
+	    V_CPL_TX_SEC_PDU_RXCHID(s->port->tx_channel_id) |
 	    V_CPL_TX_SEC_PDU_ACKFOLLOWS(0) | V_CPL_TX_SEC_PDU_ULPTXLPBK(1) |
 	    V_CPL_TX_SEC_PDU_CPLLEN(2) | V_CPL_TX_SEC_PDU_PLACEHOLDER(0) |
 	    V_CPL_TX_SEC_PDU_IVINSRTOFST(1));
@@ -736,7 +737,7 @@ ccr_blkcipher(struct ccr_softc *sc, struct ccr_session *s, struct cryptop *crp)
 	}
 
 	dst = (char *)(crwr + 1) + kctx_len;
-	ccr_write_phys_dsgl(sc, dst, dsgl_nsegs);
+	ccr_write_phys_dsgl(s, dst, dsgl_nsegs);
 	dst += sizeof(struct cpl_rx_phys_dsgl) + dsgl_len;
 	memcpy(dst, iv, iv_len);
 	dst += iv_len;
@@ -744,11 +745,12 @@ ccr_blkcipher(struct ccr_softc *sc, struct ccr_session *s, struct cryptop *crp)
 		crypto_copydata(crp, crp->crp_payload_start,
 		    crp->crp_payload_length, dst);
 	else
-		ccr_write_ulptx_sgl(sc, dst, sgl_nsegs);
+		ccr_write_ulptx_sgl(s, dst, sgl_nsegs);
 
 	/* XXX: TODO backpressure */
 	t4_wrq_tx(sc->adapter, wr);
 
+	explicit_bzero(iv, sizeof(iv));
 	return (0);
 }
 
@@ -844,22 +846,30 @@ ccr_eta(struct ccr_softc *sc, struct ccr_session *s, struct cryptop *crp)
 		    MAX_REQUEST_SIZE)
 			return (EFBIG);
 	}
-	sglist_reset(sc->sg_dsgl);
-	error = sglist_append_sglist(sc->sg_dsgl, sc->sg_iv_aad, 0,
+	sglist_reset(s->sg_dsgl);
+	error = sglist_append_sglist(s->sg_dsgl, sc->sg_iv_aad, 0,
 	    iv_len + crp->crp_aad_length);
 	if (error)
 		return (error);
-	error = sglist_append_sglist(sc->sg_dsgl, sc->sg_crp,
-	    crp->crp_payload_start, crp->crp_payload_length);
+	if (CRYPTO_HAS_OUTPUT_BUFFER(crp))
+		error = sglist_append_sglist(s->sg_dsgl, s->sg_output,
+		    crp->crp_payload_output_start, crp->crp_payload_length);
+	else
+		error = sglist_append_sglist(s->sg_dsgl, s->sg_input,
+		    crp->crp_payload_start, crp->crp_payload_length);
 	if (error)
 		return (error);
 	if (op_type == CHCR_ENCRYPT_OP) {
-		error = sglist_append_sglist(sc->sg_dsgl, sc->sg_crp,
-		    crp->crp_digest_start, hash_size_in_response);
+		if (CRYPTO_HAS_OUTPUT_BUFFER(crp))
+			error = sglist_append_sglist(s->sg_dsgl, s->sg_output,
+			    crp->crp_digest_start, hash_size_in_response);
+		else
+			error = sglist_append_sglist(s->sg_dsgl, s->sg_input,
+			    crp->crp_digest_start, hash_size_in_response);
 		if (error)
 			return (error);
 	}
-	dsgl_nsegs = ccr_count_sgl(sc->sg_dsgl, DSGL_SGE_MAXLEN);
+	dsgl_nsegs = ccr_count_sgl(s->sg_dsgl, DSGL_SGE_MAXLEN);
 	if (dsgl_nsegs > MAX_RX_PHYS_DSGL_SGE)
 		return (EFBIG);
 	dsgl_len = ccr_phys_dsgl_len(dsgl_nsegs);
@@ -906,32 +916,33 @@ ccr_eta(struct ccr_softc *sc, struct ccr_session *s, struct cryptop *crp)
 		sgl_len = 0;
 	} else {
 		imm_len = 0;
-		sglist_reset(sc->sg_ulptx);
+		sglist_reset(s->sg_ulptx);
 		if (crp->crp_aad_length != 0) {
-			error = sglist_append_sglist(sc->sg_ulptx, sc->sg_crp,
-			    crp->crp_aad_start, crp->crp_aad_length);
+			if (crp->crp_aad != NULL)
+				error = sglist_append(s->sg_ulptx,
+				    crp->crp_aad, crp->crp_aad_length);
+			else
+				error = sglist_append_sglist(s->sg_ulptx,
+				    s->sg_input, crp->crp_aad_start,
+				    crp->crp_aad_length);
 			if (error)
 				return (error);
 		}
-		error = sglist_append_sglist(sc->sg_ulptx, sc->sg_crp,
+		error = sglist_append_sglist(s->sg_ulptx, s->sg_input,
 		    crp->crp_payload_start, crp->crp_payload_length);
 		if (error)
 			return (error);
 		if (op_type == CHCR_DECRYPT_OP) {
-			error = sglist_append_sglist(sc->sg_ulptx, sc->sg_crp,
+			error = sglist_append_sglist(s->sg_ulptx, s->sg_input,
 			    crp->crp_digest_start, hash_size_in_response);
 			if (error)
 				return (error);
 		}
-		sgl_nsegs = sc->sg_ulptx->sg_nseg;
+		sgl_nsegs = s->sg_ulptx->sg_nseg;
 		sgl_len = ccr_ulptx_sgl_len(sgl_nsegs);
 	}
 
-	/*
-	 * Any auth-only data before the cipher region is marked as AAD.
-	 * Auth-data that overlaps with the cipher region is placed in
-	 * the auth section.
-	 */
+	/* Any AAD comes after the IV. */
 	if (crp->crp_aad_length != 0) {
 		aad_start = iv_len + 1;
 		aad_stop = aad_start + crp->crp_aad_length - 1;
@@ -953,38 +964,25 @@ ccr_eta(struct ccr_softc *sc, struct ccr_session *s, struct cryptop *crp)
 	    sgl_len;
 	if (wr_len > SGE_MAX_WR_LEN)
 		return (EFBIG);
-	wr = alloc_wrqe(wr_len, sc->txq);
+	wr = alloc_wrqe(wr_len, s->port->txq);
 	if (wr == NULL) {
-		sc->stats_wr_nomem++;
+		counter_u64_add(sc->stats_wr_nomem, 1);
 		return (ENOMEM);
 	}
 	crwr = wrtod(wr);
 	memset(crwr, 0, wr_len);
 
-	/*
-	 * Read the existing IV from the request or generate a random
-	 * one if none is provided.
-	 */
-	if (crp->crp_flags & CRYPTO_F_IV_GENERATE) {
-		arc4rand(iv, s->blkcipher.iv_len, 0);
-		crypto_copyback(crp, crp->crp_iv_start, s->blkcipher.iv_len,
-		    iv);
-	} else if (crp->crp_flags & CRYPTO_F_IV_SEPARATE)
-		memcpy(iv, crp->crp_iv, s->blkcipher.iv_len);
-	else
-		crypto_copydata(crp, crp->crp_iv_start, s->blkcipher.iv_len,
-		    iv);
+	crypto_read_iv(crp, iv);
 
 	/* Zero the remainder of the IV for AES-XTS. */
 	memset(iv + s->blkcipher.iv_len, 0, iv_len - s->blkcipher.iv_len);
 
-	ccr_populate_wreq(sc, crwr, kctx_len, wr_len, imm_len, sgl_len,
+	ccr_populate_wreq(sc, s, crwr, kctx_len, wr_len, imm_len, sgl_len,
 	    op_type == CHCR_DECRYPT_OP ? hash_size_in_response : 0, crp);
 
-	/* XXX: Hardcodes SGE loopback channel of 0. */
 	crwr->sec_cpl.op_ivinsrtofst = htobe32(
 	    V_CPL_TX_SEC_PDU_OPCODE(CPL_TX_SEC_PDU) |
-	    V_CPL_TX_SEC_PDU_RXCHID(sc->tx_channel_id) |
+	    V_CPL_TX_SEC_PDU_RXCHID(s->port->tx_channel_id) |
 	    V_CPL_TX_SEC_PDU_ACKFOLLOWS(0) | V_CPL_TX_SEC_PDU_ULPTXLPBK(1) |
 	    V_CPL_TX_SEC_PDU_CPLLEN(2) | V_CPL_TX_SEC_PDU_PLACEHOLDER(0) |
 	    V_CPL_TX_SEC_PDU_IVINSRTOFST(1));
@@ -1050,14 +1048,17 @@ ccr_eta(struct ccr_softc *sc, struct ccr_session *s, struct cryptop *crp)
 	memcpy(dst, s->hmac.pads, iopad_size * 2);
 
 	dst = (char *)(crwr + 1) + kctx_len;
-	ccr_write_phys_dsgl(sc, dst, dsgl_nsegs);
+	ccr_write_phys_dsgl(s, dst, dsgl_nsegs);
 	dst += sizeof(struct cpl_rx_phys_dsgl) + dsgl_len;
 	memcpy(dst, iv, iv_len);
 	dst += iv_len;
 	if (imm_len != 0) {
 		if (crp->crp_aad_length != 0) {
-			crypto_copydata(crp, crp->crp_aad_start,
-			    crp->crp_aad_length, dst);
+			if (crp->crp_aad != NULL)
+				memcpy(dst, crp->crp_aad, crp->crp_aad_length);
+			else
+				crypto_copydata(crp, crp->crp_aad_start,
+				    crp->crp_aad_length, dst);
 			dst += crp->crp_aad_length;
 		}
 		crypto_copydata(crp, crp->crp_payload_start,
@@ -1067,11 +1068,12 @@ ccr_eta(struct ccr_softc *sc, struct ccr_session *s, struct cryptop *crp)
 			crypto_copydata(crp, crp->crp_digest_start,
 			    hash_size_in_response, dst);
 	} else
-		ccr_write_ulptx_sgl(sc, dst, sgl_nsegs);
+		ccr_write_ulptx_sgl(s, dst, sgl_nsegs);
 
 	/* XXX: TODO backpressure */
 	t4_wrq_tx(sc->adapter, wr);
 
+	explicit_bzero(iv, sizeof(iv));
 	return (0);
 }
 
@@ -1166,22 +1168,30 @@ ccr_gcm(struct ccr_softc *sc, struct ccr_session *s, struct cryptop *crp)
 		    MAX_REQUEST_SIZE)
 			return (EFBIG);
 	}
-	sglist_reset(sc->sg_dsgl);
-	error = sglist_append_sglist(sc->sg_dsgl, sc->sg_iv_aad, 0, iv_len +
+	sglist_reset(s->sg_dsgl);
+	error = sglist_append_sglist(s->sg_dsgl, sc->sg_iv_aad, 0, iv_len +
 	    crp->crp_aad_length);
 	if (error)
 		return (error);
-	error = sglist_append_sglist(sc->sg_dsgl, sc->sg_crp,
-	    crp->crp_payload_start, crp->crp_payload_length);
+	if (CRYPTO_HAS_OUTPUT_BUFFER(crp))
+		error = sglist_append_sglist(s->sg_dsgl, s->sg_output,
+		    crp->crp_payload_output_start, crp->crp_payload_length);
+	else
+		error = sglist_append_sglist(s->sg_dsgl, s->sg_input,
+		    crp->crp_payload_start, crp->crp_payload_length);
 	if (error)
 		return (error);
 	if (op_type == CHCR_ENCRYPT_OP) {
-		error = sglist_append_sglist(sc->sg_dsgl, sc->sg_crp,
-		    crp->crp_digest_start, hash_size_in_response);
+		if (CRYPTO_HAS_OUTPUT_BUFFER(crp))
+			error = sglist_append_sglist(s->sg_dsgl, s->sg_output,
+			    crp->crp_digest_start, hash_size_in_response);
+		else
+			error = sglist_append_sglist(s->sg_dsgl, s->sg_input,
+			    crp->crp_digest_start, hash_size_in_response);
 		if (error)
 			return (error);
 	}
-	dsgl_nsegs = ccr_count_sgl(sc->sg_dsgl, DSGL_SGE_MAXLEN);
+	dsgl_nsegs = ccr_count_sgl(s->sg_dsgl, DSGL_SGE_MAXLEN);
 	if (dsgl_nsegs > MAX_RX_PHYS_DSGL_SGE)
 		return (EFBIG);
 	dsgl_len = ccr_phys_dsgl_len(dsgl_nsegs);
@@ -1215,24 +1225,29 @@ ccr_gcm(struct ccr_softc *sc, struct ccr_session *s, struct cryptop *crp)
 		sgl_len = 0;
 	} else {
 		imm_len = 0;
-		sglist_reset(sc->sg_ulptx);
+		sglist_reset(s->sg_ulptx);
 		if (crp->crp_aad_length != 0) {
-			error = sglist_append_sglist(sc->sg_ulptx, sc->sg_crp,
-			    crp->crp_aad_start, crp->crp_aad_length);
+			if (crp->crp_aad != NULL)
+				error = sglist_append(s->sg_ulptx,
+				    crp->crp_aad, crp->crp_aad_length);
+			else
+				error = sglist_append_sglist(s->sg_ulptx,
+				    s->sg_input, crp->crp_aad_start,
+				    crp->crp_aad_length);
 			if (error)
 				return (error);
 		}
-		error = sglist_append_sglist(sc->sg_ulptx, sc->sg_crp,
+		error = sglist_append_sglist(s->sg_ulptx, s->sg_input,
 		    crp->crp_payload_start, crp->crp_payload_length);
 		if (error)
 			return (error);
 		if (op_type == CHCR_DECRYPT_OP) {
-			error = sglist_append_sglist(sc->sg_ulptx, sc->sg_crp,
+			error = sglist_append_sglist(s->sg_ulptx, s->sg_input,
 			    crp->crp_digest_start, hash_size_in_response);
 			if (error)
 				return (error);
 		}
-		sgl_nsegs = sc->sg_ulptx->sg_nseg;
+		sgl_nsegs = s->sg_ulptx->sg_nseg;
 		sgl_len = ccr_ulptx_sgl_len(sgl_nsegs);
 	}
 
@@ -1257,9 +1272,9 @@ ccr_gcm(struct ccr_softc *sc, struct ccr_session *s, struct cryptop *crp)
 	    sgl_len;
 	if (wr_len > SGE_MAX_WR_LEN)
 		return (EFBIG);
-	wr = alloc_wrqe(wr_len, sc->txq);
+	wr = alloc_wrqe(wr_len, s->port->txq);
 	if (wr == NULL) {
-		sc->stats_wr_nomem++;
+		counter_u64_add(sc->stats_wr_nomem, 1);
 		return (ENOMEM);
 	}
 	crwr = wrtod(wr);
@@ -1269,13 +1284,12 @@ ccr_gcm(struct ccr_softc *sc, struct ccr_session *s, struct cryptop *crp)
 	if (s->blkcipher.iv_len == 12)
 		*(uint32_t *)&iv[12] = htobe32(1);
 
-	ccr_populate_wreq(sc, crwr, kctx_len, wr_len, imm_len, sgl_len, 0,
+	ccr_populate_wreq(sc, s, crwr, kctx_len, wr_len, imm_len, sgl_len, 0,
 	    crp);
 
-	/* XXX: Hardcodes SGE loopback channel of 0. */
 	crwr->sec_cpl.op_ivinsrtofst = htobe32(
 	    V_CPL_TX_SEC_PDU_OPCODE(CPL_TX_SEC_PDU) |
-	    V_CPL_TX_SEC_PDU_RXCHID(sc->tx_channel_id) |
+	    V_CPL_TX_SEC_PDU_RXCHID(s->port->tx_channel_id) |
 	    V_CPL_TX_SEC_PDU_ACKFOLLOWS(0) | V_CPL_TX_SEC_PDU_ULPTXLPBK(1) |
 	    V_CPL_TX_SEC_PDU_CPLLEN(2) | V_CPL_TX_SEC_PDU_PLACEHOLDER(0) |
 	    V_CPL_TX_SEC_PDU_IVINSRTOFST(1));
@@ -1325,14 +1339,17 @@ ccr_gcm(struct ccr_softc *sc, struct ccr_session *s, struct cryptop *crp)
 	memcpy(dst, s->gmac.ghash_h, GMAC_BLOCK_LEN);
 
 	dst = (char *)(crwr + 1) + kctx_len;
-	ccr_write_phys_dsgl(sc, dst, dsgl_nsegs);
+	ccr_write_phys_dsgl(s, dst, dsgl_nsegs);
 	dst += sizeof(struct cpl_rx_phys_dsgl) + dsgl_len;
 	memcpy(dst, iv, iv_len);
 	dst += iv_len;
 	if (imm_len != 0) {
 		if (crp->crp_aad_length != 0) {
-			crypto_copydata(crp, crp->crp_aad_start,
-			    crp->crp_aad_length, dst);
+			if (crp->crp_aad != NULL)
+				memcpy(dst, crp->crp_aad, crp->crp_aad_length);
+			else
+				crypto_copydata(crp, crp->crp_aad_start,
+				    crp->crp_aad_length, dst);
 			dst += crp->crp_aad_length;
 		}
 		crypto_copydata(crp, crp->crp_payload_start,
@@ -1342,11 +1359,12 @@ ccr_gcm(struct ccr_softc *sc, struct ccr_session *s, struct cryptop *crp)
 			crypto_copydata(crp, crp->crp_digest_start,
 			    hash_size_in_response, dst);
 	} else
-		ccr_write_ulptx_sgl(sc, dst, sgl_nsegs);
+		ccr_write_ulptx_sgl(s, dst, sgl_nsegs);
 
 	/* XXX: TODO backpressure */
 	t4_wrq_tx(sc->adapter, wr);
 
+	explicit_bzero(iv, sizeof(iv));
 	return (0);
 }
 
@@ -1373,8 +1391,7 @@ ccr_gcm_soft(struct ccr_session *s, struct cryptop *crp)
 {
 	struct auth_hash *axf;
 	struct enc_xform *exf;
-	void *auth_ctx;
-	uint8_t *kschedule;
+	void *auth_ctx, *kschedule;
 	char block[GMAC_BLOCK_LEN];
 	char digest[GMAC_DIGEST_LEN];
 	char iv[AES_BLOCK_LEN];
@@ -1408,7 +1425,12 @@ ccr_gcm_soft(struct ccr_session *s, struct cryptop *crp)
 
 	/* Initialize the cipher. */
 	exf = &enc_xform_aes_nist_gcm;
-	error = exf->setkey(&kschedule, s->blkcipher.enckey,
+	kschedule = malloc(exf->ctxsize, M_CCR, M_NOWAIT);
+	if (kschedule == NULL) {
+		error = ENOMEM;
+		goto out;
+	}
+	error = exf->setkey(kschedule, s->blkcipher.enckey,
 	    s->blkcipher.key_len);
 	if (error)
 		goto out;
@@ -1427,11 +1449,24 @@ ccr_gcm_soft(struct ccr_session *s, struct cryptop *crp)
 	axf->Reinit(auth_ctx, iv, sizeof(iv));
 
 	/* MAC the AAD. */
-	for (i = 0; i < crp->crp_aad_length; i += sizeof(block)) {
-		len = imin(crp->crp_aad_length - i, sizeof(block));
-		crypto_copydata(crp, crp->crp_aad_start + i, len, block);
-		bzero(block + len, sizeof(block) - len);
-		axf->Update(auth_ctx, block, sizeof(block));
+	if (crp->crp_aad != NULL) {
+		len = rounddown(crp->crp_aad_length, sizeof(block));
+		if (len != 0)
+			axf->Update(auth_ctx, crp->crp_aad, len);
+		if (crp->crp_aad_length != len) {
+			memset(block, 0, sizeof(block));
+			memcpy(block, (char *)crp->crp_aad + len,
+			    crp->crp_aad_length - len);
+			axf->Update(auth_ctx, block, sizeof(block));
+		}
+	} else {
+		for (i = 0; i < crp->crp_aad_length; i += sizeof(block)) {
+			len = imin(crp->crp_aad_length - i, sizeof(block));
+			crypto_copydata(crp, crp->crp_aad_start + i, len,
+			    block);
+			bzero(block + len, sizeof(block) - len);
+			axf->Update(auth_ctx, block, sizeof(block));
+		}
 	}
 
 	exf->reinit(kschedule, iv);
@@ -1442,7 +1477,7 @@ ccr_gcm_soft(struct ccr_session *s, struct cryptop *crp)
 		crypto_copydata(crp, crp->crp_payload_start + i, len, block);
 		bzero(block + len, sizeof(block) - len);
 		if (CRYPTO_OP_IS_ENCRYPT(crp->crp_op)) {
-			exf->encrypt(kschedule, block);
+			exf->encrypt(kschedule, block, block);
 			axf->Update(auth_ctx, block, len);
 			crypto_copyback(crp, crp->crp_payload_start + i, len,
 			    block);
@@ -1481,20 +1516,21 @@ ccr_gcm_soft(struct ccr_session *s, struct cryptop *crp)
 				crypto_copydata(crp, crp->crp_payload_start + i,
 				    len, block);
 				bzero(block + len, sizeof(block) - len);
-				exf->decrypt(kschedule, block);
+				exf->decrypt(kschedule, block, block);
 				crypto_copyback(crp, crp->crp_payload_start + i,
 				    len, block);
 			}
 		} else
 			error = EBADMSG;
+		explicit_bzero(digest2, sizeof(digest2));
 	}
 
-	exf->zerokey(&kschedule);
 out:
-	if (auth_ctx != NULL) {
-		memset(auth_ctx, 0, axf->ctxsize);
-		free(auth_ctx, M_CCR);
-	}
+	zfree(kschedule, M_CCR);
+	zfree(auth_ctx, M_CCR);
+	explicit_bzero(block, sizeof(block));
+	explicit_bzero(iv, sizeof(iv));
+	explicit_bzero(digest, sizeof(digest));
 	crp->crp_etype = error;
 	crypto_done(crp);
 }
@@ -1606,22 +1642,30 @@ ccr_ccm(struct ccr_softc *sc, struct ccr_session *s, struct cryptop *crp)
 		    MAX_REQUEST_SIZE)
 			return (EFBIG);
 	}
-	sglist_reset(sc->sg_dsgl);
-	error = sglist_append_sglist(sc->sg_dsgl, sc->sg_iv_aad, 0, iv_len +
+	sglist_reset(s->sg_dsgl);
+	error = sglist_append_sglist(s->sg_dsgl, sc->sg_iv_aad, 0, iv_len +
 	    aad_len);
 	if (error)
 		return (error);
-	error = sglist_append_sglist(sc->sg_dsgl, sc->sg_crp,
-	    crp->crp_payload_start, crp->crp_payload_length);
+	if (CRYPTO_HAS_OUTPUT_BUFFER(crp))
+		error = sglist_append_sglist(s->sg_dsgl, s->sg_output,
+		    crp->crp_payload_output_start, crp->crp_payload_length);
+	else
+		error = sglist_append_sglist(s->sg_dsgl, s->sg_input,
+		    crp->crp_payload_start, crp->crp_payload_length);
 	if (error)
 		return (error);
 	if (op_type == CHCR_ENCRYPT_OP) {
-		error = sglist_append_sglist(sc->sg_dsgl, sc->sg_crp,
-		    crp->crp_digest_start, hash_size_in_response);
+		if (CRYPTO_HAS_OUTPUT_BUFFER(crp))
+			error = sglist_append_sglist(s->sg_dsgl, s->sg_output,
+			    crp->crp_digest_start, hash_size_in_response);
+		else
+			error = sglist_append_sglist(s->sg_dsgl, s->sg_input,
+			    crp->crp_digest_start, hash_size_in_response);
 		if (error)
 			return (error);
 	}
-	dsgl_nsegs = ccr_count_sgl(sc->sg_dsgl, DSGL_SGE_MAXLEN);
+	dsgl_nsegs = ccr_count_sgl(s->sg_dsgl, DSGL_SGE_MAXLEN);
 	if (dsgl_nsegs > MAX_RX_PHYS_DSGL_SGE)
 		return (EFBIG);
 	dsgl_len = ccr_phys_dsgl_len(dsgl_nsegs);
@@ -1657,24 +1701,29 @@ ccr_ccm(struct ccr_softc *sc, struct ccr_session *s, struct cryptop *crp)
 		/* Block 0 is passed as immediate data. */
 		imm_len = b0_len;
 
-		sglist_reset(sc->sg_ulptx);
+		sglist_reset(s->sg_ulptx);
 		if (crp->crp_aad_length != 0) {
-			error = sglist_append_sglist(sc->sg_ulptx, sc->sg_crp,
-			    crp->crp_aad_start, crp->crp_aad_length);
+			if (crp->crp_aad != NULL)
+				error = sglist_append(s->sg_ulptx,
+				    crp->crp_aad, crp->crp_aad_length);
+			else
+				error = sglist_append_sglist(s->sg_ulptx,
+				    s->sg_input, crp->crp_aad_start,
+				    crp->crp_aad_length);
 			if (error)
 				return (error);
 		}
-		error = sglist_append_sglist(sc->sg_ulptx, sc->sg_crp,
+		error = sglist_append_sglist(s->sg_ulptx, s->sg_input,
 		    crp->crp_payload_start, crp->crp_payload_length);
 		if (error)
 			return (error);
 		if (op_type == CHCR_DECRYPT_OP) {
-			error = sglist_append_sglist(sc->sg_ulptx, sc->sg_crp,
+			error = sglist_append_sglist(s->sg_ulptx, s->sg_input,
 			    crp->crp_digest_start, hash_size_in_response);
 			if (error)
 				return (error);
 		}
-		sgl_nsegs = sc->sg_ulptx->sg_nseg;
+		sgl_nsegs = s->sg_ulptx->sg_nseg;
 		sgl_len = ccr_ulptx_sgl_len(sgl_nsegs);
 	}
 
@@ -1694,9 +1743,9 @@ ccr_ccm(struct ccr_softc *sc, struct ccr_session *s, struct cryptop *crp)
 	    sgl_len;
 	if (wr_len > SGE_MAX_WR_LEN)
 		return (EFBIG);
-	wr = alloc_wrqe(wr_len, sc->txq);
+	wr = alloc_wrqe(wr_len, s->port->txq);
 	if (wr == NULL) {
-		sc->stats_wr_nomem++;
+		counter_u64_add(sc->stats_wr_nomem, 1);
 		return (ENOMEM);
 	}
 	crwr = wrtod(wr);
@@ -1710,13 +1759,12 @@ ccr_ccm(struct ccr_softc *sc, struct ccr_session *s, struct cryptop *crp)
 	iv[0] = (15 - AES_CCM_IV_LEN) - 1;
 	memcpy(iv + 1, crp->crp_iv, AES_CCM_IV_LEN);
 
-	ccr_populate_wreq(sc, crwr, kctx_len, wr_len, imm_len, sgl_len, 0,
+	ccr_populate_wreq(sc, s, crwr, kctx_len, wr_len, imm_len, sgl_len, 0,
 	    crp);
 
-	/* XXX: Hardcodes SGE loopback channel of 0. */
 	crwr->sec_cpl.op_ivinsrtofst = htobe32(
 	    V_CPL_TX_SEC_PDU_OPCODE(CPL_TX_SEC_PDU) |
-	    V_CPL_TX_SEC_PDU_RXCHID(sc->tx_channel_id) |
+	    V_CPL_TX_SEC_PDU_RXCHID(s->port->tx_channel_id) |
 	    V_CPL_TX_SEC_PDU_ACKFOLLOWS(0) | V_CPL_TX_SEC_PDU_ULPTXLPBK(1) |
 	    V_CPL_TX_SEC_PDU_CPLLEN(2) | V_CPL_TX_SEC_PDU_PLACEHOLDER(0) |
 	    V_CPL_TX_SEC_PDU_IVINSRTOFST(1));
@@ -1761,7 +1809,7 @@ ccr_ccm(struct ccr_softc *sc, struct ccr_session *s, struct cryptop *crp)
 	    s->blkcipher.enckey, s->blkcipher.key_len);
 
 	dst = (char *)(crwr + 1) + kctx_len;
-	ccr_write_phys_dsgl(sc, dst, dsgl_nsegs);
+	ccr_write_phys_dsgl(s, dst, dsgl_nsegs);
 	dst += sizeof(struct cpl_rx_phys_dsgl) + dsgl_len;
 	memcpy(dst, iv, iv_len);
 	dst += iv_len;
@@ -1769,8 +1817,11 @@ ccr_ccm(struct ccr_softc *sc, struct ccr_session *s, struct cryptop *crp)
 	if (sgl_nsegs == 0) {
 		dst += b0_len;
 		if (crp->crp_aad_length != 0) {
-			crypto_copydata(crp, crp->crp_aad_start,
-			    crp->crp_aad_length, dst);
+			if (crp->crp_aad != NULL)
+				memcpy(dst, crp->crp_aad, crp->crp_aad_length);
+			else
+				crypto_copydata(crp, crp->crp_aad_start,
+				    crp->crp_aad_length, dst);
 			dst += crp->crp_aad_length;
 		}
 		crypto_copydata(crp, crp->crp_payload_start,
@@ -1796,12 +1847,13 @@ ccr_ccm(struct ccr_softc *sc, struct ccr_session *s, struct cryptop *crp)
 			idata->len = htobe32(0);
 			dst = (void *)(idata + 1);
 		}
-		ccr_write_ulptx_sgl(sc, dst, sgl_nsegs);
+		ccr_write_ulptx_sgl(s, dst, sgl_nsegs);
 	}
 
 	/* XXX: TODO backpressure */
 	t4_wrq_tx(sc->adapter, wr);
 
+	explicit_bzero(iv, sizeof(iv));
 	return (0);
 }
 
@@ -1830,7 +1882,7 @@ ccr_ccm_soft(struct ccr_session *s, struct cryptop *crp)
 	struct auth_hash *axf;
 	struct enc_xform *exf;
 	union authctx *auth_ctx;
-	uint8_t *kschedule;
+	void *kschedule;
 	char block[CCM_CBC_BLOCK_LEN];
 	char digest[AES_CBC_MAC_HASH_LEN];
 	char iv[AES_CCM_IV_LEN];
@@ -1864,7 +1916,12 @@ ccr_ccm_soft(struct ccr_session *s, struct cryptop *crp)
 
 	/* Initialize the cipher. */
 	exf = &enc_xform_ccm;
-	error = exf->setkey(&kschedule, s->blkcipher.enckey,
+	kschedule = malloc(exf->ctxsize, M_CCR, M_NOWAIT);
+	if (kschedule == NULL) {
+		error = ENOMEM;
+		goto out;
+	}
+	error = exf->setkey(kschedule, s->blkcipher.enckey,
 	    s->blkcipher.key_len);
 	if (error)
 		goto out;
@@ -1880,12 +1937,14 @@ ccr_ccm_soft(struct ccr_session *s, struct cryptop *crp)
 	axf->Reinit(auth_ctx, iv, sizeof(iv));
 
 	/* MAC the AAD. */
-	for (i = 0; i < crp->crp_aad_length; i += sizeof(block)) {
-		len = imin(crp->crp_aad_length - i, sizeof(block));
-		crypto_copydata(crp, crp->crp_aad_start + i, len, block);
-		bzero(block + len, sizeof(block) - len);
-		axf->Update(auth_ctx, block, sizeof(block));
-	}
+	if (crp->crp_aad != NULL)
+		error = axf->Update(auth_ctx, crp->crp_aad,
+		    crp->crp_aad_length);
+	else
+		error = crypto_apply(crp, crp->crp_aad_start,
+		    crp->crp_aad_length, axf->Update, auth_ctx);
+	if (error)
+		goto out;
 
 	exf->reinit(kschedule, iv);
 
@@ -1896,11 +1955,11 @@ ccr_ccm_soft(struct ccr_session *s, struct cryptop *crp)
 		bzero(block + len, sizeof(block) - len);
 		if (CRYPTO_OP_IS_ENCRYPT(crp->crp_op)) {
 			axf->Update(auth_ctx, block, len);
-			exf->encrypt(kschedule, block);
+			exf->encrypt(kschedule, block, block);
 			crypto_copyback(crp, crp->crp_payload_start + i, len,
 			    block);
 		} else {
-			exf->decrypt(kschedule, block);
+			exf->decrypt(kschedule, block, block);
 			axf->Update(auth_ctx, block, len);
 		}
 	}
@@ -1930,20 +1989,21 @@ ccr_ccm_soft(struct ccr_session *s, struct cryptop *crp)
 				crypto_copydata(crp, crp->crp_payload_start + i,
 				    len, block);
 				bzero(block + len, sizeof(block) - len);
-				exf->decrypt(kschedule, block);
+				exf->decrypt(kschedule, block, block);
 				crypto_copyback(crp, crp->crp_payload_start + i,
 				    len, block);
 			}
 		} else
 			error = EBADMSG;
+		explicit_bzero(digest2, sizeof(digest2));
 	}
 
-	exf->zerokey(&kschedule);
 out:
-	if (auth_ctx != NULL) {
-		memset(auth_ctx, 0, axf->ctxsize);
-		free(auth_ctx, M_CCR);
-	}
+	zfree(kschedule, M_CCR);
+	zfree(auth_ctx, M_CCR);
+	explicit_bzero(block, sizeof(block));
+	explicit_bzero(iv, sizeof(iv));
+	explicit_bzero(digest, sizeof(digest));
 	crp->crp_etype = error;
 	crypto_done(crp);
 }
@@ -1971,8 +2031,10 @@ static void
 ccr_sysctls(struct ccr_softc *sc)
 {
 	struct sysctl_ctx_list *ctx;
-	struct sysctl_oid *oid;
+	struct sysctl_oid *oid, *port_oid;
 	struct sysctl_oid_list *children;
+	char buf[16];
+	int i;
 
 	ctx = device_get_sysctl_ctx(sc->dev);
 
@@ -1982,6 +2044,9 @@ ccr_sysctls(struct ccr_softc *sc)
 	oid = device_get_sysctl_tree(sc->dev);
 	children = SYSCTL_CHILDREN(oid);
 
+	SYSCTL_ADD_UINT(ctx, children, OID_AUTO, "port_mask", CTLFLAG_RW,
+	    &sc->port_mask, 0, "Mask of enabled ports");
+
 	/*
 	 * dev.ccr.X.stats.
 	 */
@@ -1989,48 +2054,87 @@ ccr_sysctls(struct ccr_softc *sc)
 	    CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, "statistics");
 	children = SYSCTL_CHILDREN(oid);
 
-	SYSCTL_ADD_U64(ctx, children, OID_AUTO, "hash", CTLFLAG_RD,
-	    &sc->stats_hash, 0, "Hash requests submitted");
-	SYSCTL_ADD_U64(ctx, children, OID_AUTO, "hmac", CTLFLAG_RD,
-	    &sc->stats_hmac, 0, "HMAC requests submitted");
-	SYSCTL_ADD_U64(ctx, children, OID_AUTO, "cipher_encrypt", CTLFLAG_RD,
-	    &sc->stats_blkcipher_encrypt, 0,
+	SYSCTL_ADD_COUNTER_U64(ctx, children, OID_AUTO, "hash", CTLFLAG_RD,
+	    &sc->stats_hash, "Hash requests submitted");
+	SYSCTL_ADD_COUNTER_U64(ctx, children, OID_AUTO, "hmac", CTLFLAG_RD,
+	    &sc->stats_hmac, "HMAC requests submitted");
+	SYSCTL_ADD_COUNTER_U64(ctx, children, OID_AUTO, "cipher_encrypt",
+	    CTLFLAG_RD, &sc->stats_blkcipher_encrypt,
 	    "Cipher encryption requests submitted");
-	SYSCTL_ADD_U64(ctx, children, OID_AUTO, "cipher_decrypt", CTLFLAG_RD,
-	    &sc->stats_blkcipher_decrypt, 0,
+	SYSCTL_ADD_COUNTER_U64(ctx, children, OID_AUTO, "cipher_decrypt",
+	    CTLFLAG_RD, &sc->stats_blkcipher_decrypt,
 	    "Cipher decryption requests submitted");
-	SYSCTL_ADD_U64(ctx, children, OID_AUTO, "eta_encrypt", CTLFLAG_RD,
-	    &sc->stats_eta_encrypt, 0,
+	SYSCTL_ADD_COUNTER_U64(ctx, children, OID_AUTO, "eta_encrypt",
+	    CTLFLAG_RD, &sc->stats_eta_encrypt,
 	    "Combined AES+HMAC encryption requests submitted");
-	SYSCTL_ADD_U64(ctx, children, OID_AUTO, "eta_decrypt", CTLFLAG_RD,
-	    &sc->stats_eta_decrypt, 0,
+	SYSCTL_ADD_COUNTER_U64(ctx, children, OID_AUTO, "eta_decrypt",
+	    CTLFLAG_RD, &sc->stats_eta_decrypt,
 	    "Combined AES+HMAC decryption requests submitted");
-	SYSCTL_ADD_U64(ctx, children, OID_AUTO, "gcm_encrypt", CTLFLAG_RD,
-	    &sc->stats_gcm_encrypt, 0, "AES-GCM encryption requests submitted");
-	SYSCTL_ADD_U64(ctx, children, OID_AUTO, "gcm_decrypt", CTLFLAG_RD,
-	    &sc->stats_gcm_decrypt, 0, "AES-GCM decryption requests submitted");
-	SYSCTL_ADD_U64(ctx, children, OID_AUTO, "ccm_encrypt", CTLFLAG_RD,
-	    &sc->stats_ccm_encrypt, 0, "AES-CCM encryption requests submitted");
-	SYSCTL_ADD_U64(ctx, children, OID_AUTO, "ccm_decrypt", CTLFLAG_RD,
-	    &sc->stats_ccm_decrypt, 0, "AES-CCM decryption requests submitted");
-	SYSCTL_ADD_U64(ctx, children, OID_AUTO, "wr_nomem", CTLFLAG_RD,
-	    &sc->stats_wr_nomem, 0, "Work request memory allocation failures");
-	SYSCTL_ADD_U64(ctx, children, OID_AUTO, "inflight", CTLFLAG_RD,
-	    &sc->stats_inflight, 0, "Requests currently pending");
-	SYSCTL_ADD_U64(ctx, children, OID_AUTO, "mac_error", CTLFLAG_RD,
-	    &sc->stats_mac_error, 0, "MAC errors");
-	SYSCTL_ADD_U64(ctx, children, OID_AUTO, "pad_error", CTLFLAG_RD,
-	    &sc->stats_pad_error, 0, "Padding errors");
-	SYSCTL_ADD_U64(ctx, children, OID_AUTO, "bad_session", CTLFLAG_RD,
-	    &sc->stats_bad_session, 0, "Requests with invalid session ID");
-	SYSCTL_ADD_U64(ctx, children, OID_AUTO, "sglist_error", CTLFLAG_RD,
-	    &sc->stats_sglist_error, 0,
+	SYSCTL_ADD_COUNTER_U64(ctx, children, OID_AUTO, "gcm_encrypt",
+	    CTLFLAG_RD, &sc->stats_gcm_encrypt,
+	    "AES-GCM encryption requests submitted");
+	SYSCTL_ADD_COUNTER_U64(ctx, children, OID_AUTO, "gcm_decrypt",
+	    CTLFLAG_RD, &sc->stats_gcm_decrypt,
+	    "AES-GCM decryption requests submitted");
+	SYSCTL_ADD_COUNTER_U64(ctx, children, OID_AUTO, "ccm_encrypt",
+	    CTLFLAG_RD, &sc->stats_ccm_encrypt,
+	    "AES-CCM encryption requests submitted");
+	SYSCTL_ADD_COUNTER_U64(ctx, children, OID_AUTO, "ccm_decrypt",
+	    CTLFLAG_RD, &sc->stats_ccm_decrypt,
+	    "AES-CCM decryption requests submitted");
+	SYSCTL_ADD_COUNTER_U64(ctx, children, OID_AUTO, "wr_nomem", CTLFLAG_RD,
+	    &sc->stats_wr_nomem, "Work request memory allocation failures");
+	SYSCTL_ADD_COUNTER_U64(ctx, children, OID_AUTO, "inflight", CTLFLAG_RD,
+	    &sc->stats_inflight, "Requests currently pending");
+	SYSCTL_ADD_COUNTER_U64(ctx, children, OID_AUTO, "mac_error", CTLFLAG_RD,
+	    &sc->stats_mac_error, "MAC errors");
+	SYSCTL_ADD_COUNTER_U64(ctx, children, OID_AUTO, "pad_error", CTLFLAG_RD,
+	    &sc->stats_pad_error, "Padding errors");
+	SYSCTL_ADD_COUNTER_U64(ctx, children, OID_AUTO, "sglist_error",
+	    CTLFLAG_RD, &sc->stats_sglist_error,
 	    "Requests for which DMA mapping failed");
-	SYSCTL_ADD_U64(ctx, children, OID_AUTO, "process_error", CTLFLAG_RD,
-	    &sc->stats_process_error, 0, "Requests failed during queueing");
-	SYSCTL_ADD_U64(ctx, children, OID_AUTO, "sw_fallback", CTLFLAG_RD,
-	    &sc->stats_sw_fallback, 0,
+	SYSCTL_ADD_COUNTER_U64(ctx, children, OID_AUTO, "process_error",
+	    CTLFLAG_RD, &sc->stats_process_error,
+	    "Requests failed during queueing");
+	SYSCTL_ADD_COUNTER_U64(ctx, children, OID_AUTO, "sw_fallback",
+	    CTLFLAG_RD, &sc->stats_sw_fallback,
 	    "Requests processed by falling back to software");
+
+	/*
+	 * dev.ccr.X.stats.port
+	 */
+	port_oid = SYSCTL_ADD_NODE(ctx, children, OID_AUTO, "port",
+	    CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, "Per-port statistics");
+
+	for (i = 0; i < nitems(sc->ports); i++) {
+		if (sc->ports[i].rxq == NULL)
+			continue;
+
+		/*
+		 * dev.ccr.X.stats.port.Y
+		 */
+		snprintf(buf, sizeof(buf), "%d", i);
+		oid = SYSCTL_ADD_NODE(ctx, SYSCTL_CHILDREN(port_oid), OID_AUTO,
+		    buf, CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, buf);
+		children = SYSCTL_CHILDREN(oid);
+
+		SYSCTL_ADD_UINT(ctx, children, OID_AUTO, "active_sessions",
+		    CTLFLAG_RD, &sc->ports[i].active_sessions, 0,
+		    "Count of active sessions");
+	}
+}
+
+static void
+ccr_init_port(struct ccr_softc *sc, int port)
+{
+
+	sc->ports[port].txq = &sc->adapter->sge.ctrlq[port];
+	sc->ports[port].rxq =
+	    &sc->adapter->sge.rxq[sc->adapter->port[port]->vi->first_rxq];
+	sc->ports[port].tx_channel_id = port;
+	_Static_assert(sizeof(sc->port_mask) * NBBY >= MAX_NPORTS - 1,
+	    "Too many ports to fit in port_mask");
+	sc->port_mask |= 1u << port;
 }
 
 static int
@@ -2038,12 +2142,14 @@ ccr_attach(device_t dev)
 {
 	struct ccr_softc *sc;
 	int32_t cid;
+	int i;
 
 	sc = device_get_softc(dev);
 	sc->dev = dev;
 	sc->adapter = device_get_softc(device_get_parent(dev));
-	sc->txq = &sc->adapter->sge.ctrlq[0];
-	sc->rxq = &sc->adapter->sge.rxq[0];
+	for_each_port(sc->adapter, i) {
+		ccr_init_port(sc, i);
+	}
 	cid = crypto_get_driverid(dev, sizeof(struct ccr_session),
 	    CRYPTOCAP_F_HARDWARE);
 	if (cid < 0) {
@@ -2053,15 +2159,26 @@ ccr_attach(device_t dev)
 	sc->cid = cid;
 	sc->adapter->ccr_softc = sc;
 
-	/* XXX: TODO? */
-	sc->tx_channel_id = 0;
-
 	mtx_init(&sc->lock, "ccr", NULL, MTX_DEF);
-	sc->sg_crp = sglist_alloc(TX_SGL_SEGS, M_WAITOK);
-	sc->sg_ulptx = sglist_alloc(TX_SGL_SEGS, M_WAITOK);
-	sc->sg_dsgl = sglist_alloc(MAX_RX_PHYS_DSGL_SGE, M_WAITOK);
 	sc->iv_aad_buf = malloc(MAX_AAD_LEN, M_CCR, M_WAITOK);
 	sc->sg_iv_aad = sglist_build(sc->iv_aad_buf, MAX_AAD_LEN, M_WAITOK);
+	sc->stats_blkcipher_encrypt = counter_u64_alloc(M_WAITOK);
+	sc->stats_blkcipher_decrypt = counter_u64_alloc(M_WAITOK);
+	sc->stats_hash = counter_u64_alloc(M_WAITOK);
+	sc->stats_hmac = counter_u64_alloc(M_WAITOK);
+	sc->stats_eta_encrypt = counter_u64_alloc(M_WAITOK);
+	sc->stats_eta_decrypt = counter_u64_alloc(M_WAITOK);
+	sc->stats_gcm_encrypt = counter_u64_alloc(M_WAITOK);
+	sc->stats_gcm_decrypt = counter_u64_alloc(M_WAITOK);
+	sc->stats_ccm_encrypt = counter_u64_alloc(M_WAITOK);
+	sc->stats_ccm_decrypt = counter_u64_alloc(M_WAITOK);
+	sc->stats_wr_nomem = counter_u64_alloc(M_WAITOK);
+	sc->stats_inflight = counter_u64_alloc(M_WAITOK);
+	sc->stats_mac_error = counter_u64_alloc(M_WAITOK);
+	sc->stats_pad_error = counter_u64_alloc(M_WAITOK);
+	sc->stats_sglist_error = counter_u64_alloc(M_WAITOK);
+	sc->stats_process_error = counter_u64_alloc(M_WAITOK);
+	sc->stats_sw_fallback = counter_u64_alloc(M_WAITOK);
 	ccr_sysctls(sc);
 
 	return (0);
@@ -2081,11 +2198,25 @@ ccr_detach(device_t dev)
 	crypto_unregister_all(sc->cid);
 
 	mtx_destroy(&sc->lock);
+	counter_u64_free(sc->stats_blkcipher_encrypt);
+	counter_u64_free(sc->stats_blkcipher_decrypt);
+	counter_u64_free(sc->stats_hash);
+	counter_u64_free(sc->stats_hmac);
+	counter_u64_free(sc->stats_eta_encrypt);
+	counter_u64_free(sc->stats_eta_decrypt);
+	counter_u64_free(sc->stats_gcm_encrypt);
+	counter_u64_free(sc->stats_gcm_decrypt);
+	counter_u64_free(sc->stats_ccm_encrypt);
+	counter_u64_free(sc->stats_ccm_decrypt);
+	counter_u64_free(sc->stats_wr_nomem);
+	counter_u64_free(sc->stats_inflight);
+	counter_u64_free(sc->stats_mac_error);
+	counter_u64_free(sc->stats_pad_error);
+	counter_u64_free(sc->stats_sglist_error);
+	counter_u64_free(sc->stats_process_error);
+	counter_u64_free(sc->stats_sw_fallback);
 	sglist_free(sc->sg_iv_aad);
 	free(sc->iv_aad_buf, M_CCR);
-	sglist_free(sc->sg_dsgl);
-	sglist_free(sc->sg_ulptx);
-	sglist_free(sc->sg_crp);
 	sc->adapter->ccr_softc = NULL;
 	return (0);
 }
@@ -2271,7 +2402,8 @@ ccr_probesession(device_t dev, const struct crypto_session_params *csp)
 {
 	unsigned int cipher_mode;
 
-	if (csp->csp_flags != 0)
+	if ((csp->csp_flags & ~(CSP_F_SEPARATE_OUTPUT | CSP_F_SEPARATE_AAD)) !=
+	    0)
 		return (EINVAL);
 	switch (csp->csp_mode) {
 	case CSP_MODE_DIGEST:
@@ -2317,6 +2449,53 @@ ccr_probesession(device_t dev, const struct crypto_session_params *csp)
 	}
 
 	return (CRYPTODEV_PROBE_HARDWARE);
+}
+
+/*
+ * Select an available port with the lowest number of active sessions.
+ */
+static struct ccr_port *
+ccr_choose_port(struct ccr_softc *sc)
+{
+	struct ccr_port *best, *p;
+	int i;
+
+	mtx_assert(&sc->lock, MA_OWNED);
+	best = NULL;
+	for (i = 0; i < nitems(sc->ports); i++) {
+		p = &sc->ports[i];
+
+		/* Ignore non-existent ports. */
+		if (p->rxq == NULL)
+			continue;
+
+		/*
+		 * XXX: Ignore ports whose queues aren't initialized.
+		 * This is racy as the rxq can be destroyed by the
+		 * associated VI detaching.  Eventually ccr should use
+		 * dedicated queues.
+		 */
+		if (p->rxq->iq.adapter == NULL || p->txq->adapter == NULL)
+			continue;
+
+		if ((sc->port_mask & (1u << i)) == 0)
+			continue;
+
+		if (best == NULL ||
+		    p->active_sessions < best->active_sessions)
+			best = p;
+	}
+	return (best);
+}
+
+static void
+ccr_delete_session(struct ccr_session *s)
+{
+	sglist_free(s->sg_input);
+	sglist_free(s->sg_output);
+	sglist_free(s->sg_ulptx);
+	sglist_free(s->sg_dsgl);
+	mtx_destroy(&s->lock);
 }
 
 static int
@@ -2407,24 +2586,33 @@ ccr_newsession(device_t dev, crypto_session_t cses,
 	}
 #endif
 
+	s = crypto_get_driver_session(cses);
+	mtx_init(&s->lock, "ccr session", NULL, MTX_DEF);
+	s->sg_input = sglist_alloc(TX_SGL_SEGS, M_NOWAIT);
+	s->sg_output = sglist_alloc(TX_SGL_SEGS, M_NOWAIT);
+	s->sg_ulptx = sglist_alloc(TX_SGL_SEGS, M_NOWAIT);
+	s->sg_dsgl = sglist_alloc(MAX_RX_PHYS_DSGL_SGE, M_NOWAIT);
+	if (s->sg_input == NULL || s->sg_output == NULL ||
+	    s->sg_ulptx == NULL || s->sg_dsgl == NULL) {
+		ccr_delete_session(s);
+		return (ENOMEM);
+	}
+
 	sc = device_get_softc(dev);
 
-	/*
-	 * XXX: Don't create a session if the queues aren't
-	 * initialized.  This is racy as the rxq can be destroyed by
-	 * the associated VI detaching.  Eventually ccr should use
-	 * dedicated queues.
-	 */
-	if (sc->rxq->iq.adapter == NULL || sc->txq->adapter == NULL)
-		return (ENXIO);
-	
 	mtx_lock(&sc->lock);
 	if (sc->detaching) {
 		mtx_unlock(&sc->lock);
+		ccr_delete_session(s);
 		return (ENXIO);
 	}
 
-	s = crypto_get_driver_session(cses);
+	s->port = ccr_choose_port(sc);
+	if (s->port == NULL) {
+		mtx_unlock(&sc->lock);
+		ccr_delete_session(s);
+		return (ENXIO);
+	}
 
 	switch (csp->csp_mode) {
 	case CSP_MODE_AEAD:
@@ -2483,7 +2671,7 @@ ccr_newsession(device_t dev, crypto_session_t cses,
 			    csp->csp_cipher_klen);
 	}
 
-	s->active = true;
+	s->port->active_sessions++;
 	mtx_unlock(&sc->lock);
 	return (0);
 }
@@ -2496,13 +2684,16 @@ ccr_freesession(device_t dev, crypto_session_t cses)
 
 	sc = device_get_softc(dev);
 	s = crypto_get_driver_session(cses);
-	mtx_lock(&sc->lock);
+#ifdef INVARIANTS
 	if (s->pending != 0)
 		device_printf(dev,
 		    "session %p freed with %d pending requests\n", s,
 		    s->pending);
-	s->active = false;
+#endif
+	mtx_lock(&sc->lock);
+	s->port->active_sessions--;
 	mtx_unlock(&sc->lock);
+	ccr_delete_session(s);
 }
 
 static int
@@ -2517,10 +2708,12 @@ ccr_process(device_t dev, struct cryptop *crp, int hint)
 	s = crypto_get_driver_session(crp->crp_session);
 	sc = device_get_softc(dev);
 
-	mtx_lock(&sc->lock);
-	error = ccr_populate_sglist(sc->sg_crp, crp);
+	mtx_lock(&s->lock);
+	error = ccr_populate_sglist(s->sg_input, &crp->crp_buf);
+	if (error == 0 && CRYPTO_HAS_OUTPUT_BUFFER(crp))
+		error = ccr_populate_sglist(s->sg_output, &crp->crp_obuf);
 	if (error) {
-		sc->stats_sglist_error++;
+		counter_u64_add(sc->stats_sglist_error, 1);
 		goto out;
 	}
 
@@ -2528,7 +2721,7 @@ ccr_process(device_t dev, struct cryptop *crp, int hint)
 	case HASH:
 		error = ccr_hash(sc, s, crp);
 		if (error == 0)
-			sc->stats_hash++;
+			counter_u64_add(sc->stats_hash, 1);
 		break;
 	case HMAC:
 		if (crp->crp_auth_key != NULL)
@@ -2537,7 +2730,7 @@ ccr_process(device_t dev, struct cryptop *crp, int hint)
 			    csp->csp_auth_klen, s->hmac.pads);
 		error = ccr_hash(sc, s, crp);
 		if (error == 0)
-			sc->stats_hmac++;
+			counter_u64_add(sc->stats_hmac, 1);
 		break;
 	case BLKCIPHER:
 		if (crp->crp_cipher_key != NULL)
@@ -2546,9 +2739,9 @@ ccr_process(device_t dev, struct cryptop *crp, int hint)
 		error = ccr_blkcipher(sc, s, crp);
 		if (error == 0) {
 			if (CRYPTO_OP_IS_ENCRYPT(crp->crp_op))
-				sc->stats_blkcipher_encrypt++;
+				counter_u64_add(sc->stats_blkcipher_encrypt, 1);
 			else
-				sc->stats_blkcipher_decrypt++;
+				counter_u64_add(sc->stats_blkcipher_decrypt, 1);
 		}
 		break;
 	case ETA:
@@ -2562,9 +2755,9 @@ ccr_process(device_t dev, struct cryptop *crp, int hint)
 		error = ccr_eta(sc, s, crp);
 		if (error == 0) {
 			if (CRYPTO_OP_IS_ENCRYPT(crp->crp_op))
-				sc->stats_eta_encrypt++;
+				counter_u64_add(sc->stats_eta_encrypt, 1);
 			else
-				sc->stats_eta_decrypt++;
+				counter_u64_add(sc->stats_eta_decrypt, 1);
 		}
 		break;
 	case GCM:
@@ -2575,22 +2768,22 @@ ccr_process(device_t dev, struct cryptop *crp, int hint)
 			    csp->csp_cipher_klen);
 		}
 		if (crp->crp_payload_length == 0) {
-			mtx_unlock(&sc->lock);
+			mtx_unlock(&s->lock);
 			ccr_gcm_soft(s, crp);
 			return (0);
 		}
 		error = ccr_gcm(sc, s, crp);
 		if (error == EMSGSIZE) {
-			sc->stats_sw_fallback++;
-			mtx_unlock(&sc->lock);
+			counter_u64_add(sc->stats_sw_fallback, 1);
+			mtx_unlock(&s->lock);
 			ccr_gcm_soft(s, crp);
 			return (0);
 		}
 		if (error == 0) {
 			if (CRYPTO_OP_IS_ENCRYPT(crp->crp_op))
-				sc->stats_gcm_encrypt++;
+				counter_u64_add(sc->stats_gcm_encrypt, 1);
 			else
-				sc->stats_gcm_decrypt++;
+				counter_u64_add(sc->stats_gcm_decrypt, 1);
 		}
 		break;
 	case CCM:
@@ -2600,28 +2793,30 @@ ccr_process(device_t dev, struct cryptop *crp, int hint)
 		}
 		error = ccr_ccm(sc, s, crp);
 		if (error == EMSGSIZE) {
-			sc->stats_sw_fallback++;
-			mtx_unlock(&sc->lock);
+			counter_u64_add(sc->stats_sw_fallback, 1);
+			mtx_unlock(&s->lock);
 			ccr_ccm_soft(s, crp);
 			return (0);
 		}
 		if (error == 0) {
 			if (CRYPTO_OP_IS_ENCRYPT(crp->crp_op))
-				sc->stats_ccm_encrypt++;
+				counter_u64_add(sc->stats_ccm_encrypt, 1);
 			else
-				sc->stats_ccm_decrypt++;
+				counter_u64_add(sc->stats_ccm_decrypt, 1);
 		}
 		break;
 	}
 
 	if (error == 0) {
+#ifdef INVARIANTS
 		s->pending++;
-		sc->stats_inflight++;
+#endif
+		counter_u64_add(sc->stats_inflight, 1);
 	} else
-		sc->stats_process_error++;
+		counter_u64_add(sc->stats_process_error, 1);
 
 out:
-	mtx_unlock(&sc->lock);
+	mtx_unlock(&s->lock);
 
 	if (error) {
 		crp->crp_etype = error;
@@ -2655,9 +2850,12 @@ do_cpl6_fw_pld(struct sge_iq *iq, const struct rss_header *rss,
 	else
 		error = 0;
 
-	mtx_lock(&sc->lock);
+#ifdef INVARIANTS
+	mtx_lock(&s->lock);
 	s->pending--;
-	sc->stats_inflight--;
+	mtx_unlock(&s->lock);
+#endif
+	counter_u64_add(sc->stats_inflight, -1);
 
 	switch (s->mode) {
 	case HASH:
@@ -2680,11 +2878,10 @@ do_cpl6_fw_pld(struct sge_iq *iq, const struct rss_header *rss,
 
 	if (error == EBADMSG) {
 		if (CHK_MAC_ERR_BIT(status))
-			sc->stats_mac_error++;
+			counter_u64_add(sc->stats_mac_error, 1);
 		if (CHK_PAD_ERR_BIT(status))
-			sc->stats_pad_error++;
+			counter_u64_add(sc->stats_pad_error, 1);
 	}
-	mtx_unlock(&sc->lock);
 	crp->crp_etype = error;
 	crypto_done(crp);
 	m_freem(m);

@@ -80,6 +80,7 @@
 #include <net/if_vlan_var.h>
 #include <net/radix.h>
 #include <net/route.h>
+#include <net/route/route_ctl.h>
 #include <net/vnet.h>
 
 #if defined(INET) || defined(INET6)
@@ -1845,6 +1846,7 @@ static int
 ifa_maintain_loopback_route(int cmd, const char *otype, struct ifaddr *ifa,
     struct sockaddr *ia)
 {
+	struct rib_cmd_info rc;
 	struct epoch_tracker et;
 	int error;
 	struct rt_addrinfo info;
@@ -1854,18 +1856,17 @@ ifa_maintain_loopback_route(int cmd, const char *otype, struct ifaddr *ifa,
 
 	ifp = ifa->ifa_ifp;
 
+	NET_EPOCH_ENTER(et);
 	bzero(&info, sizeof(info));
 	if (cmd != RTM_DELETE)
 		info.rti_ifp = V_loif;
 	if (cmd == RTM_ADD) {
 		/* explicitly specify (loopback) ifa */
 		if (info.rti_ifp != NULL) {
-			NET_EPOCH_ENTER(et);
 			rti_ifa = ifaof_ifpforaddr(ifa->ifa_addr, info.rti_ifp);
 			if (rti_ifa != NULL)
 				ifa_ref(rti_ifa);
 			info.rti_ifa = rti_ifa;
-			NET_EPOCH_EXIT(et);
 		}
 	}
 	info.rti_flags = ifa->ifa_flags | RTF_HOST | RTF_STATIC | RTF_PINNED;
@@ -1873,7 +1874,8 @@ ifa_maintain_loopback_route(int cmd, const char *otype, struct ifaddr *ifa,
 	info.rti_info[RTAX_GATEWAY] = (struct sockaddr *)&null_sdl;
 	link_init_sdl(ifp, (struct sockaddr *)&null_sdl, ifp->if_type);
 
-	error = rtrequest1_fib(cmd, &info, NULL, ifp->if_fib);
+	error = rib_action(ifp->if_fib, cmd, &info, &rc);
+	NET_EPOCH_EXIT(et);
 
 	if (rti_ifa != NULL)
 		ifa_free(rti_ifa);

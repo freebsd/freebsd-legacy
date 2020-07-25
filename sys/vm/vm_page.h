@@ -629,6 +629,7 @@ void vm_page_deactivate_noreuse(vm_page_t);
 void vm_page_dequeue(vm_page_t m);
 void vm_page_dequeue_deferred(vm_page_t m);
 vm_page_t vm_page_find_least(vm_object_t, vm_pindex_t);
+void vm_page_free_invalid(vm_page_t);
 vm_page_t vm_page_getfake(vm_paddr_t paddr, vm_memattr_t memattr);
 void vm_page_initfake(vm_page_t m, vm_paddr_t paddr, vm_memattr_t memattr);
 int vm_page_insert (vm_page_t, vm_object_t, vm_pindex_t);
@@ -958,8 +959,8 @@ vm_page_drop(vm_page_t m, u_int val)
  *
  *	Perform a racy check to determine whether a reference prevents the page
  *	from being reclaimable.  If the page's object is locked, and the page is
- *	unmapped and unbusied or exclusively busied by the current thread, no
- *	new wirings may be created.
+ *	unmapped and exclusively busied by the current thread, no new wirings
+ *	may be created.
  */
 static inline bool
 vm_page_wired(vm_page_t m)

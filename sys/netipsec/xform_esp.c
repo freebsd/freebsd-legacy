@@ -37,6 +37,7 @@
  */
 #include "opt_inet.h"
 #include "opt_inet6.h"
+#include "opt_ipsec.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -80,6 +81,8 @@
 #include <opencrypto/xform.h>
 
 VNET_DEFINE(int, esp_enable) = 1;
+VNET_DEFINE_STATIC(int, esp_ctr_compatibility) = 1;
+#define V_esp_ctr_compatibility VNET(esp_ctr_compatibility)
 VNET_PCPUSTAT_DEFINE(struct espstat, espstat);
 VNET_PCPUSTAT_SYSINIT(espstat);
 
@@ -90,11 +93,12 @@ VNET_PCPUSTAT_SYSUNINIT(espstat);
 SYSCTL_DECL(_net_inet_esp);
 SYSCTL_INT(_net_inet_esp, OID_AUTO, esp_enable,
 	CTLFLAG_VNET | CTLFLAG_RW, &VNET_NAME(esp_enable), 0, "");
+SYSCTL_INT(_net_inet_esp, OID_AUTO, ctr_compatibility,
+    CTLFLAG_VNET | CTLFLAG_RW, &VNET_NAME(esp_ctr_compatibility), 0,
+    "Align AES-CTR encrypted transmitted frames to blocksize");
 SYSCTL_VNET_PCPUSTAT(_net_inet_esp, IPSECCTL_STATS, stats,
     struct espstat, espstat,
     "ESP statistics (struct espstat, netipsec/esp_var.h");
-
-static struct timeval deswarn, blfwarn, castwarn, camelliawarn;
 
 static int esp_input_cb(struct cryptop *op);
 static int esp_output_cb(struct cryptop *crp);
@@ -157,25 +161,6 @@ esp_init(struct secasvar *sav, struct xformsw *xsp)
 		DPRINTF(("%s: 4-byte IV not supported with protocol\n",
 			__func__));
 		return EINVAL;
-	}
-
-	switch (sav->alg_enc) {
-	case SADB_EALG_DESCBC:
-		if (ratecheck(&deswarn, &ipsec_warn_interval))
-			gone_in(13, "DES cipher for IPsec");
-		break;
-	case SADB_X_EALG_BLOWFISHCBC:
-		if (ratecheck(&blfwarn, &ipsec_warn_interval))
-			gone_in(13, "Blowfish cipher for IPsec");
-		break;
-	case SADB_X_EALG_CAST128CBC:
-		if (ratecheck(&castwarn, &ipsec_warn_interval))
-			gone_in(13, "CAST cipher for IPsec");
-		break;
-	case SADB_X_EALG_CAMELLIACBC:
-		if (ratecheck(&camelliawarn, &ipsec_warn_interval))
-			gone_in(13, "Camellia cipher for IPsec");
-		break;
 	}
 
 	/* subtract off the salt, RFC4106, 8.1 and RFC3686, 5.1 */
@@ -241,29 +226,25 @@ esp_init(struct secasvar *sav, struct xformsw *xsp)
 
 	/* Initialize crypto session. */
 	csp.csp_cipher_alg = sav->tdb_encalgxform->type;
-	csp.csp_cipher_key = sav->key_enc->key_data;
-	csp.csp_cipher_klen = _KEYBITS(sav->key_enc) / 8 -
-	    SAV_ISCTRORGCM(sav) * 4;
+	if (csp.csp_cipher_alg != CRYPTO_NULL_CBC) {
+		csp.csp_cipher_key = sav->key_enc->key_data;
+		csp.csp_cipher_klen = _KEYBITS(sav->key_enc) / 8 -
+		    SAV_ISCTRORGCM(sav) * 4;
+	};
 	csp.csp_ivlen = txform->ivsize;
 
 	error = crypto_newsession(&sav->tdb_cryptoid, &csp, V_crypto_support);
 	return error;
 }
 
-/*
- * Paranoia.
- */
-static int
-esp_zeroize(struct secasvar *sav)
+static void
+esp_cleanup(struct secasvar *sav)
 {
-	/* NB: ah_zerorize free's the crypto session state */
-	int error = ah_zeroize(sav);
 
-	if (sav->key_enc)
-		bzero(sav->key_enc->key_data, _KEYLEN(sav->key_enc));
+	crypto_freesession(sav->tdb_cryptoid);
+	sav->tdb_cryptoid = NULL;
+	sav->tdb_authalgxform = NULL;
 	sav->tdb_encalgxform = NULL;
-	sav->tdb_xform = NULL;
-	return error;
 }
 
 /*
@@ -385,12 +366,10 @@ esp_input(struct mbuf *m, struct secasvar *sav, int skip, int protoff)
 	}
 
 	/* Crypto operation descriptor */
-	crp->crp_ilen = m->m_pkthdr.len; /* Total input length */
 	crp->crp_flags = CRYPTO_F_CBIFSYNC;
 	if (V_async_crypto)
 		crp->crp_flags |= CRYPTO_F_ASYNC | CRYPTO_F_ASYNC_KEEPORDER;
-	crp->crp_mbuf = m;
-	crp->crp_buf_type = CRYPTO_BUF_MBUF;
+	crypto_use_mbuf(crp, m);
 	crp->crp_callback = esp_input_cb;
 	crp->crp_opaque = xd;
 
@@ -406,22 +385,38 @@ esp_input(struct mbuf *m, struct secasvar *sav, int skip, int protoff)
 	crp->crp_payload_start = skip + hlen;
 	crp->crp_payload_length = m->m_pkthdr.len - (skip + hlen + alen);
 
+	/* Generate or read cipher IV. */
 	if (SAV_ISCTRORGCM(sav)) {
 		ivp = &crp->crp_iv[0];
 
-		/* GCM IV Format: RFC4106 4 */
-		/* CTR IV Format: RFC3686 4 */
-		/* Salt is last four bytes of key, RFC4106 8.1 */
-		/* Nonce is last four bytes of key, RFC3686 5.1 */
+		/*
+		 * AES-GCM and AES-CTR use similar cipher IV formats
+		 * defined in RFC 4106 section 4 and RFC 3686 section
+		 * 4, respectively.
+		 *
+		 * The first 4 bytes of the cipher IV contain an
+		 * implicit salt, or nonce, obtained from the last 4
+		 * bytes of the encryption key.  The next 8 bytes hold
+		 * an explicit IV unique to each packet.  This
+		 * explicit IV is used as the ESP IV for the packet.
+		 * The last 4 bytes hold a big-endian block counter
+		 * incremented for each block.  For AES-GCM, the block
+		 * counter's initial value is defined as part of the
+		 * algorithm.  For AES-CTR, the block counter's
+		 * initial value for each packet is defined as 1 by
+		 * RFC 3686.
+		 *
+		 * ------------------------------------------
+		 * | Salt | Explicit ESP IV | Block Counter |
+		 * ------------------------------------------
+		 *  4 bytes     8 bytes          4 bytes
+		 */
 		memcpy(ivp, sav->key_enc->key_data +
 		    _KEYLEN(sav->key_enc) - 4, 4);
-
+		m_copydata(m, skip + hlen - sav->ivlen, sav->ivlen, &ivp[4]);
 		if (SAV_ISCTR(sav)) {
-			/* Initial block counter is 1, RFC3686 4 */
 			be32enc(&ivp[sav->ivlen + 4], 1);
 		}
-
-		m_copydata(m, skip + hlen - sav->ivlen, sav->ivlen, &ivp[4]);
 		crp->crp_flags |= CRYPTO_F_IV_SEPARATE;
 	} else if (sav->ivlen != 0)
 		crp->crp_iv_start = skip + hlen - sav->ivlen;
@@ -449,7 +444,7 @@ esp_input_cb(struct cryptop *crp)
 	crypto_session_t cryptoid;
 	int hlen, skip, protoff, error, alen;
 
-	m = crp->crp_mbuf;
+	m = crp->crp_buf.cb_mbuf;
 	xd = crp->crp_opaque;
 	CURVNET_SET(xd->vnet);
 	sav = xd->sav;
@@ -657,8 +652,14 @@ esp_output(struct mbuf *m, struct secpolicy *sp, struct secasvar *sav,
 	rlen = m->m_pkthdr.len - skip;	/* Raw payload length. */
 	/*
 	 * RFC4303 2.4 Requires 4 byte alignment.
+	 * Old versions of FreeBSD can't decrypt partial blocks encrypted
+	 * with AES-CTR. Align payload to native_blocksize (16 bytes)
+	 * in order to preserve compatibility.
 	 */
-	blks = MAX(4, espx->blocksize);		/* Cipher blocksize */
+	if (SAV_ISCTR(sav) && V_esp_ctr_compatibility)
+		blks = MAX(4, espx->native_blocksize);	/* Cipher blocksize */
+	else
+		blks = MAX(4, espx->blocksize);
 
 	/* XXX clamp padding length a la KAME??? */
 	padding = ((blks - ((rlen + 2) % blks)) % blks) + 2;
@@ -813,28 +814,26 @@ esp_output(struct mbuf *m, struct secpolicy *sp, struct secasvar *sav,
 	crp->crp_payload_length = m->m_pkthdr.len - (skip + hlen + alen);
 	crp->crp_op = CRYPTO_OP_ENCRYPT;
 
-	/* Encryption operation. */
+	/* Generate cipher and ESP IVs. */
+	ivp = &crp->crp_iv[0];
 	if (SAV_ISCTRORGCM(sav)) {
-		ivp = &crp->crp_iv[0];
-
-		/* GCM IV Format: RFC4106 4 */
-		/* CTR IV Format: RFC3686 4 */
-		/* Salt is last four bytes of key, RFC4106 8.1 */
-		/* Nonce is last four bytes of key, RFC3686 5.1 */
+		/*
+		 * See comment in esp_input() for details on the
+		 * cipher IV.  A simple per-SA counter stored in
+		 * 'cntr' is used as the explicit ESP IV.
+		 */
 		memcpy(ivp, sav->key_enc->key_data +
 		    _KEYLEN(sav->key_enc) - 4, 4);
 		be64enc(&ivp[4], cntr);
 		if (SAV_ISCTR(sav)) {
-			/* Initial block counter is 1, RFC3686 4 */
-			/* XXXAE: should we use this only for first packet? */
 			be32enc(&ivp[sav->ivlen + 4], 1);
 		}
-
 		m_copyback(m, skip + hlen - sav->ivlen, sav->ivlen, &ivp[4]);
 		crp->crp_flags |= CRYPTO_F_IV_SEPARATE;
 	} else if (sav->ivlen != 0) {
+		arc4rand(ivp, sav->ivlen, 0);
 		crp->crp_iv_start = skip + hlen - sav->ivlen;
-		crp->crp_flags |= CRYPTO_F_IV_GENERATE;
+		m_copyback(m, crp->crp_iv_start, sav->ivlen, ivp);
 	}
 
 	/* Callback parameters */
@@ -845,12 +844,10 @@ esp_output(struct mbuf *m, struct secpolicy *sp, struct secasvar *sav,
 	xd->vnet = curvnet;
 
 	/* Crypto operation descriptor. */
-	crp->crp_ilen = m->m_pkthdr.len; /* Total input length. */
 	crp->crp_flags |= CRYPTO_F_CBIFSYNC;
 	if (V_async_crypto)
 		crp->crp_flags |= CRYPTO_F_ASYNC | CRYPTO_F_ASYNC_KEEPORDER;
-	crp->crp_mbuf = m;
-	crp->crp_buf_type = CRYPTO_BUF_MBUF;
+	crypto_use_mbuf(crp, m);
 	crp->crp_callback = esp_output_cb;
 	crp->crp_opaque = xd;
 
@@ -889,7 +886,7 @@ esp_output_cb(struct cryptop *crp)
 
 	xd = (struct xform_data *) crp->crp_opaque;
 	CURVNET_SET(xd->vnet);
-	m = (struct mbuf *) crp->crp_buf;
+	m = crp->crp_buf.cb_mbuf;
 	sp = xd->sp;
 	sav = xd->sav;
 	idx = xd->idx;
@@ -963,7 +960,7 @@ static struct xformsw esp_xformsw = {
 	.xf_type =	XF_ESP,
 	.xf_name =	"IPsec ESP",
 	.xf_init =	esp_init,
-	.xf_zeroize =	esp_zeroize,
+	.xf_cleanup =	esp_cleanup,
 	.xf_input =	esp_input,
 	.xf_output =	esp_output,
 };

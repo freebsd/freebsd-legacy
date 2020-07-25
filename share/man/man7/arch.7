@@ -26,7 +26,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd March 23, 2020
+.Dd June 23, 2020
 .Dt ARCH 7
 .Os
 .Sh NAME
@@ -256,8 +256,8 @@ is 8 bytes on all supported architectures except i386.
 .It powerpc     Ta 4K
 .It powerpcspe  Ta 4K
 .It powerpc64   Ta 4K
-.It riscv64     Ta 4K
-.It riscv64sf   Ta 4K
+.It riscv64     Ta 4K, 2M, 1G
+.It riscv64sf   Ta 4K, 2M, 1G
 .El
 .Ss Floating Point
 .Bl -column -offset indent "Architecture" "float, double" "long double"
@@ -279,44 +279,21 @@ is 8 bytes on all supported architectures except i386.
 .It powerpc     Ta hard Ta hard, double precision
 .It powerpcspe  Ta hard Ta hard, double precision
 .It powerpc64   Ta hard Ta hard, double precision
-.It riscv64     Ta hard Ta hard, double precision
-.It riscv64sf   Ta soft Ta soft, double precision
+.It riscv64     Ta hard Ta hard, quad precision
+.It riscv64sf   Ta soft Ta soft, quad precision
 .El
 .Ss Default Tool Chain
 .Fx
 uses
 .Xr clang 1
 as the default compiler on all supported CPU architectures,
-as well as ELF Tool Chain binary utilities such as
+LLVM's
+.Xr ld.lld 1
+as the default linker, and
+ELF Tool Chain binary utilities such as
 .Xr objcopy 1
 and
 .Xr readelf 1 .
-Most supported CPU architectures also use LLVM's
-.Xr ld.lld 1
-as the linker.
-This table shows the default tool chain for each architecture.
-.Bl -column -offset indent "Architecture" "Compiler" "Linker"
-.It Sy Architecture Ta Sy Compiler Ta Sy Linker
-.It aarch64     Ta Clang     Ta lld
-.It amd64       Ta Clang     Ta lld
-.It armv6       Ta Clang     Ta lld
-.It armv7       Ta Clang     Ta lld
-.It i386        Ta Clang     Ta lld
-.It mips        Ta Clang     Ta lld
-.It mipsel      Ta Clang     Ta lld
-.It mipselhf    Ta Clang     Ta lld
-.It mipshf      Ta Clang     Ta lld
-.It mipsn32     Ta Clang     Ta lld
-.It mips64      Ta Clang     Ta lld
-.It mips64el    Ta Clang     Ta lld
-.It mips64elhf  Ta Clang     Ta lld
-.It mips64hf    Ta Clang     Ta lld
-.It powerpc     Ta Clang     Ta lld
-.It powerpcspe  Ta Clang     Ta lld
-.It powerpc64   Ta Clang     Ta lld
-.It riscv64     Ta Clang     Ta lld
-.It riscv64sf   Ta Clang     Ta lld
-.El
 .Ss MACHINE_ARCH vs MACHINE_CPUARCH vs MACHINE
 .Dv MACHINE_CPUARCH
 should be preferred in Makefiles when the generic
@@ -381,7 +358,7 @@ Architecture-specific macros:
 .It powerpcspe  Ta Dv __powerpc__, Dv __SPE__
 .It powerpc64   Ta Dv __powerpc__, Dv __powerpc64__
 .It riscv64     Ta Dv __riscv, Dv __riscv_xlen == 64
-.It riscv64sf   Ta Dv __riscv, Dv __riscv_xlen == 64
+.It riscv64sf   Ta Dv __riscv, Dv __riscv_xlen == 64, Dv __riscv_float_abi_soft
 .El
 .Pp
 Compilers may define additional variants of architecture-specific macros.
@@ -473,7 +450,9 @@ is defined to be mips for all the flavors of mips that we support
 since we support them all with a shared set of sources.
 While amd64 and i386 are closely related, MACHINE_CPUARCH is not x86
 for them.
-The FreeBSD source base supports amd64 and i386 with two
+The
+.Fx
+source base supports amd64 and i386 with two
 distinct source bases living in subdirectories named amd64 and i386
 (though behind the scenes there's some sharing that fits into this
 framework).

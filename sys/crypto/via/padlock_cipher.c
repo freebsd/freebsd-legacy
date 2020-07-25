@@ -124,7 +124,7 @@ padlock_cipher_setup(struct padlock_session *ses,
 {
 	union padlock_cw *cw;
 
-	if (csp->csp_cipher_klen != 16 && csp->csp_cipher_klen != 25 &&
+	if (csp->csp_cipher_klen != 16 && csp->csp_cipher_klen != 24 &&
 	    csp->csp_cipher_klen != 32) {
 		return (EINVAL);
 	}
@@ -169,27 +169,9 @@ padlock_cipher_alloc(struct cryptop *crp, int *allocated)
 {
 	u_char *addr;
 
-	switch (crp->crp_buf_type) {
-	case CRYPTO_BUF_MBUF:
-		break;
-	case CRYPTO_BUF_UIO: {
-		struct uio *uio;
-		struct iovec *iov;
-
-		uio = crp->crp_uio;
-		if (uio->uio_iovcnt != 1)
-			break;
-		iov = uio->uio_iov;
-		addr = (u_char *)iov->iov_base + crp->crp_payload_start;
-		if (((uintptr_t)addr & 0xf) != 0) /* 16 bytes aligned? */
-			break;
-		*allocated = 0;
-		return (addr);
-	}
-	case CRYPTO_BUF_CONTIG:
-		addr = (u_char *)crp->crp_buf + crp->crp_payload_start;
-		if (((uintptr_t)addr & 0xf) != 0) /* 16 bytes aligned? */
-			break;
+	addr = crypto_contiguous_subsegment(crp, crp->crp_payload_start,
+	    crp->crp_payload_length);
+	if (((uintptr_t)addr & 0xf) == 0) { /* 16 bytes aligned? */
 		*allocated = 0;
 		return (addr);
 	}
@@ -227,13 +209,7 @@ padlock_cipher_process(struct padlock_session *ses, struct cryptop *crp,
 	cw->cw_filler2 = 0;
 	cw->cw_filler3 = 0;
 
-	if (crp->crp_flags & CRYPTO_F_IV_GENERATE) {
-		arc4rand(iv, AES_BLOCK_LEN, 0);
-		crypto_copyback(crp, crp->crp_iv_start, AES_BLOCK_LEN, iv);
-	} else if (crp->crp_flags & CRYPTO_F_IV_SEPARATE)
-		memcpy(iv, crp->crp_iv, AES_BLOCK_LEN);
-	else
-		crypto_copydata(crp, crp->crp_iv_start, AES_BLOCK_LEN, iv);
+	crypto_read_iv(crp, iv);
 
 	if (CRYPTO_OP_IS_ENCRYPT(crp->crp_op)) {
 		cw->cw_direction = PADLOCK_DIRECTION_ENCRYPT;
@@ -258,8 +234,7 @@ padlock_cipher_process(struct padlock_session *ses, struct cryptop *crp,
 		crypto_copyback(crp, crp->crp_payload_start,
 		    crp->crp_payload_length, abuf);
 
-		explicit_bzero(buf, crp->crp_payload_length + 16);
-		free(buf, M_PADLOCK);
+		zfree(buf, M_PADLOCK);
 	}
 	return (0);
 }

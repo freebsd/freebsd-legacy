@@ -243,7 +243,7 @@ set_rootvnode(void)
 
 	VOP_UNLOCK(rootvnode);
 
-	pwd_ensure_dirs();
+	pwd_set_rootvnode();
 }
 
 static int
@@ -1049,7 +1049,7 @@ vfs_mountroot(void)
 	struct thread *td;
 	time_t timebase;
 	int error;
-	
+
 	mtx_assert(&Giant, MA_NOTOWNED);
 
 	TSENTER();

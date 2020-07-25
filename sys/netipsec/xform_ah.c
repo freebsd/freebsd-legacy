@@ -38,6 +38,7 @@
  */
 #include "opt_inet.h"
 #include "opt_inet6.h"
+#include "opt_ipsec.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -108,7 +109,6 @@ SYSCTL_VNET_PCPUSTAT(_net_inet_ah, IPSECCTL_STATS, stats, struct ahstat,
 #endif
 
 static unsigned char ipseczeroes[256];	/* larger than an ip6 extension hdr */
-static struct timeval md5warn, ripewarn, kpdkmd5warn, kpdksha1warn;
 
 static int ah_input_cb(struct cryptop*);
 static int ah_output_cb(struct cryptop*);
@@ -185,25 +185,6 @@ ah_init0(struct secasvar *sav, struct xformsw *xsp,
 		return EINVAL;
 	}
 
-	switch (sav->alg_auth) {
-	case SADB_AALG_MD5HMAC:
-		if (ratecheck(&md5warn, &ipsec_warn_interval))
-			gone_in(13, "MD5-HMAC authenticator for IPsec");
-		break;
-	case SADB_X_AALG_RIPEMD160HMAC:
-		if (ratecheck(&ripewarn, &ipsec_warn_interval))
-			gone_in(13, "RIPEMD160-HMAC authenticator for IPsec");
-		break;
-	case SADB_X_AALG_MD5:
-		if (ratecheck(&kpdkmd5warn, &ipsec_warn_interval))
-			gone_in(13, "Keyed-MD5 authenticator for IPsec");
-		break;
-	case SADB_X_AALG_SHA:
-		if (ratecheck(&kpdksha1warn, &ipsec_warn_interval))
-			gone_in(13, "Keyed-SHA1 authenticator for IPsec");
-		break;
-	}
-
 	/*
 	 * Verify the replay state block allocation is consistent with
 	 * the protocol type.  We check here so we can make assumptions
@@ -235,8 +216,10 @@ ah_init0(struct secasvar *sav, struct xformsw *xsp,
 
 	/* Initialize crypto session. */
 	csp->csp_auth_alg = sav->tdb_authalgxform->type;
-	csp->csp_auth_klen = _KEYBITS(sav->key_auth) / 8;
-	csp->csp_auth_key = sav->key_auth->key_data;
+	if (csp->csp_auth_alg != CRYPTO_NULL_HMAC) {
+		csp->csp_auth_klen = _KEYBITS(sav->key_auth) / 8;
+		csp->csp_auth_key = sav->key_auth->key_data;
+	};
 	csp->csp_auth_mlen = AUTHSIZE(sav);
 
 	return 0;
@@ -258,23 +241,13 @@ ah_init(struct secasvar *sav, struct xformsw *xsp)
 		 crypto_newsession(&sav->tdb_cryptoid, &csp, V_crypto_support);
 }
 
-/*
- * Paranoia.
- *
- * NB: public for use by esp_zeroize (XXX).
- */
-int
-ah_zeroize(struct secasvar *sav)
+static void
+ah_cleanup(struct secasvar *sav)
 {
-
-	if (sav->key_auth)
-		bzero(sav->key_auth->key_data, _KEYLEN(sav->key_auth));
 
 	crypto_freesession(sav->tdb_cryptoid);
 	sav->tdb_cryptoid = NULL;
 	sav->tdb_authalgxform = NULL;
-	sav->tdb_xform = NULL;
-	return 0;
 }
 
 /*
@@ -317,11 +290,7 @@ ah_massage_headers(struct mbuf **m0, int proto, int skip, int alg, int out)
 			ip->ip_tos = 0;
 		ip->ip_ttl = 0;
 		ip->ip_sum = 0;
-
-		if (alg == CRYPTO_MD5_KPDK || alg == CRYPTO_SHA1_KPDK)
-			ip->ip_off &= htons(IP_DF);
-		else
-			ip->ip_off = htons(0);
+		ip->ip_off = htons(0);
 
 		ptr = mtod(m, unsigned char *);
 
@@ -676,13 +645,11 @@ ah_input(struct mbuf *m, struct secasvar *sav, int skip, int protoff)
 	}
 
 	/* Crypto operation descriptor. */
-	crp->crp_ilen = m->m_pkthdr.len; /* Total input length. */
 	crp->crp_op = CRYPTO_OP_COMPUTE_DIGEST;
 	crp->crp_flags = CRYPTO_F_CBIFSYNC;
 	if (V_async_crypto)
 		crp->crp_flags |= CRYPTO_F_ASYNC | CRYPTO_F_ASYNC_KEEPORDER;
-	crp->crp_mbuf = m;
-	crp->crp_buf_type = CRYPTO_BUF_MBUF;
+	crypto_use_mbuf(crp, m);
 	crp->crp_callback = ah_input_cb;
 	crp->crp_opaque = xd;
 
@@ -717,7 +684,7 @@ ah_input_cb(struct cryptop *crp)
 	int authsize, rplen, ahsize, error, skip, protoff;
 	uint8_t nxt;
 
-	m = crp->crp_mbuf;
+	m = crp->crp_buf.cb_mbuf;
 	xd = crp->crp_opaque;
 	CURVNET_SET(xd->vnet);
 	sav = xd->sav;
@@ -1053,13 +1020,11 @@ ah_output(struct mbuf *m, struct secpolicy *sp, struct secasvar *sav,
 	}
 
 	/* Crypto operation descriptor. */
-	crp->crp_ilen = m->m_pkthdr.len; /* Total input length. */
 	crp->crp_op = CRYPTO_OP_COMPUTE_DIGEST;
 	crp->crp_flags = CRYPTO_F_CBIFSYNC;
 	if (V_async_crypto)
 		crp->crp_flags |= CRYPTO_F_ASYNC | CRYPTO_F_ASYNC_KEEPORDER;
-	crp->crp_mbuf = m;
-	crp->crp_buf_type = CRYPTO_BUF_MBUF;
+	crypto_use_mbuf(crp, m);
 	crp->crp_callback = ah_output_cb;
 	crp->crp_opaque = xd;
 
@@ -1095,7 +1060,7 @@ ah_output_cb(struct cryptop *crp)
 	u_int idx;
 	int skip, error;
 
-	m = (struct mbuf *) crp->crp_buf;
+	m = crp->crp_buf.cb_mbuf;
 	xd = (struct xform_data *) crp->crp_opaque;
 	CURVNET_SET(xd->vnet);
 	sp = xd->sp;
@@ -1169,7 +1134,7 @@ static struct xformsw ah_xformsw = {
 	.xf_type =	XF_AH,
 	.xf_name =	"IPsec AH",
 	.xf_init =	ah_init,
-	.xf_zeroize =	ah_zeroize,
+	.xf_cleanup =	ah_cleanup,
 	.xf_input =	ah_input,
 	.xf_output =	ah_output,
 };
