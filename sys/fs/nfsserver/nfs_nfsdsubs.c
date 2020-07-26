@@ -1299,8 +1299,8 @@ nfsrv_adj(struct mbuf *mp, int len, int nul)
 			break;
 		m = m->m_next;
 	}
-
 	/* m is now the last mbuf and tlen the total length. */
+
 	if (len >= m->m_len) {
 		/* Need to trim away the last mbuf(s). */
 		i = tlen - len;
@@ -1315,7 +1315,12 @@ nfsrv_adj(struct mbuf *mp, int len, int nul)
 	} else
 		lastlen = m->m_len - len;
 
-	/* Adjust the last mbuf. */
+	/*
+	 * m is now the last mbuf after trimming and its length needs to
+	 * be lastlen.
+	 * Adjust the last mbuf and set cp to point to where nuls must be
+	 * written.
+	 */
 	if ((m->m_flags & M_EXTPG) != 0) {
 		pgno = m->m_epg_npgs - 1;
 		off = (pgno == 0) ? m->m_epg_1st_off : 0;
@@ -1324,6 +1329,8 @@ nfsrv_adj(struct mbuf *mp, int len, int nul)
 			/* Trim this mbuf. */
 			trim = m->m_len - lastlen;
 			while (trim >= plen) {
+				KASSERT(pgno > 0,
+				    ("nfsrv_adj: freeing page 0"));
 				/* Free page. */
 				pg = PHYS_TO_VM_PAGE(m->m_epg_pa[pgno]);
 				vm_page_unwire_noq(pg);
