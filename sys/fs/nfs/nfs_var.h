@@ -410,8 +410,6 @@ void nfsd_init(void);
 int nfsd_checkrootexp(struct nfsrv_descript *);
 void nfsd_getminorvers(struct nfsrv_descript *, u_char *, u_char **, int *,
     u_int32_t *);
-void nfsm_trimtrailing(struct nfsrv_descript *, struct mbuf *,
-    caddr_t, int, int);
 
 /* nfs_clvfsops.c */
 void nfscl_retopts(struct nfsmount *, char *, size_t);
