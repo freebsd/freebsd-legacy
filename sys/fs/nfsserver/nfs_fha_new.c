@@ -43,11 +43,11 @@ static MALLOC_DEFINE(M_NFS_FHA, "NFS FHA", "NFS FHA");
 static void		fhanew_init(void *foo);
 static void		fhanew_uninit(void *foo);
 static rpcproc_t	fhanew_get_procnum(rpcproc_t procnum);
-static int		fhanew_get_fh(uint64_t *fh, int v3,
-			    struct nfsrv_descript *nd);
+static int		fhanew_get_fh(uint64_t *fh, int v3, struct mbuf **md,
+			    caddr_t *dpos);
 static int		fhanew_is_read(rpcproc_t procnum);
 static int		fhanew_is_write(rpcproc_t procnum);
-static int		fhanew_get_offset(struct nfsrv_descript *nd,
+static int		fhanew_get_offset(struct mbuf **md, caddr_t *dpos,
 			    int v3, struct fha_info *info);
 static int		fhanew_no_offset(rpcproc_t procnum);
 static void		fhanew_set_locktype(rpcproc_t procnum,
@@ -164,8 +164,9 @@ fhanew_get_procnum(rpcproc_t procnum)
 }
 
 static int
-fhanew_get_fh(uint64_t *fh, int v3, struct nfsrv_descript *nd)
+fhanew_get_fh(uint64_t *fh, int v3, struct mbuf **md, caddr_t *dpos)
 {
+	struct nfsrv_descript lnd, *nd;
 	uint32_t *tl;
 	uint8_t *buf;
 	uint64_t t;
@@ -173,6 +174,10 @@ fhanew_get_fh(uint64_t *fh, int v3, struct nfsrv_descript *nd)
 
 	error = 0;
 	len = 0;
+	nd = &lnd;
+
+	nd->nd_md = *md;
+	nd->nd_dpos = *dpos;
 
 	if (v3) {
 		NFSM_DISSECT_NONBLOCK(tl, uint32_t *, NFSX_UNSIGNED);
@@ -193,6 +198,9 @@ fhanew_get_fh(uint64_t *fh, int v3, struct nfsrv_descript *nd)
 	*fh = t;
 
 nfsmout:
+	*md = nd->nd_md;
+	*dpos = nd->nd_dpos;
+
 	return (error);
 }
 
@@ -215,13 +223,18 @@ fhanew_is_write(rpcproc_t procnum)
 }
 
 static int
-fhanew_get_offset(struct nfsrv_descript *nd, int v3,
+fhanew_get_offset(struct mbuf **md, caddr_t *dpos, int v3,
     struct fha_info *info)
 {
+	struct nfsrv_descript lnd, *nd;
 	uint32_t *tl;
 	int error;
 
 	error = 0;
+
+	nd = &lnd;
+	nd->nd_md = *md;
+	nd->nd_dpos = *dpos;
 
 	if (v3) {
 		NFSM_DISSECT_NONBLOCK(tl, uint32_t *, 2 * NFSX_UNSIGNED);
@@ -232,6 +245,9 @@ fhanew_get_offset(struct nfsrv_descript *nd, int v3,
 	}
 
 nfsmout:
+	*md = nd->nd_md;
+	*dpos = nd->nd_dpos;
+
 	return (error);
 }
 
@@ -290,13 +306,13 @@ fhanew_set_locktype(rpcproc_t procnum, struct fha_info *info)
 static void
 fha_extract_info(struct svc_req *req, struct fha_info *i)
 {
+	struct mbuf *md;
+	caddr_t dpos;
 	static u_int64_t random_fh = 0;
 	int error;
 	int v3 = (req->rq_vers == 3);
 	rpcproc_t procnum;
-	struct nfsrv_descript lnd, *nd;
 
-	nd = &lnd;
 	/*
 	 * We start off with a random fh.  If we get a reasonable
 	 * procnum, we set the fh.  If there's a concept of offset
@@ -337,17 +353,17 @@ fha_extract_info(struct svc_req *req, struct fha_info *i)
 	error = newnfs_realign(&req->rq_args, M_NOWAIT);
 	if (error)
 		goto out;
-	nd->nd_md = req->rq_args;
-	nd->nd_dpos = mtod(nd->nd_md, char *);
+	md = req->rq_args;
+	dpos = mtod(md, caddr_t);
 
 	/* Grab the filehandle. */
-	error = fhanew_get_fh(&i->fh, v3, nd);
+	error = fhanew_get_fh(&i->fh, v3, &md, &dpos);
 	if (error)
 		goto out;
 
 	/* Content ourselves with zero offset for all but reads. */
 	if (i->read || i->write)
-		fhanew_get_offset(nd, v3, i);
+		fhanew_get_offset(&md, &dpos, v3, i);
 
 out:
 	fhanew_set_locktype(procnum, i);
