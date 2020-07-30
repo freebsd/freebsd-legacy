@@ -6442,9 +6442,14 @@ nfsvno_setxattr(struct vnode *vp, char *name, int len, struct mbuf *m,
 	uiop->uio_td = p;
 	uiop->uio_offset = 0;
 	uiop->uio_resid = len;
-	error = nfsrv_createiovecw(len, m, cp, &iv, &cnt);
-	uiop->uio_iov = iv;
-	uiop->uio_iovcnt = cnt;
+	if (len > 0) {
+		error = nfsrv_createiovecw(len, m, cp, &iv, &cnt);
+		uiop->uio_iov = iv;
+		uiop->uio_iovcnt = cnt;
+	} else {
+		uiop->uio_iov = iv = NULL;
+		uiop->uio_iovcnt = 0;
+	}
 	if (error == 0) {
 		error = VOP_SETEXTATTR(vp, EXTATTR_NAMESPACE_USER, name, uiop,
 		    cred, p);
