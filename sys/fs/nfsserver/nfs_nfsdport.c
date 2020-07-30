@@ -120,8 +120,8 @@ static void nfsrv_pnfsremovesetup(struct vnode *, NFSPROC_T *, struct vnode **,
 static void nfsrv_pnfsremove(struct vnode **, int, char *, fhandle_t *,
     NFSPROC_T *);
 static int nfsrv_proxyds(struct vnode *, off_t, int, struct ucred *,
-    struct thread *, int, struct mbuf **, char *,
-    struct mbuf **, struct nfsvattr *, struct acl *, off_t *, int, bool *);
+    struct thread *, int, struct mbuf **, char *, struct mbuf **,
+    struct nfsvattr *, struct acl *, off_t *, int, bool *);
 static int nfsrv_setextattr(struct vnode *, struct nfsvattr *, NFSPROC_T *);
 static int nfsrv_readdsrpc(fhandle_t *, off_t, int, struct ucred *,
     NFSPROC_T *, struct nfsmount *, struct mbuf **, struct mbuf **);
