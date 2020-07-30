@@ -5611,7 +5611,7 @@ nfsrvd_getxattr(struct nfsrv_descript *nd, __unused int isdgram,
 	if (nd->nd_repstat == 0) {
 		NFSM_BUILD(tl, uint32_t *, NFSX_UNSIGNED);
 		*tl = txdr_unsigned(len);
-		if (mp != NULL) {
+		if (len > 0) {
 			nd->nd_mb->m_next = mp;
 			nd->nd_mb = mpend;
 			if ((mpend->m_flags & M_EXTPG) != 0) {

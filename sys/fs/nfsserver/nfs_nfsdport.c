@@ -6359,21 +6359,28 @@ nfsvno_getxattr(struct vnode *vp, char *name, uint32_t maxresp,
 		return (NFSERR_XATTR2BIG);
 	len = siz;
 	tlen = NFSM_RNDUP(len);
-	/*
-	 * If cnt > MCLBYTES and the reply will not be saved, use
-	 * ext_pgs mbufs for TLS.
-	 * For NFSv4.0, we do not know for sure if the reply will
-	 * be saved, so do not use ext_pgs mbufs for NFSv4.0.
-	 * Always use ext_pgs mbufs if ND_EXTPG is set.
-	 */
-	if ((flag & ND_EXTPG) != 0 || (tlen > MCLBYTES &&
-	    (flag & (ND_TLS | ND_SAVEREPLY)) == ND_TLS &&
-	    (flag & (ND_NFSV4 | ND_NFSV41)) != ND_NFSV4))
-		uiop->uio_iovcnt = nfsrv_createiovec_extpgs(tlen, maxextsiz,
-		    &m, &m2, &iv);
-	else
-		uiop->uio_iovcnt = nfsrv_createiovec(tlen, &m, &m2, &iv);
-	uiop->uio_iov = iv;
+	if (tlen > 0) {
+		/*
+		 * If cnt > MCLBYTES and the reply will not be saved, use
+		 * ext_pgs mbufs for TLS.
+		 * For NFSv4.0, we do not know for sure if the reply will
+		 * be saved, so do not use ext_pgs mbufs for NFSv4.0.
+		 * Always use ext_pgs mbufs if ND_EXTPG is set.
+		 */
+		if ((flag & ND_EXTPG) != 0 || (tlen > MCLBYTES &&
+		    (flag & (ND_TLS | ND_SAVEREPLY)) == ND_TLS &&
+		    (flag & (ND_NFSV4 | ND_NFSV41)) != ND_NFSV4))
+			uiop->uio_iovcnt = nfsrv_createiovec_extpgs(tlen,
+			    maxextsiz, &m, &m2, &iv);
+		else
+			uiop->uio_iovcnt = nfsrv_createiovec(tlen, &m, &m2,
+			    &iv);
+		uiop->uio_iov = iv;
+	} else {
+		uiop->uio_iovcnt = 0;
+		uiop->uio_iov = iv = NULL;
+		m = m2 = NULL;
+	}
 	uiop->uio_offset = 0;
 	uiop->uio_resid = tlen;
 	uiop->uio_rw = UIO_READ;
