@@ -51,7 +51,6 @@ __FBSDID("$FreeBSD$");
 #include <fs/nfs/nfsport.h>
 #include <sys/extattr.h>
 #include <sys/filio.h>
-#include <rpc/rpcsec_tls.h>
 
 /* Global vars */
 extern u_int32_t newnfs_false, newnfs_true;

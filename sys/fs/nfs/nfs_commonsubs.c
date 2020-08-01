@@ -4845,8 +4845,7 @@ nfsv4_findmirror(struct nfsmount *nmp)
 }
 
 /*
- * Fill in the fields of "struct nfsrv_descript" for a new ext_pgs mbuf.
- * The build argument is true for build and false for dissect.
+ * Fill in the fields of "struct nfsrv_descript".
  */
 void
 nfsm_set(struct nfsrv_descript *nd, u_int offs)

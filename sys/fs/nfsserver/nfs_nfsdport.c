@@ -52,7 +52,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/sysctl.h>
 #include <nlm/nlm_prot.h>
 #include <nlm/nlm.h>
-#include <rpc/rpcsec_tls.h>
 
 FEATURE(nfsd, "NFSv4 server");
 
@@ -3281,7 +3280,7 @@ nfsd_fhtovp(struct nfsrv_descript *nd, struct nfsrvfh *nfp, int lktype,
 	if (!nd->nd_repstat && exp->nes_exflag == 0 &&
 	    !(nd->nd_flag & ND_NFSV4)) {
 		vput(*vpp);
-		nd->nd_repstat = NFSERR_ACCES;
+		nd->nd_repstat = EACCES;
 	}
 
 	/*
@@ -5264,8 +5263,6 @@ nfsrv_writedsdorpc(struct nfsmount *nmp, fhandle_t *fhp, off_t off, int len,
 
 	/* Put data in mbuf chain. */
 	nd->nd_mb->m_next = m;
-	if ((m->m_flags & M_EXTPG) != 0)
-		nd->nd_flag |= ND_EXTPG;
 
 	/* Set nd_mb and nd_bpos to end of data. */
 	while (m->m_next != NULL)

@@ -1810,8 +1810,7 @@ nfsrpc_writerpc(vnode_t vp, struct uio *uiop, int *iomode,
 	while (tsiz > 0) {
 		*attrflagp = 0;
 		len = (tsiz > wsize) ? wsize : tsiz;
-		nfscl_reqstart(nd, NFSPROC_WRITE, nmp, np->n_fhp->nfh_fh,
-		    np->n_fhp->nfh_len, NULL, NULL, 0, 0, false);
+		NFSCL_REQSTART(nd, NFSPROC_WRITE, vp);
 		if (nd->nd_flag & ND_NFSV4) {
 			nfsm_stateidtom(nd, stateidp, NFSSTATEID_PUTSTATEID);
 			NFSM_BUILD(tl, u_int32_t *, NFSX_HYPER+2*NFSX_UNSIGNED);
@@ -8464,17 +8463,10 @@ nfsrpc_setextattr(vnode_t vp, const char *name, struct uio *uiop,
 	int error;
 	struct nfsrv_descript nfsd;
 	struct nfsrv_descript *nd = &nfsd;
-	struct nfsmount *nmp = VFSTONFS(vp->v_mount);
 	nfsattrbit_t attrbits;
-	bool use_ext;
 
 	*attrflagp = 0;
-	use_ext = false;
-	if (uiop->uio_resid > MCLBYTES && NFSHASTLS(nmp))
-		use_ext = true;
-	nfscl_reqstart(nd, NFSPROC_SETEXTATTR, nmp,
-	    VTONFS(vp)->n_fhp->nfh_fh, VTONFS(vp)->n_fhp->nfh_len, NULL,
-	    NULL, 0, 0, use_ext);
+	NFSCL_REQSTART(nd, NFSPROC_SETEXTATTR, vp);
 	if (uiop->uio_resid > nd->nd_maxreq) {
 		/* nd_maxreq is set by NFSCL_REQSTART(). */
 		m_freem(nd->nd_mreq);
