@@ -42,7 +42,6 @@
 # collapse.sh	panic: freeing mapped page 0xfffffe0028ed1d50		20200106
 # dd.sh		CAM stuck in vmwait					20200116
 # devfs4.sh	WiP							20181031
-# force.sh	WiP							20200303
 # force2.sh	WiP							20200303
 # force3.sh	WiP							20200303
 # force4.sh	Known issue						20200303
@@ -88,7 +87,6 @@
 # quota6.sh	panic: softdep_deallocate_dependencies: unrecovered ...	20130206
 # quota7.sh	panic: dqflush: stray dquot				20120221
 # rename14.sh	mark136.txt						20200525
-# sctp.sh	WiP							20200307
 # sctp2.sh	panic: soclose: SS_NOFDREF on enter			20200307
 # sctp3.sh	WiP							20190809
 # sendfile25.sh	WiP							20200611
@@ -102,12 +100,13 @@
 # swapoff2.sh	swap_pager_force_pagein: read from swap failed		20171223
 # systrace.sh	WiP							20200227
 # systrace2.sh	WiP							20200227
-# syzkaller11.sh	WiP						20200419
-# syzkaller13.sh	WiP						20200607
-# syzkaller15.sh	WiP						20200617
+# syzkaller11.sh	WiP						20200721
+# syzkaller15.sh	WiP						20200712
 # syzkaller16.sh	WiP						20200620
 # syzkaller17.sh	WiP						20200630
 # syzkaller18.sh	WiP						20200630
+# syzkaller19.sh	WiP						20200712
+# syzkaller20.sh	WiP						20200730
 # ucom.sh	Stuck in tail -F					20180129
 # umountf7.sh	panic: handle_written_inodeblock: live inodedep ...	20190219
 # umountf9.sh	panic: handle_written_inodeblock: live inodedep ...	20170221
