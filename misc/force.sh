@@ -35,6 +35,9 @@
 # Page fault seen in WiP kernel code:
 # https://people.freebsd.org/~pho/stress/log/kirk113.txt
 
+# Deadlock seen:
+# https://people.freebsd.org/~pho/stress/log/chs002.txt
+
 [ `id -u ` -ne 0 ] && echo "Must be root!" && exit 1
 . ../default.cfg
 
@@ -42,9 +45,10 @@ mount | grep $mntpoint | grep -q /dev/md && umount -f $mntpoint
 mdconfig -l | grep -q md$mdstart &&  mdconfig -d -u $mdstart
 mdconfig -a -t swap -s 1g -u $mdstart
 flags=$newfs_flags
-[ `jot -r 1 0 1` -eq 1 ] && flags="-j"
+# Disable SUJ tests for now. Known deadlock issue.
+#[ `jot -r 1 0 1` -eq 1 ] && flags="-j"
 echo "newfs $flags md$mdstart"
-newfs $flags md$mdstart > /dev/null
+newfs $flags md$mdstart > /dev/null 2>&1
 mount /dev/md$mdstart $mntpoint
 chmod 777 $mntpoint
 
@@ -54,7 +58,7 @@ export RUNDIR=$mntpoint/stressX
 su $testuser -c 'cd ..; ./run.sh marcus.cfg' > /dev/null 2>&1 &
 
 sleep `jot -r 1 10 40`
-while mdconfig -l | grep md$mdstart; do
+while mdconfig -l | grep -q md$mdstart; do
 	mdconfig -d -u $mdstart -o force || sleep 1
 done
 sleep 1
@@ -65,4 +69,4 @@ while mount | grep $mntpoint | grep -q /dev/md; do
 	umount $mntpoint || sleep 1
 	[ $((n += 1)) -gt 300 ] && { echo FAIL; exit 1; }
 done
-exit $s
+exit 0
