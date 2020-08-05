@@ -104,9 +104,8 @@
 # syzkaller15.sh	WiP						20200712
 # syzkaller16.sh	WiP						20200620
 # syzkaller17.sh	WiP						20200630
-# syzkaller18.sh	WiP						20200630
 # syzkaller19.sh	WiP						20200712
-# syzkaller20.sh	WiP						20200730
+# syzkaller21.sh	WiP						20200804
 # ucom.sh	Stuck in tail -F					20180129
 # umountf7.sh	panic: handle_written_inodeblock: live inodedep ...	20190219
 # umountf9.sh	panic: handle_written_inodeblock: live inodedep ...	20170221
