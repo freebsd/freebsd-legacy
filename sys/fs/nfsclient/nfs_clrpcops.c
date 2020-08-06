@@ -45,14 +45,12 @@ __FBSDID("$FreeBSD$");
  */
 
 #include "opt_inet6.h"
-#include "opt_kern_tls.h"
 
 #include <fs/nfs/nfsport.h>
 #include <fs/nfsclient/nfs.h>
 #include <sys/extattr.h>
 #include <sys/sysctl.h>
 #include <sys/taskqueue.h>
-#include <rpc/rpcsec_tls.h>
 
 SYSCTL_DECL(_vfs_nfs);
 
