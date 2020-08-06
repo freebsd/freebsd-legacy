@@ -319,7 +319,6 @@ void nfscl_fillsattr(struct nfsrv_descript *, struct vattr *,
 void newnfs_init(void);
 int nfsaddr_match(int, union nethostaddr *, NFSSOCKADDR_T);
 int nfsaddr2_match(NFSSOCKADDR_T, NFSSOCKADDR_T);
-struct mbuf *nfsm_add_ext_pgs(struct mbuf *, int, int *);
 int nfsm_strtom(struct nfsrv_descript *, const char *, int);
 int nfsm_mbufuio(struct nfsrv_descript *, struct uio *, int);
 int nfsm_fhtom(struct nfsrv_descript *, u_int8_t *, int, int);

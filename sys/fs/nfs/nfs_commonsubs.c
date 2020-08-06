@@ -49,7 +49,6 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/extattr.h>
 
-#include <rpc/krpc.h>
 #include <rpc/rpcsec_tls.h>
 
 #include <security/mac/mac_framework.h>
