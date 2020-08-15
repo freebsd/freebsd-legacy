@@ -94,6 +94,7 @@ umount $mntpoint
 
 gnop destroy /dev/md$mdstart.nop
 mdconfig -d -u $mdstart
+rm $dir/sendfile18
 [ $notloaded ] && gnop unload
 
 exit 0
