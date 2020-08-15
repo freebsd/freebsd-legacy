@@ -68,6 +68,7 @@
 # $FreeBSD$
 
 # Reproduced on r361889
+# Fixed by r363682
 
 [ `uname -p` = "i386" ] && exit 0
 
@@ -242,8 +243,9 @@ mycc -o /tmp/syzkaller13 -Wall -Wextra -O2 /tmp/syzkaller13.c -lpthread ||
 (cd ../testcases/swap; ./swap -t 1m -i 20 -h > /dev/null 2>&1) &
 (cd /tmp; ./syzkaller13) &
 sleep 60
-pkill -9 syzkaller13 swap
+while pkill swap; do sleep .1; done
+pkill -9 syzkaller13
 wait
 
-rm -f /tmp/syzkaller13 /tmp/syzkaller13.c /tmp/syzkaller13.core /tmp/file0
+rm -f /tmp/syzkaller13 /tmp/syzkaller13.* /tmp/file0
 exit 0
