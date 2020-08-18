@@ -322,15 +322,12 @@ static int nfs_bigrequest[NFSV42_NPROCS] = {
 void
 nfscl_reqstart(struct nfsrv_descript *nd, int procnum, struct nfsmount *nmp,
     u_int8_t *nfhp, int fhlen, u_int32_t **opcntpp, struct nfsclsession *sep,
-    int vers, int minorvers, bool use_ext)
+    int vers, int minorvers)
 {
 	struct mbuf *mb;
 	u_int32_t *tl;
 	int opcnt;
 	nfsattrbit_t attrbits;
-#ifdef KERN_TLS
-	u_int maxlen;
-#endif
 
 	/*
 	 * First, fill in some of the fields of nd.
@@ -359,29 +356,17 @@ nfscl_reqstart(struct nfsrv_descript *nd, int procnum, struct nfsmount *nmp,
 	nd->nd_procnum = procnum;
 	nd->nd_repstat = 0;
 	nd->nd_maxextsiz = 0;
-#ifdef KERN_TLS
-	if (use_ext && rpctls_getinfo(&maxlen, false, false)) {
-		nd->nd_flag |= ND_EXTPG;
-		nd->nd_maxextsiz = maxlen;
-	}
-#endif
 
 	/*
 	 * Get the first mbuf for the request.
 	 */
-	if ((nd->nd_flag & ND_EXTPG) != 0) {
-		mb = mb_alloc_ext_plus_pages(PAGE_SIZE, M_WAITOK);
-		nd->nd_mreq = nd->nd_mb = mb;
-		nfsm_set(nd, 0);
-	} else {
-		if (nfs_bigrequest[procnum])
-			NFSMCLGET(mb, M_WAITOK);
-		else
-			NFSMGET(mb);
-		mb->m_len = 0;
-		nd->nd_mreq = nd->nd_mb = mb;
-		nd->nd_bpos = mtod(mb, char *);
-	}
+	if (nfs_bigrequest[procnum])
+		NFSMCLGET(mb, M_WAITOK);
+	else
+		NFSMGET(mb);
+	mb->m_len = 0;
+	nd->nd_mreq = nd->nd_mb = mb;
+	nd->nd_bpos = mtod(mb, char *);
 	
 	/*
 	 * And fill the first file handle into the request.

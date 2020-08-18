@@ -520,7 +520,11 @@ vnode_pager_setsize(struct vnode *vp, vm_ooffset_t nsize)
 		vm_page_xunbusy(m);
 	}
 out:
+#if defined(__powerpc__) && !defined(__powerpc64__)
 	object->un_pager.vnp.vnp_size = nsize;
+#else
+	atomic_store_64(&object->un_pager.vnp.vnp_size, nsize);
+#endif
 	object->size = nobjsize;
 	VM_OBJECT_WUNLOCK(object);
 }
@@ -1307,7 +1311,7 @@ vnode_pager_generic_putpages(struct vnode *vp, vm_page_t *ma, int bytecount,
 	 * the last page is partially invalid.  In this case the filesystem
 	 * may not properly clear the dirty bits for the entire page (which
 	 * could be VM_PAGE_BITS_ALL due to the page having been mmap()d).
-	 * With the page locked we are free to fix-up the dirty bits here.
+	 * With the page busied we are free to fix up the dirty bits here.
 	 *
 	 * We do not under any circumstances truncate the valid bits, as
 	 * this will screw up bogus page replacement.

@@ -3328,6 +3328,9 @@ uma_zalloc_smr(uma_zone_t zone, int flags)
 	uma_cache_bucket_t bucket;
 	uma_cache_t cache;
 
+	KASSERT((flags & M_WAITOK) == 0 || THREAD_CAN_SLEEP(),
+	    ("uma_zalloc_smr(M_WAITOK) in non-sleepable context"));
+
 #ifdef UMA_ZALLOC_DEBUG
 	void *item;
 
@@ -3351,6 +3354,9 @@ uma_zalloc_arg(uma_zone_t zone, void *udata, int flags)
 {
 	uma_cache_bucket_t bucket;
 	uma_cache_t cache;
+
+	KASSERT((flags & M_WAITOK) == 0 || THREAD_CAN_SLEEP(),
+	    ("uma_zalloc(M_WAITOK) in non-sleepable context"));
 
 	/* Enable entropy collection for RANDOM_ENABLE_UMA kernel option */
 	random_harvest_fast_uma(&zone, sizeof(zone), RANDOM_UMA);
@@ -3429,12 +3435,6 @@ cache_alloc(uma_zone_t zone, uma_cache_t cache, void *udata, int flags)
 		bucket_free(zone, bucket, udata);
 	}
 
-	/* Short-circuit for zones without buckets and low memory. */
-	if (zone->uz_bucket_size == 0 || bucketdisable) {
-		critical_enter();
-		return (false);
-	}
-
 	/*
 	 * Attempt to retrieve the item from the per-CPU cache has failed, so
 	 * we must go back to the zone.  This requires the zdom lock, so we
@@ -3449,11 +3449,12 @@ cache_alloc(uma_zone_t zone, uma_cache_t cache, void *udata, int flags)
 	    VM_DOMAIN_EMPTY(domain))
 		domain = zone_domain_highest(zone, domain);
 	bucket = cache_fetch_bucket(zone, cache, domain);
-	if (bucket == NULL) {
+	if (bucket == NULL && zone->uz_bucket_size != 0 && !bucketdisable) {
 		bucket = zone_alloc_bucket(zone, udata, domain, flags);
 		new = true;
-	} else
+	} else {
 		new = false;
+	}
 
 	CTR3(KTR_UMA, "uma_zalloc: zone %s(%p) bucket zone returned %p",
 	    zone->uz_name, zone, bucket);
@@ -4336,24 +4337,6 @@ cache_free(uma_zone_t zone, uma_cache_t cache, void *udata, void *item,
 		cache_bucket_load_free(cache, bucket);
 
 	return (true);
-}
-
-void
-uma_zfree_domain(uma_zone_t zone, void *item, void *udata)
-{
-
-	/* Enable entropy collection for RANDOM_ENABLE_UMA kernel option */
-	random_harvest_fast_uma(&zone, sizeof(zone), RANDOM_UMA);
-
-	CTR2(KTR_UMA, "uma_zfree_domain zone %s(%p)", zone->uz_name, zone);
-
-	KASSERT(curthread->td_critnest == 0 || SCHEDULER_STOPPED(),
-	    ("uma_zfree_domain: called with spinlock or critical section held"));
-
-        /* uma_zfree(..., NULL) does nothing, to match free(9). */
-        if (item == NULL)
-                return;
-	zone_free_item(zone, item, udata, SKIP_NONE);
 }
 
 static void
