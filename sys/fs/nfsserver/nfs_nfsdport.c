@@ -3561,11 +3561,11 @@ nfsvno_v4rootexport(struct nfsrv_descript *nd)
 	}
 
 	/* And set ND_EXxx flags for TLS. */
-	if ((exflags & MNTEX_TLS) != 0) {
+	if ((exflags & MNT_EXTLS) != 0) {
 		nd->nd_flag |= ND_EXTLS;
-		if ((exflags & MNTEX_TLSCERT) != 0)
+		if ((exflags & MNT_EXTLSCERT) != 0)
 			nd->nd_flag |= ND_EXTLSCERT;
-		if ((exflags & MNTEX_TLSCERTUSER) != 0)
+		if ((exflags & MNT_EXTLSCERTUSER) != 0)
 			nd->nd_flag |= ND_EXTLSCERTUSER;
 	}
 
