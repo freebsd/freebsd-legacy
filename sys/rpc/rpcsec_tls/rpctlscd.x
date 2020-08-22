@@ -27,7 +27,7 @@
 
 /* Modified from gssd.x for the client side of RPC-over-TLS. */
 
-/* $FreeBSD:$ */
+/* $FreeBSD$ */
 
 struct rpctlscd_connect_res {
 	uint32_t reterr;
