@@ -323,7 +323,7 @@ move(void *arg)
 	while (active >= MAXTHREADS)
 		usleep(100000);
 	active++;
-	num = (int)arg;
+	num = (int)(long)arg;
 
 	sprintf(ifile, "%s/f%06d.%06d", fromdir, getpid(), num);
 	writer(ifile);
