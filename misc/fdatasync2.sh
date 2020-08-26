@@ -61,9 +61,6 @@ exit $e
 EOF
 #include <sys/param.h>
 #include <sys/resource.h>
-#include <sys/socket.h>
-#include <sys/stat.h>
-#include <sys/wait.h>
 
 #include <err.h>
 #include <errno.h>
