@@ -156,7 +156,7 @@ zfs_mount_tree() {
 	_mount="/${zfs_mount}/${rev}-${arch}-${kernel}-${type}"
 	_target="${zfs_parent}/${rev}-${arch}-${kernel}-${type}-${_tree}"
 	info "Cloning ${_clone}@clone to ${_target}"
-	zfs clone -p -o mountpoint=${_mount}/usr/${_tree} \
+	zfs clone -p -o atime=off -o mountpoint=${_mount}/usr/${_tree} \
 		${_clone}@clone ${_target}
 	unset _clone _mount _target _tree _seedmount _seedtarget
 }
@@ -176,7 +176,7 @@ zfs_mount_src() {
 	_seedmount=${chroots}/${rev}/${arch}/${type}
 	_seedtarget="${zfs_parent}/${rev}-${arch}-${type}-chroot"
 	info "Creating ${_seedtarget} from ${_clone}"
-	zfs clone -p -o mountpoint=${_seedmount} \
+	zfs clone -p -o atime=off -o mountpoint=${_seedmount} \
 		${_clone}@clone ${_seedtarget}
 	unset _clone _mount _target _tree _seedmount _seedtarget
 }
@@ -561,7 +561,8 @@ zfs_clone_chroots() {
 	_build="${rev}-${arch}-${kernel}-${type}"
 	_dest="${__WRKDIR_PREFIX}/${_build}"
 	info "Cloning ${_chrootarch} world to ${zfs_parent}/${_build}"
-	zfs clone -p -o mountpoint=${_dest} ${_clone}@clone ${zfs_parent}/${_build}
+	zfs clone -p -o atime=off -o mountpoint=${_dest} \
+		${_clone}@clone ${zfs_parent}/${_build}
 	unset _clone _mount _build _dest
 
 	return 0
@@ -584,7 +585,9 @@ build_chroots() {
 	_objdir="${chroots}/${rev}-obj/${_chrootarch}/${type}"
 	mkdir -p "${_srcdir}"
 	mkdir -p "${_objdir}"
-	zfs clone -p -o mountpoint=$(realpath ${_srcdir}) ${zfs_parent}/${rev}-src-${type}@clone ${zfs_parent}$(realpath ${_srcdir}) || exit 1
+	zfs clone -p -o atime=off -o mountpoint=$(realpath ${_srcdir}) \
+		${zfs_parent}/${rev}-src-${type}@clone \
+		${zfs_parent}$(realpath ${_srcdir}) || exit 1
 	info "Building $(realpath ${_srcdir}) world"
 	env MAKEOBJDIRPREFIX=${_objdir} \
 		make -C ${_srcdir} ${WORLD_FLAGS} \
