@@ -16,8 +16,10 @@ awkward, but hopefully this lists all the steps.
     burned onto a DVD. (I haven't done other types of installs, but there
     are several others.)
   - Burn the iso onto a DVD (or whatever).
-  - Install it on a 64bit x86 system. When it asks, include installation
-    of src.
+  - Install it on a 64bit x86 system.
+If the 6digit number is 364898 or higher, the kernel sources and /usr/include
+should be sufficiently up to date. If not, you will need to get newer sources
+via "svn" and symbolically link the directories into /usr/include.
 
 (For here on, you might as well login as root.)
 Now, you will need a subversion client on some machine. If you do not
@@ -25,7 +27,8 @@ already have one, log into the newly installed FreeBSD system and
 # pkg install subversion
 - It will probably ask you to install "pkg" first and then it should work.
 
-If you don't yet have /usr/src, you can use "svn" to get it:
+If your version is less than 364898 or if you do not already have them,
+you will need to get up-to-date sources via "svn":
 # cd /usr/src
 # svn checkout http://svn.freebsd.org/base/head .
 
@@ -35,28 +38,30 @@ Use "svn" to download the modified sources into /usr/nfs-over-tls.
 # cd nfs-over-tls
 # svn checkout http://svn.freebsd.org/base/projects/nfs-over-tls .
 
-Now, you can build/install the modified kernel. Here's the "cheater" way
-I do it.
+Now, you can build/install the modified kernel.
 
 If the src.*.mk files are missing from /usr/share/mk...
 # cd /usr/share/mk
 # tar xf /usr/nfs-over-tls/sharemk.tar
 
 Set up the kernel source tree.
+# cd /usr/src/sys/amd64/conf
+- edit GENERIC and add a line
+options	KERN_TLS
+to it.
 # cd /usr/src
-# mv sys sys.old
-# ln -s /usr/nfs-over-tls/sys sys
 # make buildkernel
 # make installkernel
 
 Fix the include files. Here's my "cheat" way of doing this.
+(This is needed if your installed system is prior to 364898.)
 # cd /usr/include
 # mv sys sys.old
-# ln -s /usr/nfs-over-tls/sys/sys sys
+# ln -s /usr/src/sys/sys sys
 # mv fs fs.old
-# ln -s /usr/nfs-over-tls/sys/fs fs
+# ln -s /usr/src/sys/fs fs
 # mv netinet netinet.old
-# ln -s /usr/nfs-over-tls/sys/netinet netinet
+# ln -s /usr/src/sys/netinet netinet
 - This should be enough to allow userspace building.
 
 Now, you need jhb@'s patched openssl3 source tree, so you can build it.
@@ -104,14 +109,15 @@ And now you should be able to build/install the utilities.
 # cp mountd /usr/sbin
 # cp exports.5.gz /usr/share/man/man5
 
+You can copy the rc.d scripts as follows:
+# cd /usr/nfs-over-tls/rc.d
+# cp rpctlscd rpctlssd /etc/rc.d
+
 Almost done. Here's a few more things you need to do:
 # cd /etc
 - edit sysctl.conf and add these two lines
 kern.ipc.tls.enable=1
 kern.ipc.mb_use_ext_pgs=1
-- edit rc.conf and add this line (if you already have a line for ldconfig_paths,
-   add /usr/ktls/lib to the line)
-ldconfig_paths="/usr/lib/compat /usr/local/lib /usr/local/lib/compat/pkg /usr/ktls/lib"
 Then reboot the system.
 
 You should now be finally ready to configure and run a TLS mount.
@@ -343,3 +349,14 @@ If you use either the "-m" and/or "-v" options, you probably want to
 modify your /etc/syslog.conf so that "LOG_INFO | LOG_DAEMON" goes somewhere.
 For "-m" it will log failed certificate verifications there and for "-v"
 it will log a lot of other stuff, as well.
+
+Once you have set things up, you can add line(s) to your /etc/rc.conf
+for the daemon(s):
+For the client:
+rpctlscd_enable="YES"
+
+For the server:
+rpctlssd_enable="YES"
+
+- plus rpctlscd_flags and/or rpctlssd_flags if you are using command line
+  options for these (see below).
