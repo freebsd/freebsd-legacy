@@ -14,13 +14,6 @@ desc="NFS over TLS client side daemon"
 rcvar="rpctlscd_enable"
 command="/usr/sbin/${name}"
 pidfile="/var/run/${name}.pid"
-start_precmd="rpctlscd_precmd"
-
-rpctlscd_precmd()
-{
-	# If this load fails, TLS should still work, just more slowly.
-	kldload -n -q aesni.ko
-}
 
 load_rc_config $name
 

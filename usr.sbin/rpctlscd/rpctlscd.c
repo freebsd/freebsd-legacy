@@ -144,6 +144,10 @@ main(int argc, char **argv)
 		if (kldload("ktls_ocf") < 0 || modfind("ktls_ocf") < 0)
 			errx(1, "Cannot load ktls_ocf");
 	}
+	if (modfind("aesni") < 0) {
+		/* Not present in kernel, try loading it */
+		kldload("aesni");
+	}
 
 	/* Get the time when this daemon is started. */
 	gettimeofday(&tm, &tz);

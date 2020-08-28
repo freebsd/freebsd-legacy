@@ -16,13 +16,6 @@ command="/usr/sbin/${name}"
 pidfile="/var/run/${name}.pid"
 required_files="/etc/rpctlssd/cert.pem /etc/rpctlssd/key.pem"
 extra_commands="reload"
-start_precmd="rpctlssd_precmd"
-
-rpctlssd_precmd()
-{
-	# If this load fails, TLS should still work, just more slowly.
-	kldload -n -q aesni.ko
-}
 
 
 load_rc_config $name
