@@ -212,10 +212,10 @@ to nfsv4-server.uoguelph.ca and the other to nfsv4-server2.uoguelph.ca
 
 For a client where you wish all RPCs to be done as the user rmacklem
 on the above server:
-# openssl req -new -key key.pem -addext "subjectAltName=otherName:1.2.3.4.6.9;UTF8:rmacklem@uoguelph.ca" -out req.pem
+# openssl req -new -key key.pem -addext "subjectAltName=otherName:1.3.6.1.4.1.2238.1.1.1;UTF8:rmacklem@uoguelph.ca" -out req.pem
 
 For a client similar to the above, but has a FQDN of nfsv4-client.uoguelph.ca:
-# openssl req -new -key key.pem -addext "subjectAltName=DNS:nfsv4-client.uoguelph.ca,othername:1.2.3.4.6.9;UTF8:rmacklem@uoguelph.ca" -out req.pem
+# openssl req -new -key key.pem -addext "subjectAltName=DNS:nfsv4-client.uoguelph.ca,othername:1.3.6.1.4.1.2238.1.1.1;UTF8:rmacklem@uoguelph.ca" -out req.pem
 
 If you want to look at the CSR:
 # openssl req -in req.pem -noout -text

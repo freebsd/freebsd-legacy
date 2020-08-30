@@ -94,7 +94,7 @@ static uint64_t		rpctls_ssl_usec = 0;
 static bool		rpctls_gothup = false;
 static bool		rpctls_cnuser = false;
 static char		*rpctls_dnsname;
-static const char	*rpctls_cnuseroid = "1.2.3.4.6.9";
+static const char	*rpctls_cnuseroid = "1.3.6.1.4.1.2238.1.1.1";
 
 /*
  * A linked list of all current "SSL *"s and socket "fd"s

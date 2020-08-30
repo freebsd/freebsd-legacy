@@ -75,7 +75,7 @@ The
 option in the
 .Xr exports 5
 file specifies that the client must provide a certificate
-that verifies and has a otherName:1.2.3.4.6.9;UTF8: field of
+that verifies and has a otherName:1.3.6.1.4.1.2238.1.1.1;UTF8: field of
 subjectAltName of the form
 .Dq user@dns_domain
 that maps to a <uid, gid_list>.
@@ -237,7 +237,7 @@ have been specified.
 .It Fl u
 This option specifies that if the client provides a certificate
 that both verifies and has a subjectAltName with an otherName of the form
-.Dq otherName:1.2.3.4.6.9;UTF8:user@dns_domain
+.Dq otherName:1.3.6.1.4.1.2238.1.1.1;UTF8:user@dns_domain
 the daemon will attempt to map
 .Dq user@dns_domain
 in the above
