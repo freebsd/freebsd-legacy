@@ -93,10 +93,25 @@ zfs_teardown() {
 		done
 	done
 
-	zfs destroy ${zfs_parent}/${r}-amd64-worldseed-snap@clone
-	zfs destroy ${zfs_parent}/${r}-amd64-worldseed-snap
-	zfs destroy ${zfs_parent}/${r}-i386-worldseed-snap@clone
-	zfs destroy ${zfs_parent}/${r}-i386-worldseed-snap
+	# XXX
+	zfs destroy ${zfs_parent}/releng/scripts-${t}shot/chroots
+	zfs destroy ${zfs_parent}/releng/scripts-${t}shot
+	zfs destroy ${zfs_parent}/releng
+	zfs destroy ${zfs_parent}/${r}-ports-${t}@clone
+	zfs destroy ${zfs_parent}/${r}-src-${t}@clone
+	zfs destroy ${zfs_parent}/releng/scripts-${t}shot/chroots/${r}/amd64/snap
+	zfs destroy ${zfs_parent}/releng/scripts-${t}shot/chroots/${r}/amd64
+	zfs destroy ${zfs_parent}/releng/scripts-${t}shot/chroots/${r}
+	zfs destroy ${zfs_parent}/${r}-chroots-${t}
+	zfs destroy ${zfs_parent}/${r}-logs-${t}
+	zfs destroy ${zfs_parent}/${r}-ports-${t}
+	zfs destroy ${zfs_parent}/${r}-src-${t}
+	# XXX
+
+	zfs destroy ${zfs_parent}/${r}-amd64-worldseed-${t}@clone
+	zfs destroy ${zfs_parent}/${r}-amd64-worldseed-${t}
+	zfs destroy ${zfs_parent}/${r}-i386-worldseed-${t}@clone
+	zfs destroy ${zfs_parent}/${r}-i386-worldseed-${t}
 
 	echo -n "ZFS datasets were destroyed.  They will be created"
 	echo " automatically via thermite.sh."
@@ -144,6 +159,7 @@ main() {
 	pfx="==="
 
 	delete_only=1
+	zfs_teardown
 	zfs_teardown
 }
 
