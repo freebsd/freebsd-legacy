@@ -176,6 +176,7 @@ zfs_mount_src() {
 	_seedmount=${chroots}/${rev}/${arch}/${type}
 	_seedtarget="${zfs_parent}/${rev}-${arch}-${type}-chroot"
 	info "Creating ${_seedtarget} from ${_clone}"
+	zfs snapshot ${_clone}@clone
 	zfs clone -p -o atime=off -o mountpoint=${_seedmount} \
 		${_clone}@clone ${_seedtarget}
 	unset _clone _mount _target _tree _seedmount _seedtarget
@@ -188,7 +189,7 @@ zfs_create_tree() {
 	[ ! -z $(eval echo \${zfs_${_tree}_seed_${rev}_${type}}) ] && return 0
 	case ${_tree} in
 		src)
-			_gitsrc="${GITROOT}/${GITSRC}"
+			return 0
 			;;
 		doc)
 			[ ! -z ${NODOC} ] && return 0
