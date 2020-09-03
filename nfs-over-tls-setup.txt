@@ -90,28 +90,18 @@ Now, you need to patch the include files in /usr/ktls/include/openssl.
 # patch -p0 < /usr/nfs-over-tls/openssl3.patch
 
 And now you should be able to build/install the utilities.
-(You'll get warnings about SSL_CTX_load_verify_locations() deprecated.
- Thats ok for now.)
-# cd /usr/nfs-over-tls/usr.sbin/rpctlssd
+# cd /usr/nfs-over-tls/usr.sbin/rpc.tlsservd
 # make SRCTOP=/usr/nfs-over-tls
-# cp rpctlssd /usr/sbin
-# cp rpctlssd.8.gz /usr/share/man/man8
-# cd ../rpctlscd
+# cp rpc.tlsservd /usr/sbin
+# cp rpc.tlsservd.8.gz /usr/share/man/man8
+# cd ../rpc.tlsclntd
 # make SRCTOP=/usr/nfs-over-tls
-# cp rpctlscd /usr/sbin
-# cp rpctlscd.8.gz /usr/share/man/man8
-# cd /usr/nfs-over-tls
-# mkdir sbin
-# cd sbin
-# ln -s /usr/src/sbin/mount mount
-# cd /usr/nfs-over-tls/usr.sbin/mountd
-# make SRCTOP=/usr/nfs-over-tls
-# cp mountd /usr/sbin
-# cp exports.5.gz /usr/share/man/man5
+# cp rpc.tlsclntd /usr/sbin
+# cp rpc.tlsclntd.8.gz /usr/share/man/man8
 
 You can copy the rc.d scripts as follows:
 # cd /usr/nfs-over-tls/rc.d
-# cp rpctlscd rpctlssd /etc/rc.d
+# cp tlsclntd tlsservd /etc/rc.d
 
 Almost done. Here's a few more things you need to do:
 # cd /etc
@@ -128,7 +118,7 @@ First, a bit of background. NFS-over-TLS uses the KERNEL_TLS and
 will only work on architectures that support a direct map, such
 as amd64 (not i386).
 Then daemons must be running on the NFS server(s) and NFS client(s)
-for NFS-over-TLS to work. rpctlssd(8) for the server(s) and rpctlscd(8)
+for NFS-over-TLS to work. rpc.tlsservd(8) for the server(s) and rpc.tlsclntd(8)
 for the client(s).
 Then you will have to create x509 certificate for at least the NFS
 server(s) and, optionally, some or all of the NFS clients.
@@ -183,7 +173,7 @@ Now, you should be ready to create/sign certificates for the NFS server/client(s
 (If this certificate is for a client laptop, you might want to use the "-aes256"
  option, so the key.pem file is encrypted using a passphrase.
  This implies that the passphrase will need to be entered when the
- rpctlscd(8) daemon is started on the client, but that the key cannot
+ rpc.tlsclntd(8) daemon is started on the client, but that the key cannot
  be used without the passphrase, if it is compromised.)
 
 4 - Create a Certificate Signing Request (CSR).
@@ -226,7 +216,7 @@ If you want to look at the CSR:
  name <serial#>.pem.)
 
 You can now copy key.pem and cert.pem to the directory
-/etc/rpctlssd on the server(s) or /etc/rpctlscd on the client(s).
+/etc/rpc.tlsservd on the server(s) or /etc/rpc.tlsclntd on the client(s).
 
 If you want to look at any certificate, you can use the command...
 # openssl x509 -in cert.pem -noout -text
@@ -238,7 +228,7 @@ If you want certificates for clients, just repeat #3-5 for each of them.
 If you have created certificates for any of your NFS client(s), you
 probably want to create a Certificate Revocation List (CRL) as well.
 The initial file will not have any revocations in it, but can be
-provided to either/both of the rpctlssd(8) and rpctlscd(8) daemons,
+provided to either/both of the rpc.tlsservd(8) and rpc.tlsclntd(8) daemons,
 then it can be reloaded by posting a SIGHUP to the daemon(s) when
 updated.  This avoids restarting the daemon(s), which is not a good
 thing to do while there are NFS-over-TLS mount(s) to the NFS server.
@@ -264,9 +254,9 @@ of its identity to allow it to do an NFS mount from any IP address.
 For this case, you can also set the otherName field of the
 subjectAltName to "user@dns_domain" so that all RPCs will be
 performed on the server as "user", if you specify the "-u"
-command line option for the rpctlssd(8) daemon on the NFS server.
+command line option for the rpc.tlsservd(8) daemon on the NFS server.
 (If you do not want this feature simply do not set the otherName
- field of subjectAltName or do not set "-u" on the rpctlssd(8) daemon.)
+ field of subjectAltName or do not set "-u" on the rpc.tlsservd(8) daemon.)
 
 Another case might be where you do not trust the client to use the
 correct IP address when mounting the NFS server, although the client
@@ -276,74 +266,74 @@ the FQDN of the client and enable the server to check this via
 the "-h" option.
 The FQDN in the client's certificate may have a wildcard "*" in
 it, depending on what command line options are specified for
-the server's rpctlssd.
+the server's rpc.tlsservd.
 
 For client(s) where you find controlling mount access via the
 client's IP address using the exports(5) file is sufficient
 and you are not using the "-u" command line option on the
-server's rpctlssd, the client does not need to have a certificate.
+server's rpc.tlsservd, the client does not need to have a certificate.
 You can still allow/require the client to use TLS so that
 the RPC traffic is encrypted on the wire.
 
-Once you have key(s) and certificate(s) in the /etc/rpctlssd directory
-on the NFS server(s) and in the /etc/rpctlscd directory on
+Once you have key(s) and certificate(s) in the /etc/rpc.tlsservd directory
+on the NFS server(s) and in the /etc/rpc.tlsclntd directory on
 the NFS client(s), you need to set the appropriate command
 line option(s) for the daemons.
 
-The man pages for rpctlscd(8) and rpctlssd(8) cover the command line
+The man pages for rpc.tlsclntd(8) and rpc.tlsservd(8) cover the command line
 options, but here are a few examples.
 
 For an NFS server:
 - An NFS server where no clients have certificates.
-# rpctlssd
+# rpc.tlsservd
 
 - An NFS server where some/all clients have certificates and you wish
   to verify them against your site local CA created above.
-# rpctlssd -m -l /root/demoCA/cacert.pem -r /root/demoCA/crl.pem
+# rpc.tlsservd -m -l /root/demoCA/cacert.pem -r /root/demoCA/crl.pem
 
 - An NFS server where all clients have certificates and
   FQDN names that are in the certificates (in either the subjectAltName DNS
   field or subjectName CN field) and you want to check the client's IP
   address reverse DNS maps to the FQDN. The FQDN in the client's
   certificate cannot have a wildcard "*" in it.
-# rpctlssd -m -h -l /root/demoCA/cacert.pem -r /root/demoCA/crl.pem
+# rpc.tlsservd -m -h -l /root/demoCA/cacert.pem -r /root/demoCA/crl.pem
 
 - Similar to the above, but the FQDN in the client's
   certificate may have a wildcard "*" in it, which will only match a
   single component of the client's reverse DNS name.
   For example, an FQDN set to "*.uoguelph.ca" will match "laptop21.uoguelph.ca",
   but not "laptop3.cis.uoguelph.ca".
-# rpctlssd -m -h -w -l /root/demoCA/cacert.pem -r /root/demoCA/crl.pem
+# rpc.tlsservd -m -h -w -l /root/demoCA/cacert.pem -r /root/demoCA/crl.pem
 
 - Similar to the above, except that a wildcard "*" in the FQDN can match
   multiple fields. For example, if the FQDN is set to "*.uoguelph.ca",
   it would match "laptop3.cis.uoguelph.ca" as well as "laptop21.uoguelph.ca".
-# rpctlssd -m -h -W -l /root/demoCA/cacert.pem -r /root/demoCA/crl.pem
+# rpc.tlsservd -m -h -W -l /root/demoCA/cacert.pem -r /root/demoCA/crl.pem
 
 - An NFS server where some client(s) have certificates with the otherName field
   of the subjectAltName set to "user@dns_domain" and you want those clients
   to use the <uid, gid_list> for "user" in the password database for
   all RPCs on the connection, ignoring the credentials in the RPC header.
-# rpctlssd -m -u -l /root/demoCA/cacert.pem -r /root/demoCA/crl.pem
+# rpc.tlsservd -m -u -l /root/demoCA/cacert.pem -r /root/demoCA/crl.pem
 
 For an NFS client:
 - An NFS client without a certificate.
-# rpctlscd
+# rpc.tlsclntd
 
-- An NFS client with a certificate and key in /etc/rpctlscd on the client
+- An NFS client with a certificate and key in /etc/rpc.tlsclntd on the client
   created by the site local CA above that the server can use for verification.
-# rpctlscd -m
+# rpc.tlsclntd -m
 
 - An NFS client which wants to verify the NFS server's certificate.
   (This requires that the cacert.pem and crl.pem
   be copied onto the client from the CA site.)
   The FQDN in the server's certificate must match the reverse DNS name for
   the server's IP address and there cannot be a wildcard in the FQDN.
-# rpctlscd -l <path of cacert.pem> -r <path of crl.pem>
+# rpc.tlsclntd -l <path of cacert.pem> -r <path of crl.pem>
 
-- An NFS client that has a certificate and key in /etc/rpctlscd and
+- An NFS client that has a certificate and key in /etc/rpc.tlsclntd and
   also wishes to verify the NFS server's certificate as above.
-# rpctlscd -m -l <path of cacert.pem> -r <path of crl.pem>
+# rpc.tlsclntd -m -l <path of cacert.pem> -r <path of crl.pem>
 
 If you use either the "-m" and/or "-v" options, you probably want to
 modify your /etc/syslog.conf so that "LOG_INFO | LOG_DAEMON" goes somewhere.
@@ -353,10 +343,10 @@ it will log a lot of other stuff, as well.
 Once you have set things up, you can add line(s) to your /etc/rc.conf
 for the daemon(s):
 For the client:
-rpctlscd_enable="YES"
+tlsclntd_enable="YES"
 
 For the server:
-rpctlssd_enable="YES"
+tlsservd_enable="YES"
 
-- plus rpctlscd_flags and/or rpctlssd_flags if you are using command line
+- plus tlsclntd_flags and/or tlsservd_flags if you are using command line
   options for these (see below).
