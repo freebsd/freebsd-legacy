@@ -284,6 +284,12 @@ The man pages for rpc.tlsclntd(8) and rpc.tlsservd(8) cover the command line
 options, but here are a few examples.
 
 For an NFS server:
+(Although these examples show the daemons started via a command line, the
+ options should normally be specified via the tls[clnt|serv]d_flags line
+ in /etc/rc.conf and then they are started upon boot.
+ To start them without use of the /etc/rc.d scripts, you will need to
+ add "/usr/ktls/lib" to your ldconfig_paths via rc.conf or similar.
+ Otherwise it will complain it cannot find the correct ssl library.)
 - An NFS server where no clients have certificates.
 # rpc.tlsservd
 
@@ -344,9 +350,11 @@ Once you have set things up, you can add line(s) to your /etc/rc.conf
 for the daemon(s):
 For the client:
 tlsclntd_enable="YES"
+tlsclntd_env="LD_LIBRARY_PATH=/usr/ktls/lib"
 
 For the server:
 tlsservd_enable="YES"
+tlsservd_env="LD_LIBRARY_PATH=/usr/ktls/lib"
 
 - plus tlsclntd_flags and/or tlsservd_flags if you are using command line
   options for these (see below).
