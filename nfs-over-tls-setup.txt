@@ -102,6 +102,7 @@ And now you should be able to build/install the utilities.
 You can copy the rc.d scripts as follows:
 # cd /usr/nfs-over-tls/rc.d
 # cp tlsclntd tlsservd /etc/rc.d
+# chmod 555 /etc/rc.d/tlsclntd /etc/rc.d/tlsservd
 
 Almost done. Here's a few more things you need to do:
 # cd /etc
