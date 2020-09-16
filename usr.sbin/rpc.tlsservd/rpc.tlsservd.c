@@ -1073,6 +1073,9 @@ rpctls_checkcrl(void)
 	X509_REVOKED *revoked;
 	int ret;
 
+	if (rpctls_crlfile == NULL || (rpctls_verify_cafile == NULL &&
+	    rpctls_verify_capath == NULL))
+		return;
 	infile = BIO_new(BIO_s_file());
 	if (infile == NULL) {
 		rpctlssd_verbose_out("rpctls_checkcrl: Cannot BIO_new\n");
