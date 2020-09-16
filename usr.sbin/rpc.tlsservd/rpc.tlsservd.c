@@ -78,6 +78,12 @@ __FBSDID("$FreeBSD$");
 #define	_PREFERRED_CIPHERS	"AES128-GCM-SHA256"
 #endif
 
+/*
+ * How long to delay a reload of the CRL when there are RPC request(s)
+ * to process, in usec.  Must be less than 1second.
+ */
+#define	RELOADDELAY	250000
+
 static struct pidfh	*rpctls_pfh = NULL;
 static int		rpctls_debug_level;
 static bool		rpctls_verbose;
@@ -108,7 +114,9 @@ struct ssl_entry {
 	LIST_ENTRY(ssl_entry)	next;
 	uint64_t		refno;
 	int			s;
+	bool			shutoff;
 	SSL			*ssl;
+	X509			*cert;
 };
 static struct ssl_list	rpctls_ssllist;
 
@@ -116,7 +124,7 @@ static void		rpctlssd_terminate(int);
 static SSL_CTX		*rpctls_setup_ssl(const char *certdir);
 static SSL		*rpctls_server(SSL_CTX *ctx, int s,
 			    uint32_t *flags, uint32_t *uidp,
-			    int *ngrps, uint32_t *gidp);
+			    int *ngrps, uint32_t *gidp, X509 **certp);
 static int		rpctls_gethost(int s, struct sockaddr *sad,
 			    char *hostip, size_t hostlen);
 static int		rpctls_checkhost(struct sockaddr *sad, X509 *cert);
@@ -125,6 +133,8 @@ static int		rpctls_cnname(X509 *cert, uint32_t *uidp,
 			    int *ngrps, uint32_t *gidp);
 static char		*rpctls_getdnsname(char *dnsname);
 static void		rpctls_huphandler(int sig __unused);
+static void		rpctls_checkcrl(void);
+static void		rpctlssd_verbose_out(const char *fmt, ...);
 
 extern void		rpctlssd_1(struct svc_req *rqstp, SVCXPRT *transp);
 
@@ -153,12 +163,16 @@ main(int argc, char **argv)
 	 * TLS handshake.
 	 */
 	struct sockaddr_un sun;
-	int fd, oldmask, ch, debug;
+	int ch, debug, fd, oldmask, ret;
 	SVCXPRT *xprt;
 	struct timeval tm;
 	struct timezone tz;
 	char hostname[MAXHOSTNAMELEN + 2];
 	pid_t otherpid;
+	fd_set readfds;
+	uint64_t curtime, nexttime;
+	struct timespec tp;
+	sigset_t sighup_mask;
 
 	/* Check that another rpctlssd isn't already running. */
 	rpctls_pfh = pidfile_open(_PATH_RPCTLSSDPID, 0600, &otherpid);
@@ -347,7 +361,62 @@ fprintf(stderr, "dnsname=%s\n", rpctls_dnsname);
 	LIST_INIT(&rpctls_ssllist);
 
 	rpctls_syscall(RPCTLS_SYSC_SRVSETPATH, _PATH_RPCTLSSDSOCK);
-	svc_run();
+
+	/* Expand svc_run() here so that we can call rpctls_loadcrlfile(). */
+	curtime = nexttime = 0;
+	sigemptyset(&sighup_mask);
+	sigaddset(&sighup_mask, SIGHUP);
+	for (;;) {
+		clock_gettime(CLOCK_MONOTONIC, &tp);
+		curtime = tp.tv_sec;
+		curtime = curtime * 1000000 + tp.tv_nsec / 1000;
+		sigprocmask(SIG_BLOCK, &sighup_mask, NULL);
+		if (rpctls_gothup && curtime >= nexttime) {
+			rpctls_gothup = false;
+			sigprocmask(SIG_UNBLOCK, &sighup_mask, NULL);
+			ret = rpctls_loadcrlfile(rpctls_ctx);
+			if (ret != 0)
+				rpctls_checkcrl();
+			else
+				rpctlssd_verbose_out("rpc.tlsservd: Can't "
+				    "reload CRLfile\n");
+			clock_gettime(CLOCK_MONOTONIC, &tp);
+			nexttime = tp.tv_sec;
+			nexttime = nexttime * 1000000 + tp.tv_nsec / 1000 +
+			    RELOADDELAY;
+		} else
+			sigprocmask(SIG_UNBLOCK, &sighup_mask, NULL);
+
+		/*
+		 * If a reload is pending, poll for received request(s),
+		 * otherwise set a RELOADDELAY timeout, since a SIGHUP
+		 * could be processed between the got_sighup test and
+		 * the select() system call.
+		 */
+		tm.tv_sec = 0;
+		if (rpctls_gothup)
+			tm.tv_usec = 0;
+		else
+			tm.tv_usec = RELOADDELAY;
+		readfds = svc_fdset;
+		switch (select(svc_maxfd + 1, &readfds, NULL, NULL, &tm)) {
+		case -1:
+			if (errno == EINTR) {
+				/* Allow a reload now. */
+				nexttime = 0;
+				continue;
+			}
+			syslog(LOG_ERR, "rpc.tlsservd died: select: %m");
+			exit(1);
+		case 0:
+			/* Allow a reload now. */
+			nexttime = 0;
+			continue;
+		default:
+			svc_getreqset(&readfds);
+		}
+	}
+
 	rpctls_syscall(RPCTLS_SYSC_SRVSHUTDOWN, "");
 
 	SSL_CTX_free(rpctls_ctx);
@@ -388,6 +457,7 @@ rpctlssd_connect_1_svc(void *argp,
 	struct ssl_entry *newslp;
 	uint32_t uid;
 	uint32_t *gidp;
+	X509 *cert;
 
 	rpctlssd_verbose_out("rpctlsd_connect_svc: started\n");
 	memset(result, 0, sizeof(*result));
@@ -399,7 +469,7 @@ rpctlssd_verbose_out("rpctlsd_connect_svc s=%d\n", s);
 
 	/* Do the server side of a TLS handshake. */
 	gidp = calloc(NGROUPS, sizeof(*gidp));
-	ssl = rpctls_server(rpctls_ctx, s, &flags, &uid, &ngrps, gidp);
+	ssl = rpctls_server(rpctls_ctx, s, &flags, &uid, &ngrps, gidp, &cert);
 	if (ssl == NULL) {
 		free(gidp);
 		rpctlssd_verbose_out("rpctlssd_connect_svc: ssl "
@@ -435,7 +505,9 @@ rpctlssd_verbose_out("rpctlsd_connect_svc s=%d\n", s);
 	newslp = malloc(sizeof(*newslp));
 	newslp->ssl = ssl;
 	newslp->s = s;
+	newslp->shutoff = false;
 	newslp->refno = rpctls_ssl_refno;
+	newslp->cert = cert;
 	LIST_INSERT_HEAD(&rpctls_ssllist, newslp, next);
 	return (TRUE);
 }
@@ -504,21 +576,25 @@ rpctlssd_disconnect_1_svc(struct rpctlssd_disconnect_arg *argp,
 		rpctlssd_verbose_out("rpctlssd_disconnect fd=%d closed\n",
 		    slp->s);
 		LIST_REMOVE(slp, next);
-		ret = SSL_get_shutdown(slp->ssl);
+		if (!slp->shutoff) {
+			ret = SSL_get_shutdown(slp->ssl);
 rpctlssd_verbose_out("get_shutdown1=%d\n", ret);
-		/*
-		 * Do an SSL_shutdown() unless a close alert has
-		 * already been sent.
-		 */
-		if ((ret & SSL_SENT_SHUTDOWN) == 0)
-			SSL_shutdown(slp->ssl);
+			/*
+			 * Do an SSL_shutdown() unless a close alert has
+			 * already been sent.
+			 */
+			if ((ret & SSL_SENT_SHUTDOWN) == 0)
+				SSL_shutdown(slp->ssl);
+		}
 		SSL_free(slp->ssl);
 		/*
 		 * For RPC-over-TLS, this upcall is expected
 		 * to close off the socket.
 		 */
-		shutdown(slp->s, SHUT_WR);
+		if (!slp->shutoff)
+			shutdown(slp->s, SHUT_WR);
 		close(slp->s);
+		free(slp->cert);
 		free(slp);
 		result->reterr = RPCTLSERR_OK;
 	} else
@@ -547,10 +623,6 @@ rpctlssd_terminate(int sig __unused)
 	rpctls_syscall(RPCTLS_SYSC_SRVSHUTDOWN, "");
 	pidfile_remove(rpctls_pfh);
 
-	/*
-	 * Shut down all TCP connections, so that any compromised TLS
-	 * connection is no longer usable.
-	 */
 	LIST_FOREACH(slp, &rpctls_ssllist, next)
 		shutdown(slp->s, SHUT_RD);
 	exit(0);
@@ -665,7 +737,7 @@ rpctls_setup_ssl(const char *certdir)
 
 static SSL *
 rpctls_server(SSL_CTX *ctx, int s, uint32_t *flags, uint32_t *uidp,
-    int *ngrps, uint32_t *gidp)
+    int *ngrps, uint32_t *gidp, X509 **certp)
 {
 	SSL *ssl;
 	X509 *cert;
@@ -676,14 +748,8 @@ rpctls_server(SSL_CTX *ctx, int s, uint32_t *flags, uint32_t *uidp,
 	char *cp, *cp2;
 
 	*flags = 0;
+	*certp = NULL;
 	sad = (struct sockaddr *)&ad;
-	if (rpctls_gothup) {
-		rpctls_gothup = false;
-		ret = rpctls_loadcrlfile(ctx);
-		if (ret == 0)
-			rpctlssd_verbose_out("rpctls_server: Can't "
-			    "reload CRLfile\n");
-	}
 	ssl = SSL_new(ctx);
 	if (ssl == NULL) {
 		rpctlssd_verbose_out("rpctls_server: SSL_new failed\n");
@@ -758,8 +824,11 @@ rpctlssd_verbose_out("%s\n", cp2);
 						*flags |= RPCTLS_FLAGS_CERTUSER;
 				}
 				*flags |= RPCTLS_FLAGS_VERIFIED;
+				*certp = cert;
+				cert = NULL;
 			}
-			X509_free(cert);
+			if (cert != NULL)
+				X509_free(cert);
 		} else
 			rpctlssd_verbose_out("rpctls_server: "
 			    "No peer certificate\n");
@@ -991,3 +1060,52 @@ rpctls_huphandler(int sig __unused)
 	rpctls_gothup = true;
 }
 
+/*
+ * Read the CRL file and check for any extant connections
+ * that might now be revoked.
+ */
+static void
+rpctls_checkcrl(void)
+{
+	struct ssl_entry *slp;
+	BIO *infile;
+	X509_CRL *crl;
+	X509_REVOKED *revoked;
+	int ret;
+
+	infile = BIO_new(BIO_s_file());
+	if (infile == NULL) {
+		rpctlssd_verbose_out("rpctls_checkcrl: Cannot BIO_new\n");
+		return;
+	}
+	ret = BIO_read_filename(infile, rpctls_crlfile);
+	if (ret != 1) {
+		rpctlssd_verbose_out("rpctls_checkcrl: Cannot read CRL file\n");
+		BIO_free(infile);
+		return;
+	}
+
+	for (crl = PEM_read_bio_X509_CRL(infile, NULL, NULL, "");
+	    crl != NULL; crl = PEM_read_bio_X509_CRL(infile, NULL, NULL, "")) {
+		LIST_FOREACH(slp, &rpctls_ssllist, next) {
+			if (slp->cert != NULL) {
+				ret = X509_CRL_get0_by_cert(crl, &revoked,
+				    slp->cert);
+rpctlssd_verbose_out("get0_by_cert=%d\n", ret);
+				/*
+				 * Do a shutdown on the socket, so that it
+				 * can no longer be used.  The kernel RPC
+				 * code will notice the socket is disabled
+				 * and will do a disconnect upcall, which will
+				 * close the socket.
+				 */
+				if (ret == 1) {
+					shutdown(slp->s, SHUT_WR);
+					slp->shutoff = true;
+				}
+			}
+		}
+		X509_CRL_free(crl);
+	}
+	BIO_free(infile);
+}
