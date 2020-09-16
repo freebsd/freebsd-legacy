@@ -119,7 +119,9 @@ and
 .Dq key.pem .
 .Pp
 If a SIGHUP signal is sent to the daemon it will reload the
-.Dq CRLfile .
+.Dq CRLfile
+and will shut down any extant connections that presented certificates
+during TLS handshake that have been revoked.
 If the
 .Fl r
 option was not specified, the SIGHUP signal will be ignored.
