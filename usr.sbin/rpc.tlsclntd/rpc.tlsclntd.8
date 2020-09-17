@@ -26,7 +26,7 @@
 .\" $FreeBSD$
 .\"
 .\" Modified from gssd.8 for rpc.tlsclntd.8 by Rick Macklem.
-.Dd September 3, 2020
+.Dd September 16, 2020
 .Dt RPC.TLSCLNTD 8
 .Os
 .Sh NAME
@@ -164,6 +164,17 @@ option has also been specified.
 .Xr mount_nfs 8 ,
 .Xr rpc.tlsservd 8 ,
 .Xr syslogd 8
+.Sh STANDARDS
+The implementation is based on the specification in
+.Rs
+.%B "RFC NNNN"
+.%T "Towards Remote Procedure Call Encryption By Default"
+.Re
+.Sh HISTORY
+The
+.Nm
+manual page first appeared in
+.Fx 13.0 .
 .Sh BUGS
 This daemon cannot be safely shut down and restarted if there are
 any active RPC-over-TLS connections.
@@ -171,8 +182,3 @@ Doing so will orphan the KERNEL_TLS connections, so that they
 can no longer do upcalls successfully, since the
 .Dq SSL *
 structures in userspace have been lost.
-.Sh HISTORY
-The
-.Nm
-manual page first appeared in
-.Fx 13.0 .
