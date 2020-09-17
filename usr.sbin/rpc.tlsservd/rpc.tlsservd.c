@@ -587,6 +587,8 @@ rpctlssd_verbose_out("get_shutdown1=%d\n", ret);
 				SSL_shutdown(slp->ssl);
 		}
 		SSL_free(slp->ssl);
+		if (slp->cert != NULL)
+			X509_free(slp->cert);
 		/*
 		 * For RPC-over-TLS, this upcall is expected
 		 * to close off the socket.
@@ -594,7 +596,6 @@ rpctlssd_verbose_out("get_shutdown1=%d\n", ret);
 		if (!slp->shutoff)
 			shutdown(slp->s, SHUT_WR);
 		close(slp->s);
-		free(slp->cert);
 		free(slp);
 		result->reterr = RPCTLSERR_OK;
 	} else
