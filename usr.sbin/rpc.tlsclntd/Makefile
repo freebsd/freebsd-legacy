@@ -4,9 +4,9 @@
 
 PROG=	rpc.tlsclntd
 MAN=	rpc.tlsclntd.8
-SRCS=	rpc.tlsclntd.c rpctlscd.h rpctlscd_svc.c rpctlscd_xdr.c
+SRCS=	rpc.tlsclntd.c rpc.tlscommon.c rpctlscd.h rpctlscd_svc.c rpctlscd_xdr.c
 
-CFLAGS+= -I.
+CFLAGS+= -I. -I${SRCTOP}/usr.sbin/rpc.tlsservd
 
 CFLAGS+= -I/usr/ktls/include
 LDFLAGS+= -L/usr/ktls/lib
@@ -27,6 +27,6 @@ rpctlscd_xdr.c: ${RPCSRC} rpctlscd.h
 rpctlscd.h: ${RPCSRC}
 	${RPCGEN} -h -o ${.TARGET} ${RPCSRC}
 
-.PATH:	${SRCTOP}/sys/rpc/rpcsec_tls
+.PATH:	${SRCTOP}/sys/rpc/rpcsec_tls ${SRCTOP}/usr.sbin/rpc.tlsservd
 
 .include <bsd.prog.mk>
