@@ -1,0 +1,11 @@
+--- nfscbd.sav	2020-09-20 19:12:01.076256000 -0700
++++ nfscbd	2020-09-20 20:09:50.918460000 -0700
+@@ -4,7 +4,7 @@
+ #
+ 
+ # PROVIDE: nfscbd
+-# REQUIRE: NETWORKING nfsuserd
++# REQUIRE: NETWORKING nfsuserd tlsservd
+ # KEYWORD: nojail shutdown
+ 
+ . /etc/rc.subr

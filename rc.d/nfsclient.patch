@@ -1,0 +1,11 @@
+--- nfsclient.sav	2020-09-20 19:11:20.045834000 -0700
++++ nfsclient	2020-09-20 20:09:50.918540000 -0700
+@@ -4,7 +4,7 @@
+ #
+ 
+ # PROVIDE: nfsclient
+-# REQUIRE: NETWORKING mountcritremote rpcbind
++# REQUIRE: NETWORKING mountcritremote rpcbind tlsclntd
+ # KEYWORD: nojail shutdown
+ 
+ . /etc/rc.subr

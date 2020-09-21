@@ -1,0 +1,11 @@
+--- nfsd.sav	2020-09-20 19:12:31.583406000 -0700
++++ nfsd	2020-09-20 20:09:50.918390000 -0700
+@@ -4,7 +4,7 @@
+ #
+ 
+ # PROVIDE: nfsd
+-# REQUIRE: mountcritremote mountd hostname gssd nfsuserd
++# REQUIRE: mountcritremote mountd hostname gssd nfsuserd tlsclntd tlsservd
+ # KEYWORD: nojail shutdown
+ 
+ . /etc/rc.subr
