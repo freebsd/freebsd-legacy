@@ -92,7 +92,7 @@ test(int argc, char *argv[])
 	ps = getpagesize();
 	s = 0;
 	n = arc4random() % N + 1;
-	mw = mw / 100 * 10 * ps;	/* Use 10% of vm.max_wired */
+	mw = mw / 100 * 10 * ps;	/* Use 10% of vm.max_user_wired */
 	mw = min(mw, CAP);
 	for (i = 0; i < n; i++) {
 		size[i] = round_page((arc4random() % MAXBUF) + 1);
@@ -102,6 +102,7 @@ test(int argc, char *argv[])
 		if (res == -1) {
 			warn("contigmalloc(%lu pages) failed at loop %d",
 			    size[i] / ps, i);
+			usleep(200000);
 		} else {
 #if defined(TEST)
 			fprintf(stderr, "contigmalloc(%lu pages)\n",
@@ -154,7 +155,7 @@ make || exit 1
 kldload $dir/cmalloc.ko || exit 1
 
 cd $odir
-mw=`sysctl -n vm.max_wired` || exit 1
+mw=`sysctl -n vm.max_user_wired` || exit 1
 /tmp/ctest `sysctl -n debug.cmalloc_offset` $mw 2>&1 | tail -5
 kldunload $dir/cmalloc.ko
 rm -rf $dir /tmp/ctest
@@ -219,8 +220,8 @@ cmalloc(struct thread *td, struct cmalloc_args *uap)
  * The sysent for the new syscall
  */
 static struct sysent cmalloc_sysent = {
-        3,                      /* sy_narg */
-        (sy_call_t *) cmalloc	/* sy_call */
+	.sy_narg =  3,				/* sy_narg */
+	.sy_call = (sy_call_t *) cmalloc	/* sy_call */
 };
 
 /*

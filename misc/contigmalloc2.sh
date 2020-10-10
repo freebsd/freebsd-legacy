@@ -75,7 +75,7 @@ test(int argc, char *argv[])
 		errx(1, "Usage: %s <syscall number> <max wired>", argv[0]);
 
 	ps = getpagesize();
-	size = mw / 100 * 80 * ps;	/* Use 80% of vm.max_wired */
+	size = mw / 100 * 80 * ps;	/* Use 80% of vm.max_user_wired */
 	while (size > 0) {
 		res = syscall(no, TALLOC, &p, &size);
 		if (res == -1) {
@@ -122,8 +122,8 @@ make depend all || exit 1
 kldload $dir/cmalloc2.ko || exit 1
 
 cd $odir
-mw=$((`sysctl -n vm.max_wired` - `sysctl -n vm.stats.vm.v_wire_count`)) ||
-    exit 1
+mw=$((`sysctl -n vm.max_user_wired` - \
+    `sysctl -n vm.stats.vm.v_user_wire_count`)) || exit 1
 /tmp/ctest2 `sysctl -n debug.cmalloc_offset` $mw #2>&1 | tail -5
 kldunload $dir/cmalloc2.ko
 rm -rf $dir /tmp/ctest2
@@ -188,8 +188,8 @@ cmalloc(struct thread *td, struct cmalloc_args *uap)
  * The sysent for the new syscall
  */
 static struct sysent cmalloc_sysent = {
-        3,                      /* sy_narg */
-        (sy_call_t *) cmalloc	/* sy_call */
+	.sy_narg =  3,				/* sy_narg */
+	.sy_call = (sy_call_t *) cmalloc	/* sy_call */
 };
 
 /*

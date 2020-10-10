@@ -76,7 +76,7 @@ test(int argc, char *argv[])
 
 	ps = getpagesize();
 	if (mw < MAXBUF / ps) {
-		fprintf(stderr, "max_wired too small for this test\n");
+		fprintf(stderr, "max_user_wired too small for this test\n");
 		exit (0);
 	}
 	i = 0;
@@ -125,7 +125,7 @@ make || exit 1
 kldload $dir/cmalloc.ko || exit 1
 
 cd $odir
-mw=`sysctl -n vm.max_wired` || exit 1
+mw=`sysctl -n vm.max_user_wired` || exit 1
 /tmp/ctest `sysctl -n debug.cmalloc_offset` $mw 2>&1 | tail -5
 kldunload $dir/cmalloc.ko
 rm -rf $dir /tmp/ctest
@@ -190,8 +190,8 @@ cmalloc(struct thread *td, struct cmalloc_args *uap)
  * The sysent for the new syscall
  */
 static struct sysent cmalloc_sysent = {
-        3,                      /* sy_narg */
-        (sy_call_t *) cmalloc	/* sy_call */
+	.sy_narg =  3,				/* sy_narg */
+	.sy_call = (sy_call_t *) cmalloc	/* sy_call */
 };
 
 /*
