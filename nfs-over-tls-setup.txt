@@ -11,15 +11,13 @@ awkward, but hopefully this lists all the steps.
   Go anonymous ftp onto ftp.freebsd.org
   cd pub/FreeBSD/snapshots/ISO-IMAGES/13.0
   - You want to get an install image with "amd64" in it (thats 64bit x86).
-    The higher the 6digit number, the newer the snapshot.
+    The more recent data given as 2020MMDD is a newer snapshot.
+    Any one that is 20201001 or later should be sufficient.
     An iso with "disc1" in the name is a full install image that can be
     burned onto a DVD. (I haven't done other types of installs, but there
     are several others.)
   - Burn the iso onto a DVD (or whatever).
   - Install it on a 64bit x86 system.
-If the 6digit number is 364898 or higher, the kernel sources and /usr/include
-should be sufficiently up to date. If not, you will need to get newer sources
-via "svn" and symbolically link the directories into /usr/include.
 
 (For here on, you might as well login as root.)
 Now, you will need a subversion client on some machine. If you do not
@@ -27,7 +25,7 @@ already have one, log into the newly installed FreeBSD system and
 # pkg install subversion
 - It will probably ask you to install "pkg" first and then it should work.
 
-If your version is less than 364898 or if you do not already have them,
+If you do not already have them,
 you will need to get up-to-date sources via "svn":
 # cd /usr/src
 # svn checkout http://svn.freebsd.org/base/head .
@@ -52,17 +50,6 @@ to it.
 # cd /usr/src
 # make buildkernel
 # make installkernel
-
-Fix the include files. Here's my "cheat" way of doing this.
-(This is needed if your installed system is prior to 364898.)
-# cd /usr/include
-# mv sys sys.old
-# ln -s /usr/src/sys/sys sys
-# mv fs fs.old
-# ln -s /usr/src/sys/fs fs
-# mv netinet netinet.old
-# ln -s /usr/src/sys/netinet netinet
-- This should be enough to allow userspace building.
 
 Now, you need jhb@'s patched openssl3 source tree, so you can build it.
 - If you don't already have one, get a github account.
