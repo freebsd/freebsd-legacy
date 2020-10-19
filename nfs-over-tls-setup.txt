@@ -121,7 +121,7 @@ as amd64 (not i386).
 Then daemons must be running on the NFS server(s) and NFS client(s)
 for NFS-over-TLS to work. rpc.tlsservd(8) for the server(s) and rpc.tlsclntd(8)
 for the client(s).
-Then you will have to create x509 certificate for at least the NFS
+Then you will have to create a x509 certificate for at least the NFS
 server(s) and, optionally, some or all of the NFS clients.
 
 There are many ways to create signed certificates for TLS, but here
