@@ -743,7 +743,8 @@ rpctls_verbose_out("%s\n", cp2);
 	rpctls_verbose_out("rpctls_server: BIO_get_ktls_send=%d\n", ret);
 	if (ret != 0) {
 		ret = BIO_get_ktls_recv(SSL_get_rbio(ssl));
-		rpctls_verbose_out("rpctls_server: BIO_get_ktls_recv=%d\n", ret);
+		rpctls_verbose_out("rpctls_server: BIO_get_ktls_recv=%d\n",
+		    ret);
 	}
 	if (ret == 0) {
 		if (rpctls_debug_level == 0)
