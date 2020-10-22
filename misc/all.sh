@@ -234,7 +234,6 @@ echo "$loops" | grep -Eq "^[0-9]+$" ||
     { echo "The -l argument must be a positive number"; exit 1; }
 [ -s all.exclude ] && echo "Using all.exclude"
 
-rm -f $alllist
 find `dirname $alllast` -maxdepth 1 -name $alllast -mtime +12h -delete
 touch $alllast $alllog
 chmod 640 $alllast $alllog
@@ -285,10 +284,10 @@ while true; do
 		last=`cat $alllast`
 		if [ -n "$last" ]; then
 			last=`basename $last`
-			l=`echo "$list" | sed "s/.*$last//"`
+			l=`cat "$alllist" | sed "s/.*$last//"`
 			[ -z "$l" ] && l=$list	# start over
 			list=$l
-			echo "Resuming test at `echo "$list" |
+			echo "Last test was $last, resuming test at `echo "$list" |
 			    awk '{print $1}'`"
 		fi
 	fi
