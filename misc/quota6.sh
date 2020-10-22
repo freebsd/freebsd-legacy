@@ -52,7 +52,7 @@ edquota -u -f $mntpoint -e $mntpoint:850000:900000:130000:140000 root > \
     /dev/null 2>&1
 quotaon $mntpoint
 export RUNDIR=$mntpoint/stressX
-../testcases/rw/rw -t 10m -i 200 -h -n &
+timeout 12m ../testcases/rw/rw -t 10m -i 200 -h -n &
 pid=$!
 for i in `jot 5`; do
 	echo "`date '+%T'` mksnap_ffs $mntpoint $mntpoint/.snap/snap$i"
