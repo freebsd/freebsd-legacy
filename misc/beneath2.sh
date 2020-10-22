@@ -61,6 +61,7 @@ cd $mntpoint
 ln -s /tmp/justalongname symlink
 $dir/beneath2 symlink
 s=$?
+echo "Exit code is $s"
 [ -f beneath2.core -a $s -eq 0 ] &&
     { ls -l beneath2.core; mv beneath2.core $dir; s=1; }
 cd $odir
@@ -95,7 +96,8 @@ main(int argc, char *argv[])
 		exit(1);
 	}
 	file = argv[1];
-	if ((fd = open(file, O_RDONLY | O_BENEATH)) != 0 && errno != ENOENT)
+	if ((fd = open(file, O_RDONLY | O_BENEATH)) != 0 &&
+	    errno != ENOTCAPABLE)
 		err(1, "open(%s)", file);
 
 	return (0);
