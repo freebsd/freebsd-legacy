@@ -43,7 +43,8 @@ mdconfig -l | grep -q md$mdstart && mdconfig -d -u $mdstart
 
 parallel=20
 size=25  # Gb
-[ `df -k $(dirname $diskimage) | tail -1 | awk '{print $4'}` -lt $((size * 1024 * 1024)) ] && \
+[ `df -k $(dirname $diskimage) | tail -1 | awk '{print $4'}` -lt \
+    $((size * 1024 * 1024)) ] && \
                 echo "Not enough disk space." && exit 1
 truncate -s ${size}G $diskimage
 
@@ -55,7 +56,8 @@ mount /dev/md${mdstart}$part $mntpoint
 
 mycc -o /tmp/fstool -Wall ../tools/fstool.c
 for i in `jot $parallel`; do
-	(mkdir $mntpoint/test$i; cd $mntpoint/test$i; /tmp/fstool -l -f 50 -n 500 -s 8k) &
+	(mkdir $mntpoint/test$i; cd $mntpoint/test$i; \
+	    timeout 10m /tmp/fstool -l -f 50 -n 500 -s 8k) &
 done
 for i in `jot $parallel`; do
 	wait
