@@ -28,7 +28,7 @@
 # $FreeBSD$
 #
 
-# WiP: fullpath NULL reference problem hunt.
+# fullpath NULL reference problem hunt.
 
 # From the commit log of r308407:
 #   vn_fullpath1() checked VV_ROOT and then unreferenced
@@ -38,6 +38,7 @@
 
 # 'panic: namei: garbage in ni_resflags: 1':
 # https://people.freebsd.org/~pho/stress/log/fullpath2.txt
+# Fixed by r367130
 
 [ `id -u ` -ne 0 ] && echo "Must be root!" && exit 1
 . ../default.cfg
