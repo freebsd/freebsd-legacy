@@ -77,6 +77,10 @@ Now, you need to patch the include files in /usr/ktls/include/openssl.
 # patch -p0 < /usr/nfs-over-tls/openssl3.patch
 
 And now you should be able to build/install the utilities.
+First, make a symlink to your kernel sources in /usr/nfs-over-tls.
+# cd /usr/nfs-over-tls
+# ln -s /usr/src/sys sys
+Then the makes should work.
 # cd /usr/nfs-over-tls/usr.sbin/rpc.tlsservd
 # make SRCTOP=/usr/nfs-over-tls
 # cp rpc.tlsservd /usr/sbin
