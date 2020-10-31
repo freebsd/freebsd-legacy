@@ -38,6 +38,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/module.h>
 #include <sys/queue.h>
 #include <sys/stat.h>
+#include <sys/sysctl.h>
 #include <sys/syslog.h>
 #include <sys/time.h>
 #include <err.h>
@@ -144,6 +145,8 @@ main(int argc, char **argv)
 	struct timezone tz;
 	char hostname[MAXHOSTNAMELEN + 2];
 	pid_t otherpid;
+	bool tls_enable;
+	size_t tls_enable_len;
 
 	/* Check that another rpctlssd isn't already running. */
 	rpctls_pfh = pidfile_open(_PATH_RPCTLSSDPID, 0600, &otherpid);
@@ -153,15 +156,11 @@ main(int argc, char **argv)
 		warn("cannot open or create pidfile");
 	}
 
-	if (modfind("ktls_ocf") < 0) {
-		/* Not present in kernel, try loading it */
-		if (kldload("ktls_ocf") < 0 || modfind("ktls_ocf") < 0)
-			errx(1, "Cannot load ktls_ocf");
-	}
-	if (modfind("aesni") < 0) {
-		/* Not present in kernel, try loading it */
-		kldload("aesni");
-	}
+	/* Check to see that the ktls is enabled. */
+	tls_enable_len = sizeof(tls_enable);
+	if (sysctlbyname("kern.ipc.tls.enable", &tls_enable, &tls_enable_len,
+	    NULL, 0) != 0 || !tls_enable)
+		errx(1, "Kernel TLS not enabled");
 
 	/* Get the time when this daemon is started. */
 	gettimeofday(&tm, &tz);
