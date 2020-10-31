@@ -4,7 +4,7 @@
 #
 
 # PROVIDE: tlsservd
-# REQUIRE: NETWORKING
+# REQUIRE: NETWORKING root mountcritlocal ktls
 # KEYWORD: nojail shutdown
 
 . /etc/rc.subr
