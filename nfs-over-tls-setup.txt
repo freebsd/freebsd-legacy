@@ -51,18 +51,14 @@ to it.
 # make buildkernel
 # make installkernel
 
-Now, you need jhb@'s patched openssl3 source tree, so you can build it.
-- If you don't already have one, get a github account.
-  (If you don't have git anywhere, I think "pkg install git" will get it
-   installed.)
-  - You will need perl5.
+Now, you will need a recent openssl3 source tree, which has been patched
+for ktls.
+I downloaded the openssl-3.0.0-alpha7.tar.gz tarball from www.openssl.org.
+- You will need perl5.
 # pkg install perl5
 # cd /usr
-# mkdir openssl
-# cd openssl
-# git clone https://github.com/bsdjhb/openssl.git
-# cd openssl (or not, I can't remember if you end up with another openssl dir?)
-# git checkout ktls_rx
+# zcat openssl-3.0.0-alpha7.tar.gz | tar xBf -
+# cd openssl-3.0.0-alpha7
 # mkdir obj
 # cd obj
 # ../config --prefix=/usr/ktls --openssldir=/usr/ktls enable-ktls
@@ -70,11 +66,6 @@ Now, you need jhb@'s patched openssl3 source tree, so you can build it.
 # make install
 - This installs the patched openssl3 under /usr/ktls. I only use this
   stuff for linking the daemons and use the regular openssl1.1.1 otherwise.
-
-Now, you need to patch the include files in /usr/ktls/include/openssl.
-(clang doesn't like the DEFINE_OR_DECLARE_STACK_OF(XX) before the typedef for XX.)
-# cd /usr/ktls/include/openssl
-# patch -p0 < /usr/nfs-over-tls/openssl3.patch
 
 And now you should be able to build/install the utilities.
 First, make a symlink to your kernel sources in /usr/nfs-over-tls.
@@ -92,14 +83,9 @@ Then the makes should work.
 
 You can copy the rc.d scripts as follows:
 # cd /usr/nfs-over-tls/rc.d
-# cp tlsclntd tlsservd /etc/rc.d
-# chmod 555 /etc/rc.d/tlsclntd /etc/rc.d/tlsservd
+# cp tlsclntd tlsservd ktls /etc/rc.d
+# chmod 555 /etc/rc.d/tlsclntd /etc/rc.d/tlsservd /etc/rc.d/ktls
 
-Almost done. Here's a few more things you need to do:
-# cd /etc
-- edit sysctl.conf and add these two lines
-kern.ipc.tls.enable=1
-kern.ipc.mb_use_ext_pgs=1
 Then reboot the system.
 
 You should now be finally ready to configure and run a TLS mount.
@@ -162,11 +148,10 @@ Certificate Revocation List (CRL).
 Now, you should be ready to create/sign certificates for the NFS server/client(s).
 3 - Create a key for the certificate.
 # openssl genrsa -out key.pem
-(If this certificate is for a client laptop, you might want to use the "-aes256"
- option, so the key.pem file is encrypted using a passphrase.
- This implies that the passphrase will need to be entered when the
- rpc.tlsclntd(8) daemon is started on the client, but that the key cannot
- be used without the passphrase, if it is compromised.)
+(For now, do not create a certificate that requires a passphrase, since
+ that makes rpc.tlsclntd crash upon startup. It worked for a previous
+ openssl3 patched source tree, but crashes for openssl-3.0.0-alpha7.
+ In other words, don't use the "-aes256" command line option, or similar.)
 
 4 - Create a Certificate Signing Request (CSR).
 # openssl req -new -key key.pem -addext "subjectAltName=<name_val>" -out req.pem
@@ -341,10 +326,14 @@ it will log a lot of other stuff, as well.
 Once you have set things up, you can add line(s) to your /etc/rc.conf
 for the daemon(s):
 For the client:
+ktls_enable="YES"
+ktls_aesni_enable="YES"
 tlsclntd_enable="YES"
 tlsclntd_env="LD_LIBRARY_PATH=/usr/ktls/lib"
 
 For the server:
+ktls_enable="YES"
+ktls_aesni_enable="YES"
 tlsservd_enable="YES"
 tlsservd_env="LD_LIBRARY_PATH=/usr/ktls/lib"
 
