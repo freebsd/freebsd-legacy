@@ -205,10 +205,10 @@ main(int argc, char **argv)
 	rpctls_ctx = rpctls_setupcl_ssl(cert);
 	if (rpctls_ctx == NULL) {
 		if (rpctls_debug_level == 0) {
-			syslog(LOG_ERR, "Can't set up TSL context");
+			syslog(LOG_ERR, "Can't set up TLS context");
 			exit(1);
 		}
-		err(1, "Can't set up TSL context");
+		err(1, "Can't set up TLS context");
 	}
 	LIST_INIT(&rpctls_ssllist);
 
