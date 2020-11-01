@@ -578,13 +578,14 @@ rpctls_connect(SSL_CTX *ctx, int s, X509 **certp)
 {
 	SSL *ssl;
 	X509 *cert;
-	struct sockaddr *sad;
 	struct sockaddr_storage ad;
+	struct sockaddr *sad;
 	char hostnam[NI_MAXHOST];
 	int gethostret, ret;
 	char *cp, *cp2;
 
 	*certp = NULL;
+	sad = (struct sockaddr *)&ad;
 	ssl = SSL_new(ctx);
 	if (ssl == NULL) {
 		rpctls_verbose_out("rpctls_connect: "
