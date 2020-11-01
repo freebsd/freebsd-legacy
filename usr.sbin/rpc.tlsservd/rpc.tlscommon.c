@@ -48,7 +48,6 @@ __FBSDID("$FreeBSD$");
 #include <openssl/err.h>
 #include <openssl/x509v3.h>
 
-#include "rpctlssd.h"
 #include "rpc.tlscommon.h"
 
 /* Global variables defined in the daemons. */
