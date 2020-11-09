@@ -27,7 +27,10 @@
  * SUCH DAMAGE.
  */
 
-/* Modified from gssd.c for the server side of kernel RPC-over-TLS. */
+/*
+ * Extensively modified from /usr/src/usr.sbin/gssd.c r344402 for
+ * the server side of kernel RPC-over-TLS by Rick Macklem.
+ */
 
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
