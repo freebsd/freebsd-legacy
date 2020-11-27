@@ -26,7 +26,7 @@
 .\" $FreeBSD$
 .\"
 .\" Modified from gssd.8 for rpc.tlsclntd.8 by Rick Macklem.
-.Dd September 16, 2020
+.Dd Novamber 27, 2020
 .Dt RPC.TLSCLNTD 8
 .Os
 .Sh NAME
@@ -52,7 +52,9 @@ This daemon requires that the kernel be built with
 .Dq options KERNEL_TLS
 and be running on an architecture such as
 .Dq amd64
-that supports a direct map (not i386).
+that supports a direct map (not i386) with
+.Xr ktls 4
+enabled.
 .Pp
 If either of the
 .Fl l
@@ -161,6 +163,7 @@ option has also been specified.
 .Ex -std
 .Sh SEE ALSO
 .Xr openssl 1 ,
+.Xr ktls 4 ,
 .Xr mount_nfs 8 ,
 .Xr rpc.tlsservd 8 ,
 .Xr syslogd 8
