@@ -5,7 +5,18 @@ This will change once the kernel tls knows how to do 1.3.
 
 Setup for testing. For now, setting up test machine(s) is a bit
 awkward, but hopefully this lists all the steps.
-- Install a recent FreeBSD current system on amd64 system(s).
+For those familiar with FreeBSD, the steps are:
+- Install a recent FreeBSD13 (head/current) system on amd64, including
+  sources and ports.
+- Build/install a custom kernel with "options KERN_TLS" in the kernel config.
+- Install perl5.
+- Install security/openssl-devel from ports with KTLS selected.
+- Install sysutils/nfs-over-tls from ports.
+- Set ktls sysctl(s) and load modules, as required (See "man ktls for more)
+
+For those not familiar with FreeBSD, here's how I'd do the above steps.
+- Install a recent FreeBSD13 (head/current) system on amd64, including
+  sources and ports.
   There are many ways to do this, but downloading and installing a
   snapshot is probably the easiest.
   Go anonymous ftp onto ftp.freebsd.org
@@ -18,75 +29,51 @@ awkward, but hopefully this lists all the steps.
     are several others.)
   - Burn the iso onto a DVD (or whatever).
   - Install it on a 64bit x86 system.
+    Click on "source" and "ports" selections to add them to what will
+    be installed.
 
 (For here on, you might as well login as root.)
-Now, you will need a subversion client on some machine. If you do not
-already have one, log into the newly installed FreeBSD system and
-# pkg install subversion
-- It will probably ask you to install "pkg" first and then it should work.
+- Build/install a custom kernel with "options KERN_TLS" in the kernel config.
+  # cd /usr/src/sys/amd64/conf
+  - edit GENERIC and add the line
+    options KERN_TLS
+  # cd /usr/src
+  # make buildkernel
+  # make installkernel
+  # reboot
 
-If you do not already have them,
-you will need to get up-to-date sources via "svn":
-# cd /usr/src
-# svn checkout http://svn.freebsd.org/base/head .
+- Install perl5.
+  # pkg install perl5
+  (It will want to install the pkg system. Type "y" to all prompts.)
 
-Use "svn" to download the modified sources into /usr/nfs-over-tls.
-# cd /usr
-# mkdir nfs-over-tls
-# cd nfs-over-tls
-# svn checkout http://svn.freebsd.org/base/projects/nfs-over-tls .
+- Install security/openssl-devel from ports with KTLS selected.
+  # cd /usr/ports/security/openssl-devel
+  # make
+  - Click on "KTLS" to select it in the options panel.
+  # make install
 
-Now, you can build/install the modified kernel.
+- Install sysutils/nfs-over-tls from ports.
+  # cd /usr/ports/sysutils/nfs-over-tls
+  - If this port does not exist, do the following to add it.
+    (Hopefully it will be added soon.)
+    # cd /root
+    # fetch https://people.freebsd.org/~rmacklem/nfs-over-tls-port.tar
+    # cd /usr/ports/sysutils
+    # tar xf /root/nfs-over-tls-port.tar
+    # cd /usr/ports/sysutils/nfs-over-tls
+  # make
+  - Don't worry about warnings related to /etc/make.conf.
+  # make install
 
-If the src.*.mk files are missing from /usr/share/mk...
-# cd /usr/share/mk
-# tar xf /usr/nfs-over-tls/sharemk.tar
-
-Set up the kernel source tree.
-# cd /usr/src/sys/amd64/conf
-- edit GENERIC and add a line
-options	KERN_TLS
-to it.
-# cd /usr/src
-# make buildkernel
-# make installkernel
-
-Now, you will need a recent openssl3 source tree, which has been patched
-for ktls.
-I downloaded the openssl-3.0.0-alpha7.tar.gz tarball from www.openssl.org.
-- You will need perl5.
-# pkg install perl5
-# cd /usr
-# zcat openssl-3.0.0-alpha7.tar.gz | tar xBf -
-# cd openssl-3.0.0-alpha7
-# mkdir obj
-# cd obj
-# ../config --prefix=/usr/ktls --openssldir=/usr/ktls enable-ktls
-# make
-# make install
-- This installs the patched openssl3 under /usr/ktls. I only use this
-  stuff for linking the daemons and use the regular openssl1.1.1 otherwise.
-
-And now you should be able to build/install the utilities.
-First, make a symlink to your kernel sources in /usr/nfs-over-tls.
-# cd /usr/nfs-over-tls
-# ln -s /usr/src/sys sys
-Then the makes should work.
-# cd /usr/nfs-over-tls/usr.sbin/rpc.tlsservd
-# make SRCTOP=/usr/nfs-over-tls
-# cp rpc.tlsservd /usr/sbin
-# cp rpc.tlsservd.8.gz /usr/share/man/man8
-# cd ../rpc.tlsclntd
-# make SRCTOP=/usr/nfs-over-tls
-# cp rpc.tlsclntd /usr/sbin
-# cp rpc.tlsclntd.8.gz /usr/share/man/man8
-
-You can copy the rc.d scripts as follows:
-# cd /usr/nfs-over-tls/rc.d
-# cp tlsclntd tlsservd ktls /etc/rc.d
-# chmod 555 /etc/rc.d/tlsclntd /etc/rc.d/tlsservd /etc/rc.d/ktls
-
-Then reboot the system.
+- Set ktls sysctl(s) and load modules, as required (See "man ktls for more)
+  - edit /boot/loader.conf and add these line(s) for software ktls
+  ktls_ocf_load="YES"
+    and if your hardware supports AESNI
+  aesni_load="YES"
+  - edit /etc/sysctl.conf and add these lines
+  kern.ipc.tls.enable=1
+  kern.ipc.mb_use_ext_pgs=1
+  # reboot
 
 You should now be finally ready to configure and run a TLS mount.
 (If you have problems or I forgot any steps, feel free to email me
@@ -98,8 +85,11 @@ as amd64 (not i386).
 Then daemons must be running on the NFS server(s) and NFS client(s)
 for NFS-over-TLS to work. rpc.tlsservd(8) for the server(s) and rpc.tlsclntd(8)
 for the client(s).
-Then you will have to create a x509 certificate for at least the NFS
+Then you will have to create a x509v3 certificate for at least the NFS
 server(s) and, optionally, some or all of the NFS clients.
+These certificates must each be a pair of files called "cert.pem" and "key.pem".
+Once created, they need to be copied into a directory called
+"/etc/rpc.tlsclntd" on the client(s) and "/etc/rpc.tlsservd" on the server(s).
 
 There are many ways to create signed certificates for TLS, but here
 is the simple method I've used for a site local CA, using only the
@@ -108,6 +98,8 @@ I am far from an expert in this area, so there are almost certainly
 better ways to do this. (Some have mentioned easyrsa in the openVPN
 software package, but I haven't tried it.)
 
+I've been using the openssl1.1.1 shipped with FreeBSD and not the
+openssl3 installed under /usr/local by /usr/ports/security/openssl-devel.
 I have only applied this one simple patch to /etc/ssl/openssl.cnf:
 --- openssl.cnf.sav	2020-03-31 07:41:12.545812000 -0700
 +++ openssl.cnf	2020-04-01 10:55:31.682616000 -0700
@@ -263,10 +255,7 @@ options, but here are a few examples.
 For an NFS server:
 (Although these examples show the daemons started via a command line, the
  options should normally be specified via the tls[clnt|serv]d_flags line
- in /etc/rc.conf and then they are started upon boot.
- To start them without use of the /etc/rc.d scripts, you will need to
- add "/usr/ktls/lib" to your ldconfig_paths via rc.conf or similar.
- Otherwise it will complain it cannot find the correct ssl library.)
+ in /etc/rc.conf and then they are started upon boot.)
 - An NFS server where no clients have certificates.
 # rpc.tlsservd
 
@@ -326,16 +315,12 @@ it will log a lot of other stuff, as well.
 Once you have set things up, you can add line(s) to your /etc/rc.conf
 for the daemon(s):
 For the client:
-ktls_enable="YES"
-ktls_aesni_enable="YES"
 tlsclntd_enable="YES"
-tlsclntd_env="LD_LIBRARY_PATH=/usr/ktls/lib"
 
 For the server:
-ktls_enable="YES"
-ktls_aesni_enable="YES"
 tlsservd_enable="YES"
-tlsservd_env="LD_LIBRARY_PATH=/usr/ktls/lib"
 
 - plus tlsclntd_flags and/or tlsservd_flags if you are using command line
-  options for these (see below).
+  options for these.
+For example:
+tlsclntd_flags="-v -m"
