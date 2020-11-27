@@ -378,7 +378,7 @@ EOF
 mycc -o /tmp/syzkaller4 -Wall -Wextra -O2 /tmp/syzkaller4.c -lpthread ||
     exit 1
 
-(cd /tmp; ./syzkaller4)
+(cd /tmp; timeout 5m ./syzkaller4)
 
-rm /tmp/syzkaller4 /tmp/syzkaller4.c
+rm -f /tmp/syzkaller4 /tmp/syzkaller4.c
 exit 0
