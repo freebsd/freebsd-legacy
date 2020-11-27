@@ -52,7 +52,7 @@ chmod 777 $mntpoint
 
 su $testuser -c '(cd ..; ./run.sh disk.cfg)' > /dev/null 2>&1 &
 sleep 20
-umount $mntpoint
+umount $mntpoint > /dev/null 2>&1
 kill $!
 ../tools/killall.sh || exit
 wait
