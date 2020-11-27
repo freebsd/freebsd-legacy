@@ -44,7 +44,7 @@
 N=`sysctl -n hw.ncpu`
 usermem=`sysctl -n hw.usermem`
 [ `swapinfo | wc -l` -eq 1 ] && usermem=$((usermem/100*80))
-size=$((usermem / 1024 / 1024))
+size=$((usermem / 1024 / 1024 - 2))
 
 CONT=/tmp/crossmp4.continue
 mounts=$N		# Number of parallel scripts
