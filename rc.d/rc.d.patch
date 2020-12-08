@@ -1,0 +1,33 @@
+--- etc/rc.d/mountcritremote.sav	2020-12-07 07:55:12.901984000 -0800
++++ etc/rc.d/mountcritremote	2020-12-07 07:53:45.227741000 -0800
+@@ -4,7 +4,7 @@
+ #
+ 
+ # PROVIDE: mountcritremote
+-# REQUIRE: NETWORKING FILESYSTEMS ipsec netwait
++# REQUIRE: NETWORKING FILESYSTEMS ipsec netwait nfscbd
+ # KEYWORD: nojail
+ 
+ . /etc/rc.subr
+--- etc/rc.d/nfscbd.sav	2020-12-07 07:56:16.528418000 -0800
++++ etc/rc.d/nfscbd	2020-12-07 07:53:45.227677000 -0800
+@@ -4,7 +4,7 @@
+ #
+ 
+ # PROVIDE: nfscbd
+-# REQUIRE: NETWORKING nfsuserd
++# REQUIRE: NETWORKING nfsuserd tlsclntd
+ # KEYWORD: nojail shutdown
+ 
+ . /etc/rc.subr
+--- etc/rc.d/nfsd.sav	2020-12-07 07:56:49.336791000 -0800
++++ etc/rc.d/nfsd	2020-12-07 07:53:45.227607000 -0800
+@@ -4,7 +4,7 @@
+ #
+ 
+ # PROVIDE: nfsd
+-# REQUIRE: mountcritremote mountd hostname gssd nfsuserd
++# REQUIRE: mountcritremote mountd hostname gssd nfsuserd tlsservd
+ # KEYWORD: nojail shutdown
+ 
+ . /etc/rc.subr
