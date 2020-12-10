@@ -32,7 +32,6 @@
 
 # Start of list	Known problems						Seen
 
-# altbufferflushes.sh snapshots + disk full == know problem		20130617
 # backingstore.sh
 #		g_vfs_done():md6a[WRITE(offset=...)]error = 28		20111220
 # backingstore2.sh
@@ -40,6 +39,7 @@
 # backingstore3.sh
 #		g_vfs_done():md6a[WRITE(offset=...)]error = 28		20111230
 # collapse.sh	panic: freeing mapped page 0xfffffe0028ed1d50		20200106
+# crossmp7.sh	WiP							20200821
 # dd.sh		CAM stuck in vmwait					20200116
 # devfs4.sh	WiP							20181031
 # force2.sh	WiP							20200303
@@ -47,9 +47,11 @@
 # force4.sh	Known issue						20200303
 # force5.sh	WiP							20200303
 # fsync.sh	panic: Journal overflow					20190208
+# fsync2.sh	WiP							20200901
 # fuse.sh	Memory corruption seen in log file kostik734.txt	20141114
 # fuse2.sh	Deadlock seen						20121129
 # fuse3.sh	Deadlock seen						20141120
+# getrandom.sh	Known DoS issue						20201107
 # getrandom2.sh	Known DoS issue						20200302
 # gjournal.sh	panic: Journal overflow					20190626
 # gjournal2.sh	panic: Journal overflow					20180125
@@ -72,6 +74,10 @@
 # memguard2.sh	Waiting for fix commit
 # memguard3.sh	Waiting for fix commit
 # mlockall2.sh	Unrecoverable OOM killing seen				20190203
+# multicast2.sh	WiP							20200921
+# nfs15lockd.sh	WiP							20200805
+# nfs15lockd2.sh	WiP							20200805
+# nfs15lockd3.sh	WiP							20200805
 # newfs4.sh	watchdog fired. newbuf					20190225
 # nfs10.sh	Double fault						20151013
 # nfs13.sh	mount_nfs hangs in mntref				20191007
@@ -79,22 +85,19 @@
 # oom2.sh	Hang in pfault						20180324
 # overcommit2.sh
 #		CAM stuck in vmwait seen				20200112
-# pfl3.sh	panic: handle_written_inodeblock: live inodedep		20190211
 # pageout.sh	panic: handle_written_filepage: not started		20190218
 # quota10.sh	people.freebsd.org/~pho/stress/log/quota10-2.txt	20200525
 # quota2.sh	panic: dqflush: stray dquot				20120221
 # quota3.sh	panic: softdep_deallocate_dependencies: unrecovered ...	20111222
-# quota6.sh	panic: softdep_deallocate_dependencies: unrecovered ...	20130206
 # quota7.sh	panic: dqflush: stray dquot				20120221
 # rename14.sh	mark136.txt						20200525
+# sctp.sh	panic: Queues are not empty when handling ... i386	20201104
 # sctp2.sh	panic: soclose: SS_NOFDREF on enter			20200307
 # sctp3.sh	WiP							20190809
 # sendfile25.sh	WiP							20200611
 # signal.sh	Timing issues. Needs fixing				20171116
-# snap4.sh	panic: snapacct_ufs2: bad block				20181014
-# snap6.sh	panic: softdep_deallocate_dependencies: unrecovered ...	20130630
-# snap8.sh	panic: softdep_deallocate_dependencies: unrecovered ...	20120630
 # snap9.sh	panic: handle_written_filepage: not started		20170722
+# snap11.sh	panic: handle_written_filepage: not started		20200928
 # suj34.sh	Various hangs and panics (SUJ + NULLFS issue)		20131210
 # swap4.sh	WiP							20171208
 # swapoff2.sh	swap_pager_force_pagein: read from swap failed		20171223
@@ -105,13 +108,15 @@
 # syzkaller16.sh	WiP						20200620
 # syzkaller17.sh	WiP						20200630
 # syzkaller19.sh	WiP						20200712
-# syzkaller21.sh	WiP						20200804
+# syzkaller24.sh	WiP						20200916
+# syzkaller25.sh	WiP						20201116
+# syzkaller28.sh	WiP						20201120
+# truss3.sh		WiP						20200915
 # ucom.sh	Stuck in tail -F					20180129
-# umountf7.sh	panic: handle_written_inodeblock: live inodedep ...	20190219
-# umountf9.sh	panic: handle_written_inodeblock: live inodedep ...	20170221
 # unionfs.sh	insmntque: non-locked vp: xx is not exclusive locked...	20130909
 # unionfs2.sh	insmntque: mp-safe fs and non-locked vp is not ...	20111219
 # unionfs3.sh	insmntque: mp-safe fs and non-locked vp is not ...	20111216
+# zfs9.sh	WiP							20200921
 # zfs11.sh	Deadlock WiP						20200513
 
 # Test not to run for other reasons:
@@ -311,6 +316,7 @@ while true; do
 	n2=`echo $lst | wc -w | sed 's/ //g'`
 	for i in $lst; do
 		i=`basename $i`
+		[ ! -f ./$i ] && { echo "No such file ./$i"; continue; }
 		n1=$((n1 + 1))
 		echo $i > $alllast
 		./cleanup.sh || exit 1
@@ -318,7 +324,7 @@ while true; do
 		echo "$ts all: $i"
 		printf "$ts all ($n1/$n2): $i\n" >> $alllog
 		printf "$ts all ($n1/$n2): $i\r\n" > $console
-		logger "Starting test all: $i"
+		logger "Starting stress2 test all.sh: $i"
 		[ $all_debug ] && pre_debug
 		[ -f $i ] || loops=1	# break
 		sync; sleep .5; sync; sleep .5
