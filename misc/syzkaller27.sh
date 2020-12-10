@@ -133,6 +133,7 @@ void execute_one(void)
 }
 int main(void)
 {
+  sleep(2);	/* pho */
   syscall(SYS_mmap, 0x20000000ul, 0x1000000ul, 7ul, 0x1012ul, -1, 0ul);
   loop();
   return 0;
