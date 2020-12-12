@@ -756,6 +756,7 @@ aio_process_rw(struct kaiocb *job)
 	struct file *fp;
 	struct uio auio;
 	struct iovec aiov;
+	struct uio *auiop;
 	ssize_t cnt;
 	long msgsnd_st, msgsnd_end;
 	long msgrcv_st, msgrcv_end;
@@ -764,7 +765,8 @@ aio_process_rw(struct kaiocb *job)
 	int error;
 
 	KASSERT(job->uaiocb.aio_lio_opcode == LIO_READ ||
-	    job->uaiocb.aio_lio_opcode == LIO_WRITE,
+	    job->uaiocb.aio_lio_opcode == LIO_WRITE ||
+	    job->uaiocb.aio_lio_opcode == LIO_WRITEV,
 	    ("%s: opcode %d", __func__, job->uaiocb.aio_lio_opcode));
 
 	aio_switch_vmspace(job);
@@ -774,16 +776,26 @@ aio_process_rw(struct kaiocb *job)
 	cb = &job->uaiocb;
 	fp = job->fd_file;
 
-	aiov.iov_base = (void *)(uintptr_t)cb->aio_buf;
-	aiov.iov_len = cb->aio_nbytes;
+	if (job->uaiocb.aio_lio_opcode == LIO_WRITEV) {
+		error = copyinuio(job->uaiocb.aio_iov, job->uaiocb.aio_iovcnt,
+		    &auiop);
+		if (error) {
+			aio_complete(job, -1, error);
+			return;
+		}
+	} else {
+		aiov.iov_base = (void *)(uintptr_t)cb->aio_buf;
+		aiov.iov_len = cb->aio_nbytes;
+		auio.uio_iov = &aiov;
+		auio.uio_iovcnt = 1;
+		auio.uio_resid = cb->aio_nbytes;
+		auio.uio_segflg = UIO_USERSPACE;
+		auiop = &auio;
+	}
 
-	auio.uio_iov = &aiov;
-	auio.uio_iovcnt = 1;
-	auio.uio_offset = cb->aio_offset;
-	auio.uio_resid = cb->aio_nbytes;
-	cnt = cb->aio_nbytes;
-	auio.uio_segflg = UIO_USERSPACE;
-	auio.uio_td = td;
+	auiop->uio_offset = cb->aio_offset;
+	auiop->uio_td = td;
+	cnt = auiop->uio_resid;
 
 	msgrcv_st = td->td_ru.ru_msgrcv;
 	msgsnd_st = td->td_ru.ru_msgsnd;
@@ -795,16 +807,16 @@ aio_process_rw(struct kaiocb *job)
 	 * released in aio_free_entry().
 	 */
 	if (cb->aio_lio_opcode == LIO_READ) {
-		auio.uio_rw = UIO_READ;
-		if (auio.uio_resid == 0)
+		auiop->uio_rw = UIO_READ;
+		if (auiop->uio_resid == 0)
 			error = 0;
 		else
-			error = fo_read(fp, &auio, fp->f_cred, FOF_OFFSET, td);
+			error = fo_read(fp, auiop, fp->f_cred, FOF_OFFSET, td);
 	} else {
 		if (fp->f_type == DTYPE_VNODE)
 			bwillwrite();
-		auio.uio_rw = UIO_WRITE;
-		error = fo_write(fp, &auio, fp->f_cred, FOF_OFFSET, td);
+		auiop->uio_rw = UIO_WRITE;
+		error = fo_write(fp, auiop, fp->f_cred, FOF_OFFSET, td);
 	}
 	msgrcv_end = td->td_ru.ru_msgrcv;
 	msgsnd_end = td->td_ru.ru_msgsnd;
@@ -816,7 +828,7 @@ aio_process_rw(struct kaiocb *job)
 	job->inblock = inblock_end - inblock_st;
 	job->outblock = oublock_end - oublock_st;
 
-	if ((error) && (auio.uio_resid != cnt)) {
+	if ((error) && (auiop->uio_resid != cnt)) {
 		if (error == ERESTART || error == EINTR || error == EWOULDBLOCK)
 			error = 0;
 		if ((error == EPIPE) && (cb->aio_lio_opcode == LIO_WRITE)) {
@@ -826,8 +838,10 @@ aio_process_rw(struct kaiocb *job)
 		}
 	}
 
-	cnt -= auio.uio_resid;
+	cnt -= auiop->uio_resid;
 	td->td_ucred = td_savedcred;
+	if (job->uaiocb.aio_lio_opcode == LIO_WRITEV)
+		free(auiop, M_IOV);
 	if (error)
 		aio_complete(job, -1, error);
 	else
@@ -1222,6 +1236,7 @@ aio_qbio(struct proc *p, struct kaiocb *job)
 	cb = &job->uaiocb;
 	fp = job->fd_file;
 
+	// TODO: handle LIO_WRITEV
 	if (!(cb->aio_lio_opcode == LIO_WRITE ||
 	    cb->aio_lio_opcode == LIO_READ))
 		return (-1);
@@ -1278,6 +1293,7 @@ aio_qbio(struct proc *p, struct kaiocb *job)
 		AIO_UNLOCK(ki);
 		job->pages = pbuf->b_pages;
 	}
+	/* For LIO_WRITEV, create a parent bio with multiple child bios */
 	job->bp = bp = g_alloc_bio();
 
 	bp->bio_length = cb->aio_nbytes;
@@ -1533,6 +1549,7 @@ aio_aqueue(struct thread *td, struct aiocb *ujob, struct aioliojob *lj,
 	fd = job->uaiocb.aio_fildes;
 	switch (opcode) {
 	case LIO_WRITE:
+	case LIO_WRITEV:
 		error = fget_write(td, fd, &cap_pwrite_rights, &fp);
 		break;
 	case LIO_READ:
@@ -1561,9 +1578,9 @@ aio_aqueue(struct thread *td, struct aiocb *ujob, struct aioliojob *lj,
 		goto aqueue_fail;
 	}
 
-	if ((opcode == LIO_READ || opcode == LIO_WRITE) &&
-	    job->uaiocb.aio_offset < 0 &&
-	    (fp->f_vnode == NULL || fp->f_vnode->v_type != VCHR)) {
+	if ((opcode == LIO_READ || opcode == LIO_WRITE || opcode == LIO_WRITEV)
+	    && job->uaiocb.aio_offset < 0
+	    && (fp->f_vnode == NULL || fp->f_vnode->v_type != VCHR)) {
 		error = EINVAL;
 		goto aqueue_fail;
 	}
@@ -1619,6 +1636,8 @@ no_kqueue:
 		error = 0;
 	} else if (fp->f_ops->fo_aio_queue == NULL)
 		error = aio_queue_file(fp, job);
+	else if (opcode == LIO_WRITEV)
+		error = EOPNOTSUPP;
 	else
 		error = fo_aio_queue(fp, job);
 	if (error)
@@ -1724,6 +1743,7 @@ aio_queue_file(struct file *fp, struct kaiocb *job)
 	switch (job->uaiocb.aio_lio_opcode) {
 	case LIO_READ:
 	case LIO_WRITE:
+	case LIO_WRITEV:
 		aio_schedule(job, aio_process_rw);
 		error = 0;
 		break;
@@ -2113,6 +2133,13 @@ sys_aio_write(struct thread *td, struct aio_write_args *uap)
 {
 
 	return (aio_aqueue(td, uap->aiocbp, NULL, LIO_WRITE, &aiocb_ops));
+}
+
+int
+sys_aio_writev(struct thread *td, struct aio_writev_args *uap)
+{
+
+	return (aio_aqueue(td, uap->aiocbp, NULL, LIO_WRITEV, &aiocb_ops));
 }
 
 int
@@ -2856,6 +2883,14 @@ freebsd32_aio_write(struct thread *td, struct freebsd32_aio_write_args *uap)
 {
 
 	return (aio_aqueue(td, (struct aiocb *)uap->aiocbp, NULL, LIO_WRITE,
+	    &aiocb32_ops));
+}
+
+int
+freebsd32_aio_writev(struct thread *td, struct freebsd32_aio_writev_args *uap)
+{
+
+	return (aio_aqueue(td, (struct aiocb *)uap->aiocbp, NULL, LIO_WRITEV,
 	    &aiocb32_ops));
 }
 

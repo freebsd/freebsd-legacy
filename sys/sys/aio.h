@@ -45,6 +45,8 @@
 #ifdef _KERNEL
 #define	LIO_SYNC		0x3
 #define	LIO_MLOCK		0x4
+#define	LIO_WRITEV		0x5
+#define	LIO_READV		0x6
 #endif
 
 /*
@@ -92,8 +94,14 @@ struct __aiocb_private {
 typedef struct aiocb {
 	int	aio_fildes;		/* File descriptor */
 	off_t	aio_offset;		/* File offset for I/O */
-	volatile void *aio_buf;         /* I/O buffer in process space */
-	size_t	aio_nbytes;		/* Number of bytes for I/O */
+	union {
+		volatile void *aio_buf;	/* I/O buffer in process space */
+		struct iovec *aio_iov; /* I/O scatter/gather list */
+	};
+	union {
+		size_t	aio_nbytes;		/* Number of bytes for I/O */
+		int	aio_iovcnt;		/* Length of aio_iov */
+	};
 	int	__spare__[2];
 	void	*__spare2__;
 	int	aio_lio_opcode;		/* LIO opcode */
@@ -214,6 +222,7 @@ int	aio_read(struct aiocb *);
  * Asynchronously write to file
  */
 int	aio_write(struct aiocb *);
+int	aio_writev(struct aiocb *);
 
 /*
  * List I/O Asynchronously/synchronously read/write to/from file

@@ -282,6 +282,49 @@ aio_write_test(struct aio_context *ac, completion comp, struct sigevent *sev)
 }
 
 /*
+ * Perform a vectored I/O test of our initialized data buffer to the provided
+ * file descriptor.
+ *
+ * To vectorize the linear buffer, chop it up into two pieces of dissimilar
+ * size, and swap their offsets.
+ */
+static void
+aio_writev_test(struct aio_context *ac, completion comp, struct sigevent *sev)
+{
+	struct aiocb aio;
+	struct iovec iov[2];
+	size_t len0, len1;
+	ssize_t len;
+
+	bzero(&aio, sizeof(aio));
+
+	aio.aio_fildes = ac->ac_write_fd;
+	aio.aio_offset = 0;
+	len0 = ac->ac_buflen * 3 / 4;
+	len1 = ac->ac_buflen / 4;
+	// TODO: once aio_readv is ready, swap the offsets of the two parts of
+	// the buffer.
+	iov[0].iov_base = ac->ac_buffer;
+	iov[0].iov_len = len0;
+	iov[1].iov_base = ac->ac_buffer + len0;
+	iov[1].iov_len = len1;
+	aio.aio_iov = iov;
+	aio.aio_iovcnt = 2;
+	if (sev)
+		aio.aio_sigevent = *sev;
+
+	if (aio_writev(&aio) < 0)
+		atf_tc_fail("aio_writev failed: %s", strerror(errno));
+
+	len = comp(&aio);
+	if (len < 0)
+		atf_tc_fail("aio failed: %s", strerror(errno));
+
+	if (len != ac->ac_buflen)
+		atf_tc_fail("aio short write (%jd)", (intmax_t)len);
+}
+
+/*
  * Perform a simple read test of our initialized data buffer from the
  * provided file descriptor.
  */
@@ -328,7 +371,7 @@ aio_read_test(struct aio_context *ac, completion comp, struct sigevent *sev)
 #define	FILE_PATHNAME	"testfile"
 
 static void
-aio_file_test(completion comp, struct sigevent *sev)
+aio_file_test(completion comp, struct sigevent *sev, bool vectored)
 {
 	struct aio_context ac;
 	int fd;
@@ -340,7 +383,10 @@ aio_file_test(completion comp, struct sigevent *sev)
 	ATF_REQUIRE_MSG(fd != -1, "open failed: %s", strerror(errno));
 
 	aio_context_init(&ac, fd, fd, FILE_LEN);
-	aio_write_test(&ac, comp, sev);
+	if (vectored)
+		aio_writev_test(&ac, comp, sev);
+	else
+		aio_write_test(&ac, comp, sev);
 	aio_read_test(&ac, comp, sev);
 	close(fd);
 }
@@ -348,31 +394,31 @@ aio_file_test(completion comp, struct sigevent *sev)
 ATF_TC_WITHOUT_HEAD(file_poll);
 ATF_TC_BODY(file_poll, tc)
 {
-	aio_file_test(poll, NULL);
+	aio_file_test(poll, NULL, false);
 }
 
 ATF_TC_WITHOUT_HEAD(file_signal);
 ATF_TC_BODY(file_signal, tc)
 {
-	aio_file_test(poll_signaled, setup_signal());
+	aio_file_test(poll_signaled, setup_signal(), false);
 }
 
 ATF_TC_WITHOUT_HEAD(file_suspend);
 ATF_TC_BODY(file_suspend, tc)
 {
-	aio_file_test(suspend, NULL);
+	aio_file_test(suspend, NULL, false);
 }
 
 ATF_TC_WITHOUT_HEAD(file_thread);
 ATF_TC_BODY(file_thread, tc)
 {
-	aio_file_test(poll_signaled, setup_thread());
+	aio_file_test(poll_signaled, setup_thread(), false);
 }
 
 ATF_TC_WITHOUT_HEAD(file_waitcomplete);
 ATF_TC_BODY(file_waitcomplete, tc)
 {
-	aio_file_test(waitcomplete, NULL);
+	aio_file_test(waitcomplete, NULL, false);
 }
 
 #define	FIFO_LEN	256
@@ -446,7 +492,7 @@ ATF_TC_BODY(fifo_waitcomplete, tc)
 
 #define	UNIX_SOCKETPAIR_LEN	256
 static void
-aio_unix_socketpair_test(completion comp, struct sigevent *sev)
+aio_unix_socketpair_test(completion comp, struct sigevent *sev, bool vectored)
 {
 	struct aio_context ac;
 	struct rusage ru_before, ru_after;
@@ -460,7 +506,10 @@ aio_unix_socketpair_test(completion comp, struct sigevent *sev)
 	aio_context_init(&ac, sockets[0], sockets[1], UNIX_SOCKETPAIR_LEN);
 	ATF_REQUIRE_MSG(getrusage(RUSAGE_SELF, &ru_before) != -1,
 	    "getrusage failed: %s", strerror(errno));
-	aio_write_test(&ac, comp, sev);
+	if (vectored)
+		aio_writev_test(&ac, comp, sev);
+	else
+		aio_write_test(&ac, comp, sev);
 	ATF_REQUIRE_MSG(getrusage(RUSAGE_SELF, &ru_after) != -1,
 	    "getrusage failed: %s", strerror(errno));
 	ATF_REQUIRE(ru_after.ru_msgsnd == ru_before.ru_msgsnd + 1);
@@ -477,31 +526,31 @@ aio_unix_socketpair_test(completion comp, struct sigevent *sev)
 ATF_TC_WITHOUT_HEAD(socket_poll);
 ATF_TC_BODY(socket_poll, tc)
 {
-	aio_unix_socketpair_test(poll, NULL);
+	aio_unix_socketpair_test(poll, NULL, false);
 }
 
 ATF_TC_WITHOUT_HEAD(socket_signal);
 ATF_TC_BODY(socket_signal, tc)
 {
-	aio_unix_socketpair_test(poll_signaled, setup_signal());
+	aio_unix_socketpair_test(poll_signaled, setup_signal(), false);
 }
 
 ATF_TC_WITHOUT_HEAD(socket_suspend);
 ATF_TC_BODY(socket_suspend, tc)
 {
-	aio_unix_socketpair_test(suspend, NULL);
+	aio_unix_socketpair_test(suspend, NULL, false);
 }
 
 ATF_TC_WITHOUT_HEAD(socket_thread);
 ATF_TC_BODY(socket_thread, tc)
 {
-	aio_unix_socketpair_test(poll_signaled, setup_thread());
+	aio_unix_socketpair_test(poll_signaled, setup_thread(), false);
 }
 
 ATF_TC_WITHOUT_HEAD(socket_waitcomplete);
 ATF_TC_BODY(socket_waitcomplete, tc)
 {
-	aio_unix_socketpair_test(waitcomplete, NULL);
+	aio_unix_socketpair_test(waitcomplete, NULL, false);
 }
 
 struct aio_pty_arg {
@@ -658,7 +707,7 @@ aio_md_cleanup(void)
 }
 
 static void
-aio_md_test(completion comp, struct sigevent *sev)
+aio_md_test(completion comp, struct sigevent *sev, bool vectored)
 {
 	int error, fd, mdctl_fd, unit;
 	char pathname[PATH_MAX];
@@ -696,7 +745,10 @@ aio_md_test(completion comp, struct sigevent *sev)
 	    "opening %s failed: %s", pathname, strerror(errno));
 
 	aio_context_init(&ac, fd, fd, MD_LEN);
-	aio_write_test(&ac, comp, sev);
+	if (vectored)
+		aio_writev_test(&ac, comp, sev);
+	else
+		aio_write_test(&ac, comp, sev);
 	aio_read_test(&ac, comp, sev);
 	
 	close(fd);
@@ -710,7 +762,7 @@ ATF_TC_HEAD(md_poll, tc)
 }
 ATF_TC_BODY(md_poll, tc)
 {
-	aio_md_test(poll, NULL);
+	aio_md_test(poll, NULL, false);
 }
 ATF_TC_CLEANUP(md_poll, tc)
 {
@@ -725,7 +777,7 @@ ATF_TC_HEAD(md_signal, tc)
 }
 ATF_TC_BODY(md_signal, tc)
 {
-	aio_md_test(poll_signaled, setup_signal());
+	aio_md_test(poll_signaled, setup_signal(), false);
 }
 ATF_TC_CLEANUP(md_signal, tc)
 {
@@ -740,7 +792,7 @@ ATF_TC_HEAD(md_suspend, tc)
 }
 ATF_TC_BODY(md_suspend, tc)
 {
-	aio_md_test(suspend, NULL);
+	aio_md_test(suspend, NULL, false);
 }
 ATF_TC_CLEANUP(md_suspend, tc)
 {
@@ -755,7 +807,7 @@ ATF_TC_HEAD(md_thread, tc)
 }
 ATF_TC_BODY(md_thread, tc)
 {
-	aio_md_test(poll_signaled, setup_thread());
+	aio_md_test(poll_signaled, setup_thread(), false);
 }
 ATF_TC_CLEANUP(md_thread, tc)
 {
@@ -770,7 +822,7 @@ ATF_TC_HEAD(md_waitcomplete, tc)
 }
 ATF_TC_BODY(md_waitcomplete, tc)
 {
-	aio_md_test(waitcomplete, NULL);
+	aio_md_test(waitcomplete, NULL, false);
 }
 ATF_TC_CLEANUP(md_waitcomplete, tc)
 {
@@ -1155,6 +1207,134 @@ ATF_TC_BODY(aio_fsync_test, tc)
 	close(fd);
 }
 
+// We shouldn't be able to DOS the system by setting iov_len to an insane
+// value
+ATF_TC_WITHOUT_HEAD(aio_writev_dos_iov_len);
+ATF_TC_BODY(aio_writev_dos_iov_len, tc)
+{
+	struct aiocb aio;
+	const struct aiocb *const iocbs[] = {&aio};
+	const char *wbuf = "Hello, world!";
+	struct iovec iov[1];
+	ssize_t len, r;
+	int fd;
+
+	ATF_REQUIRE_KERNEL_MODULE("aio");
+	ATF_REQUIRE_UNSAFE_AIO();
+
+	fd = open("testfile", O_RDWR | O_CREAT, 0600);
+	ATF_REQUIRE_MSG(fd != -1, "open failed: %s", strerror(errno));
+
+	len = strlen(wbuf);
+	iov[0].iov_base = __DECONST(void*, wbuf);
+	iov[0].iov_len = 1 << 30;
+	bzero(&aio, sizeof(aio));
+	aio.aio_fildes = fd;
+	aio.aio_offset = 0;
+	aio.aio_iov = iov;
+	aio.aio_iovcnt = 1;
+
+	r = aio_writev(&aio);
+	ATF_CHECK_EQ_MSG(0, r, "aio_writev returned %ld", r);
+	ATF_REQUIRE_EQ(0, aio_suspend(iocbs, 1, NULL));
+	r = aio_return(&aio);
+	ATF_CHECK_EQ_MSG(-1, r, "aio_return returned %ld", r);
+	ATF_CHECK_MSG(errno == EFAULT || errno == EINVAL,
+	    "aio_writev: %s", strerror(errno));
+
+	close(fd);
+}
+
+// We shouldn't be able to DOS the system by setting aio_iovcnt to an insane
+// value
+ATF_TC_WITHOUT_HEAD(aio_writev_dos_iovcnt);
+ATF_TC_BODY(aio_writev_dos_iovcnt, tc)
+{
+	struct aiocb aio;
+	const struct aiocb *const iocbs[] = {&aio};
+	const char *wbuf = "Hello, world!";
+	struct iovec iov[1];
+	ssize_t len, r;
+	int fd;
+
+	ATF_REQUIRE_KERNEL_MODULE("aio");
+	ATF_REQUIRE_UNSAFE_AIO();
+
+	fd = open("testfile", O_RDWR | O_CREAT, 0600);
+	ATF_REQUIRE_MSG(fd != -1, "open failed: %s", strerror(errno));
+
+	len = strlen(wbuf);
+	iov[0].iov_base = __DECONST(void*, wbuf);
+	iov[0].iov_len = len;
+	bzero(&aio, sizeof(aio));
+	aio.aio_fildes = fd;
+	aio.aio_offset = 0;
+	aio.aio_iov = iov;
+	aio.aio_iovcnt = 1 << 30;
+
+	r = aio_writev(&aio);
+	ATF_CHECK_EQ_MSG(0, r, "aio_writev returned %ld", r);
+	ATF_REQUIRE_EQ(0, aio_suspend(iocbs, 1, NULL));
+	r = aio_return(&aio);
+	ATF_CHECK_EQ_MSG(-1, r, "aio_return returned %ld", r);
+	ATF_CHECK_MSG(errno == EFAULT || errno == EINVAL,
+	    "aio_writev: %s", strerror(errno));
+
+	close(fd);
+}
+
+ATF_TC_WITHOUT_HEAD(aio_writev_empty);
+ATF_TC_BODY(aio_writev_empty, tc)
+{
+	struct aiocb aio;
+	const struct aiocb *const iocbs[] = {&aio};
+	int fd;
+
+	ATF_REQUIRE_KERNEL_MODULE("aio");
+	ATF_REQUIRE_UNSAFE_AIO();
+
+	fd = open("testfile", O_RDWR | O_CREAT, 0600);
+	ATF_REQUIRE_MSG(fd != -1, "open failed: %s", strerror(errno));
+
+	bzero(&aio, sizeof(aio));
+	aio.aio_fildes = fd;
+	aio.aio_offset = 0;
+	aio.aio_iovcnt = 0;
+
+	ATF_REQUIRE_EQ(0, aio_writev(&aio));
+
+	ATF_REQUIRE_EQ(0, aio_suspend(iocbs, 1, NULL));
+	ATF_REQUIRE_EQ(0, aio_return(&aio));
+
+	close(fd);
+}
+
+ATF_TC_WITHOUT_HEAD(vectored_file_poll);
+ATF_TC_BODY(vectored_file_poll, tc)
+{
+	aio_file_test(poll, NULL, true);
+}
+
+ATF_TC_WITH_CLEANUP(vectored_md_poll);
+ATF_TC_HEAD(vectored_md_poll, tc)
+{
+	atf_tc_set_md_var(tc, "require.user", "root");
+}
+ATF_TC_BODY(vectored_md_poll, tc)
+{
+	aio_md_test(poll, NULL, true);
+}
+ATF_TC_CLEANUP(vectored_md_poll, tc)
+{
+	aio_md_cleanup();
+}
+
+ATF_TC_WITHOUT_HEAD(vectored_socket_poll);
+ATF_TC_BODY(vectored_socket_poll, tc)
+{
+	aio_unix_socketpair_test(poll, NULL, true);
+}
+
 ATF_TP_ADD_TCS(tp)
 {
 
@@ -1194,6 +1374,16 @@ ATF_TP_ADD_TCS(tp)
 	ATF_TP_ADD_TC(tp, aio_socket_two_reads);
 	ATF_TP_ADD_TC(tp, aio_socket_blocking_short_write);
 	ATF_TP_ADD_TC(tp, aio_socket_short_write_cancel);
+	ATF_TP_ADD_TC(tp, aio_writev_dos_iov_len);
+	ATF_TP_ADD_TC(tp, aio_writev_dos_iovcnt);
+	ATF_TP_ADD_TC(tp, aio_writev_empty);
+	ATF_TP_ADD_TC(tp, vectored_file_poll);
+	/* 
+	 * TODO: add a test for vectored I/O to a md, where the individual
+	 * iovec elements are not sector-aligned
+	 */
+	ATF_TP_ADD_TC(tp, vectored_md_poll);
+	ATF_TP_ADD_TC(tp, vectored_socket_poll);
 
 	return (atf_no_error());
 }
