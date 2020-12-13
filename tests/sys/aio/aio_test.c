@@ -838,6 +838,53 @@ ATF_TC_CLEANUP(md_waitcomplete, tc)
 	aio_md_cleanup();
 }
 
+#define	ZVOL_VDEV_PATHNAME	"test_vdev"
+#define POOL_SIZE		(1 << 28)	/* 256 MB */
+#define ZVOL_SIZE		"64m"
+#define POOL_NAME		"aio_testpool"
+#define ZVOL_NAME		"aio_testvol"
+
+static int
+aio_zvol_setup(void)
+{
+	int fd;
+
+	ATF_REQUIRE_KERNEL_MODULE("aio");
+	ATF_REQUIRE_KERNEL_MODULE("zfs");
+
+	fd = open(ZVOL_VDEV_PATHNAME, O_RDWR | O_CREAT, 0600);
+	ATF_REQUIRE_MSG(fd != -1, "open failed: %s", strerror(errno));
+	ATF_REQUIRE_EQ_MSG(0,
+	    ftruncate(fd, POOL_SIZE), "ftruncate failed: %s", strerror(errno));
+	close(fd);
+
+	ATF_REQUIRE_EQ_MSG(0,
+	    system("zpool create " POOL_NAME " $PWD/" ZVOL_VDEV_PATHNAME),
+	    "zpool create failed: %s", strerror(errno));
+	ATF_REQUIRE_EQ_MSG(0,
+	    system("zfs create -o volblocksize=8192 -o volmode=dev -V "
+		ZVOL_SIZE " " POOL_NAME "/" ZVOL_NAME),
+	    "zfs create failed: %s", strerror(errno));
+	/*
+	 * XXX Due to bug 251828, we need an extra "zfs set here"
+	 * https://bugs.freebsd.org/bugzilla/show_bug.cgi?id=251828
+	 */
+	ATF_REQUIRE_EQ_MSG(0,
+	    system("zfs set volmode=dev " POOL_NAME "/" ZVOL_NAME),
+	    "zfs set failed: %s", strerror(errno));
+
+	fd = open("/dev/zvol/" POOL_NAME "/" ZVOL_NAME, O_RDWR);
+	ATF_REQUIRE_MSG(fd != -1, "open failed: %s", strerror(errno));
+	return (fd);
+}
+
+static void
+aio_zvol_cleanup(void)
+{
+	system("zpool destroy " POOL_NAME);
+}
+
+
 ATF_TC_WITHOUT_HEAD(aio_large_read_test);
 ATF_TC_BODY(aio_large_read_test, tc)
 {
@@ -1450,7 +1497,11 @@ ATF_TC_BODY(vectored_unaligned, tc)
 	ATF_REQUIRE_KERNEL_MODULE("aio");
 	ATF_REQUIRE_UNSAFE_AIO();
 
-	fd = aio_md_setup();
+	/* 
+	 * Use a zvol with volmode=dev, so it will allow .d_write with
+	 * unaligned uio.  geom devices use physio, which doesn't allow that.
+	 */
+	fd = aio_zvol_setup();
 	aio_context_init(&ac, fd, fd, FILE_LEN);
 
 	/* Break the buffer into 3 parts:
@@ -1486,7 +1537,42 @@ ATF_TC_BODY(vectored_unaligned, tc)
 }
 ATF_TC_CLEANUP(vectored_unaligned, tc)
 {
-	aio_md_cleanup();
+	aio_zvol_cleanup();
+}
+
+static void
+aio_zvol_test(completion comp, struct sigevent *sev, bool vectored)
+{
+	struct aio_context ac;
+	int fd;
+
+	fd = aio_zvol_setup();
+	aio_context_init(&ac, fd, fd, MD_LEN);
+	if (vectored)
+		aio_writev_test(&ac, comp, sev);
+	else
+		aio_write_test(&ac, comp, sev);
+	aio_read_test(&ac, comp, sev);
+	
+	close(fd);
+}
+
+/* 
+ * Note that unlike md, the zvol is not a geom device, does not allow unmapped
+ * buffers, and does not use physio.
+ */
+ATF_TC_WITH_CLEANUP(vectored_zvol_poll);
+ATF_TC_HEAD(vectored_zvol_poll, tc)
+{
+	atf_tc_set_md_var(tc, "require.user", "root");
+}
+ATF_TC_BODY(vectored_zvol_poll, tc)
+{
+	aio_zvol_test(poll, NULL, true);
+}
+ATF_TC_CLEANUP(vectored_zvol_poll, tc)
+{
+	aio_zvol_cleanup();
 }
 
 ATF_TP_ADD_TCS(tp)
@@ -1535,6 +1621,7 @@ ATF_TP_ADD_TCS(tp)
 	ATF_TP_ADD_TC(tp, vectored_big_iovcnt);
 	ATF_TP_ADD_TC(tp, vectored_file_poll);
 	ATF_TP_ADD_TC(tp, vectored_md_poll);
+	ATF_TP_ADD_TC(tp, vectored_zvol_poll);
 	ATF_TP_ADD_TC(tp, vectored_unaligned);
 	ATF_TP_ADD_TC(tp, vectored_socket_poll);
 
