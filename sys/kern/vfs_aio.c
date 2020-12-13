@@ -779,10 +779,8 @@ aio_process_rw(struct kaiocb *job)
 	if (job->uaiocb.aio_lio_opcode == LIO_WRITEV) {
 		error = copyinuio(job->uaiocb.aio_iov, job->uaiocb.aio_iovcnt,
 		    &auiop);
-		if (error) {
-			aio_complete(job, -1, error);
-			return;
-		}
+		if (error)
+			goto out;
 	} else {
 		aiov.iov_base = (void *)(uintptr_t)cb->aio_buf;
 		aiov.iov_len = cb->aio_nbytes;
@@ -839,9 +837,10 @@ aio_process_rw(struct kaiocb *job)
 	}
 
 	cnt -= auiop->uio_resid;
-	td->td_ucred = td_savedcred;
 	if (job->uaiocb.aio_lio_opcode == LIO_WRITEV)
 		free(auiop, M_IOV);
+out:
+	td->td_ucred = td_savedcred;
 	if (error)
 		aio_complete(job, -1, error);
 	else
