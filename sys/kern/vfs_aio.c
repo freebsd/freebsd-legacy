@@ -1223,21 +1223,25 @@ aio_qbio(struct proc *p, struct kaiocb *job)
 {
 	struct aiocb *cb;
 	struct file *fp;
-	struct bio *bp;
 	struct buf *pbuf;
 	struct vnode *vp;
 	struct cdevsw *csw;
 	struct cdev *dev;
 	struct kaioinfo *ki;
-	int error, ref, poff;
+	struct uio *auiop = NULL;
+	off_t offset;
+	size_t nbytes = 0;
+	int bio_cmd, error, i, opcode, ref, poff, iovcnt;
+	bool vectored;
 	vm_prot_t prot;
 
 	cb = &job->uaiocb;
 	fp = job->fd_file;
+	opcode = cb->aio_lio_opcode;
 
-	// TODO: handle LIO_WRITEV
-	if (!(cb->aio_lio_opcode == LIO_WRITE ||
-	    cb->aio_lio_opcode == LIO_READ))
+	if (!(opcode == LIO_WRITE ||
+	    opcode == LIO_WRITEV ||
+	    opcode == LIO_READ))
 		return (-1);
 	if (fp == NULL || fp->f_type != DTYPE_VNODE)
 		return (-1);
@@ -1247,105 +1251,141 @@ aio_qbio(struct proc *p, struct kaiocb *job)
 		return (-1);
 	if (vp->v_bufobj.bo_bsize == 0)
 		return (-1);
-	if (cb->aio_nbytes % vp->v_bufobj.bo_bsize)
-		return (-1);
+
+	bio_cmd = opcode == LIO_WRITE || opcode == LIO_WRITEV ? BIO_WRITE :
+	    BIO_READ;
+	vectored = opcode == LIO_WRITEV;
+	if (vectored) {
+		iovcnt = cb->aio_iovcnt;
+		if (iovcnt > max_buf_aio)
+			return (-1);
+		error = copyinuio(cb->aio_iov, cb->aio_iovcnt, &auiop);
+		if (error)
+			return (error);
+		nbytes = auiop->uio_resid;
+	} else {
+		nbytes = cb->aio_nbytes;
+		iovcnt = 1;
+	}
+	offset = cb->aio_offset;
+
+	if (nbytes % vp->v_bufobj.bo_bsize) {
+		error = -1;
+		goto free_uio;
+	}
 
 	ref = 0;
 	csw = devvn_refthread(vp, &dev, &ref);
-	if (csw == NULL)
-		return (ENXIO);
+	if (csw == NULL) {
+		error = ENXIO;
+		goto free_uio;
+	}
 
 	if ((csw->d_flags & D_DISK) == 0) {
 		error = -1;
 		goto unref;
 	}
-	if (cb->aio_nbytes > dev->si_iosize_max) {
+	if (nbytes > dev->si_iosize_max) {
 		error = -1;
 		goto unref;
 	}
 
 	ki = p->p_aioinfo;
-	poff = (vm_offset_t)cb->aio_buf & PAGE_MASK;
-	if ((dev->si_flags & SI_UNMAPPED) && unmapped_buf_allowed) {
-		if (cb->aio_nbytes > maxphys) {
+	job->error = 0;
+	atomic_store_int(&job->nbio, iovcnt);
+	for (i = 0; i < iovcnt; i++) {
+		struct vm_page** pages;
+		struct bio *bp;
+		void *buf;
+		size_t nbytes;
+		int npages;
+
+		bp = g_alloc_bio();
+
+		if (vectored) {
+			buf = auiop->uio_iov[i].iov_base;
+			nbytes = auiop->uio_iov[i].iov_len;
+		} else {
+			buf = (void *)(uintptr_t)cb->aio_buf;
+			nbytes = cb->aio_nbytes;
+		}
+		if (nbytes > maxphys) {
 			error = -1;
 			goto unref;
 		}
+		poff = (vm_offset_t)buf & PAGE_MASK;
+		if ((dev->si_flags & SI_UNMAPPED) && unmapped_buf_allowed) {
+			pbuf = NULL;
+			pages = malloc(sizeof(vm_page_t) * (atop(round_page(
+			    nbytes)) + 1), M_TEMP, M_WAITOK | M_ZERO);
+		} else {
+			if (ki->kaio_buffer_count + iovcnt > max_buf_aio) {
+				error = EAGAIN;
+				goto unref;
+			}
 
-		pbuf = NULL;
-		job->pages = malloc(sizeof(vm_page_t) * (atop(round_page(
-		    cb->aio_nbytes)) + 1), M_TEMP, M_WAITOK | M_ZERO);
-	} else {
-		if (cb->aio_nbytes > maxphys) {
-			error = -1;
+			pbuf = uma_zalloc(pbuf_zone, M_WAITOK);
+			BUF_KERNPROC(pbuf);
+			AIO_LOCK(ki);
+			ki->kaio_buffer_count++;
+			AIO_UNLOCK(ki);
+			pages = pbuf->b_pages;
+		}
+
+		bp->bio_length = nbytes;
+		bp->bio_bcount = nbytes;
+		bp->bio_done = aio_biowakeup;
+		bp->bio_offset = offset;
+		bp->bio_cmd = bio_cmd;
+		bp->bio_dev = dev;
+		bp->bio_caller1 = (void *)job;
+		bp->bio_caller2 = (void *)pbuf;
+
+		prot = VM_PROT_READ;
+		if (cb->aio_lio_opcode == LIO_READ)
+			prot |= VM_PROT_WRITE;	/* Less backwards than it looks */
+		npages = vm_fault_quick_hold_pages(&curproc->p_vmspace->vm_map,
+		    (vm_offset_t)buf, bp->bio_length, prot, pages,
+		    atop(maxphys) + 1);
+		if (npages < 0) {
+			if (pbuf != NULL) {
+				AIO_LOCK(ki);
+				ki->kaio_buffer_count--;
+				AIO_UNLOCK(ki);
+				uma_zfree(pbuf_zone, pbuf);
+			} else {
+				free(pages, M_TEMP);
+			}
+			g_destroy_bio(bp);
+			error = EFAULT;
 			goto unref;
 		}
-		if (ki->kaio_buffer_count >= max_buf_aio) {
-			error = EAGAIN;
-			goto unref;
+		if (pbuf != NULL) {
+			pmap_qenter((vm_offset_t)pbuf->b_data, pages, npages);
+			bp->bio_data = pbuf->b_data + poff;
+			atomic_add_int(&num_buf_aio, 1);
+		} else {
+			bp->bio_ma = pages;
+			bp->bio_ma_n = npages;
+			bp->bio_ma_offset = poff;
+			bp->bio_data = unmapped_buf;
+			bp->bio_flags |= BIO_UNMAPPED;
+			atomic_add_int(&num_unmapped_aio, 1);
 		}
 
-		job->pbuf = pbuf = uma_zalloc(pbuf_zone, M_WAITOK);
-		BUF_KERNPROC(pbuf);
-		AIO_LOCK(ki);
-		ki->kaio_buffer_count++;
-		AIO_UNLOCK(ki);
-		job->pages = pbuf->b_pages;
-	}
-	/* For LIO_WRITEV, create a parent bio with multiple child bios */
-	job->bp = bp = g_alloc_bio();
+		/* Perform transfer. */
+		csw->d_strategy(bp);
 
-	bp->bio_length = cb->aio_nbytes;
-	bp->bio_bcount = cb->aio_nbytes;
-	bp->bio_done = aio_biowakeup;
-	bp->bio_offset = cb->aio_offset;
-	bp->bio_cmd = cb->aio_lio_opcode == LIO_WRITE ? BIO_WRITE : BIO_READ;
-	bp->bio_dev = dev;
-	bp->bio_caller1 = (void *)job;
-
-	prot = VM_PROT_READ;
-	if (cb->aio_lio_opcode == LIO_READ)
-		prot |= VM_PROT_WRITE;	/* Less backwards than it looks */
-	job->npages = vm_fault_quick_hold_pages(&curproc->p_vmspace->vm_map,
-	    (vm_offset_t)cb->aio_buf, bp->bio_length, prot, job->pages,
-	    atop(maxphys) + 1);
-	if (job->npages < 0) {
-		error = EFAULT;
-		goto doerror;
+		offset += nbytes;
 	}
-	if (pbuf != NULL) {
-		pmap_qenter((vm_offset_t)pbuf->b_data,
-		    job->pages, job->npages);
-		bp->bio_data = pbuf->b_data + poff;
-		atomic_add_int(&num_buf_aio, 1);
-	} else {
-		bp->bio_ma = job->pages;
-		bp->bio_ma_n = job->npages;
-		bp->bio_ma_offset = poff;
-		bp->bio_data = unmapped_buf;
-		bp->bio_flags |= BIO_UNMAPPED;
-		atomic_add_int(&num_unmapped_aio, 1);
-	}
-
-	/* Perform transfer. */
-	csw->d_strategy(bp);
 	dev_relthread(dev, ref);
+	free(auiop, M_IOV);
 	return (0);
 
-doerror:
-	if (pbuf != NULL) {
-		AIO_LOCK(ki);
-		ki->kaio_buffer_count--;
-		AIO_UNLOCK(ki);
-		uma_zfree(pbuf_zone, pbuf);
-		job->pbuf = NULL;
-	} else {
-		free(job->pages, M_TEMP);
-	}
-	g_destroy_bio(bp);
-	job->bp = NULL;
 unref:
 	dev_relthread(dev, ref);
+free_uio:
+	free(auiop, M_IOV);
 	return (error);
 }
 
@@ -2367,44 +2407,48 @@ aio_biowakeup(struct bio *bp)
 {
 	struct kaiocb *job = (struct kaiocb *)bp->bio_caller1;
 	struct kaioinfo *ki;
+	struct buf *pbuf = (struct buf*)bp->bio_caller2;;
 	size_t nbytes;
 	int error, nblks;
 
 	/* Release mapping into kernel space. */
-	if (job->pbuf != NULL) {
-		pmap_qremove((vm_offset_t)job->pbuf->b_data, job->npages);
-		vm_page_unhold_pages(job->pages, job->npages);
-		uma_zfree(pbuf_zone, job->pbuf);
-		job->pbuf = NULL;
+	if (pbuf != NULL) {
+		pmap_qremove((vm_offset_t)pbuf->b_data, bp->bio_ma_n);
+		vm_page_unhold_pages(bp->bio_ma, bp->bio_ma_n);
+		uma_zfree(pbuf_zone, pbuf);
 		atomic_subtract_int(&num_buf_aio, 1);
 		ki = job->userproc->p_aioinfo;
 		AIO_LOCK(ki);
 		ki->kaio_buffer_count--;
 		AIO_UNLOCK(ki);
 	} else {
-		vm_page_unhold_pages(job->pages, job->npages);
-		free(job->pages, M_TEMP);
+		vm_page_unhold_pages(bp->bio_ma, bp->bio_ma_n);
+		free(bp->bio_ma, M_TEMP);
 		atomic_subtract_int(&num_unmapped_aio, 1);
 	}
 
-	bp = job->bp;
-	job->bp = NULL;
-	nbytes = job->uaiocb.aio_nbytes - bp->bio_resid;
-	error = 0;
-	if (bp->bio_flags & BIO_ERROR)
-		error = bp->bio_error;
+	nbytes = bp->bio_bcount - bp->bio_resid;
+	atomic_add_acq_long(&job->nbytes, nbytes);
 	nblks = btodb(nbytes);
+	error = 0;
+	// If multiple bios experienced an error, the job will reflect the error
+	// of whichever failed bio completed last.
+	if (bp->bio_flags & BIO_ERROR)
+		atomic_set_int(&job->error, bp->bio_error);
 	if (job->uaiocb.aio_lio_opcode == LIO_WRITE)
-		job->outblock += nblks;
+		atomic_add_int(&job->outblock, nblks);
 	else
-		job->inblock += nblks;
-
-	if (error)
-		aio_complete(job, -1, error);
-	else
-		aio_complete(job, nbytes, 0);
+		atomic_add_int(&job->inblock, nblks);
+	atomic_subtract_int(&job->nbio, 1);
 
 	g_destroy_bio(bp);
+
+	if (atomic_load_int(&job->nbio) == 0) {
+		if (atomic_load_int(&job->error))
+			aio_complete(job, -1, job->error);
+		else
+			aio_complete(job, atomic_load_int(&job->nbytes), 0);
+	}
 }
 
 /* syscall - wait for the next completion of an aio request */

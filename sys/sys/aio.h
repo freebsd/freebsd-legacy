@@ -146,10 +146,9 @@ struct kaiocb {
 	aio_handle_fn_t *handle_fn;	/* (c) backend handle function */
 	union {				/* Backend-specific data fields */
 		struct {		/* BIO backend */
-			struct bio *bp;	/* (*) BIO pointer */
-			struct buf *pbuf; /* (*) buffer pointer */
-			int	npages;	/* (*) number of pages */
-			struct vm_page **pages; /* (*) */
+			int	nbio;	/* Number of remaining bios */
+			int	error;	/* Worst error of all bios */
+			long	nbytes;	/* Bytes completed so far */
 		};
 		struct {		/* fsync() requests */
 			int	pending; /* (a) number of pending I/O */
