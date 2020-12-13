@@ -678,40 +678,11 @@ ATF_TC_BODY(pipe_waitcomplete, tc)
 #define	MD_LEN		GLOBAL_MAX
 #define	MDUNIT_LINK	"mdunit_link"
 
-static void
-aio_md_cleanup(void)
-{
-	struct md_ioctl mdio;
-	int mdctl_fd, error, n, unit;
-	char buf[80];
-
-	mdctl_fd = open("/dev/" MDCTL_NAME, O_RDWR, 0);
-	ATF_REQUIRE(mdctl_fd >= 0);
-	n = readlink(MDUNIT_LINK, buf, sizeof(buf));
-	if (n > 0) {
-		if (sscanf(buf, "%d", &unit) == 1 && unit >= 0) {
-			bzero(&mdio, sizeof(mdio));
-			mdio.md_version = MDIOVERSION;
-			mdio.md_unit = unit;
-			if (ioctl(mdctl_fd, MDIOCDETACH, &mdio) == -1) {
-				error = errno;
-				close(mdctl_fd);
-				errno = error;
-				atf_tc_fail("ioctl MDIOCDETACH failed: %s",
-				    strerror(errno));
-			}
-		}
-	}
-		
-	close(mdctl_fd);
-}
-
-static void
-aio_md_test(completion comp, struct sigevent *sev, bool vectored)
+static int
+aio_md_setup(void)
 {
 	int error, fd, mdctl_fd, unit;
 	char pathname[PATH_MAX];
-	struct aio_context ac;
 	struct md_ioctl mdio;
 	char buf[80];
 
@@ -743,7 +714,45 @@ aio_md_test(completion comp, struct sigevent *sev, bool vectored)
 	fd = open(pathname, O_RDWR);
 	ATF_REQUIRE_MSG(fd != -1,
 	    "opening %s failed: %s", pathname, strerror(errno));
+	
+	return (fd);
+}
 
+static void
+aio_md_cleanup(void)
+{
+	struct md_ioctl mdio;
+	int mdctl_fd, error, n, unit;
+	char buf[80];
+
+	mdctl_fd = open("/dev/" MDCTL_NAME, O_RDWR, 0);
+	ATF_REQUIRE(mdctl_fd >= 0);
+	n = readlink(MDUNIT_LINK, buf, sizeof(buf));
+	if (n > 0) {
+		if (sscanf(buf, "%d", &unit) == 1 && unit >= 0) {
+			bzero(&mdio, sizeof(mdio));
+			mdio.md_version = MDIOVERSION;
+			mdio.md_unit = unit;
+			if (ioctl(mdctl_fd, MDIOCDETACH, &mdio) == -1) {
+				error = errno;
+				close(mdctl_fd);
+				errno = error;
+				atf_tc_fail("ioctl MDIOCDETACH failed: %s",
+				    strerror(errno));
+			}
+		}
+	}
+		
+	close(mdctl_fd);
+}
+
+static void
+aio_md_test(completion comp, struct sigevent *sev, bool vectored)
+{
+	struct aio_context ac;
+	int fd;
+
+	fd = aio_md_setup();
 	aio_context_init(&ac, fd, fd, MD_LEN);
 	if (vectored)
 		aio_writev_test(&ac, comp, sev);
@@ -1283,11 +1292,10 @@ ATF_TC_BODY(aio_writev_dos_iovcnt, tc)
 	close(fd);
 }
 
-ATF_TC_WITHOUT_HEAD(aio_writev_empty);
-ATF_TC_BODY(aio_writev_empty, tc)
+ATF_TC_WITHOUT_HEAD(aio_writev_empty_file_poll);
+ATF_TC_BODY(aio_writev_empty_file_poll, tc)
 {
 	struct aiocb aio;
-	const struct aiocb *const iocbs[] = {&aio};
 	int fd;
 
 	ATF_REQUIRE_KERNEL_MODULE("aio");
@@ -1302,11 +1310,96 @@ ATF_TC_BODY(aio_writev_empty, tc)
 	aio.aio_iovcnt = 0;
 
 	ATF_REQUIRE_EQ(0, aio_writev(&aio));
-
-	ATF_REQUIRE_EQ(0, aio_suspend(iocbs, 1, NULL));
-	ATF_REQUIRE_EQ(0, aio_return(&aio));
+	ATF_REQUIRE_EQ(0, suspend(&aio));
 
 	close(fd);
+}
+
+ATF_TC_WITHOUT_HEAD(aio_writev_empty_file_signal);
+ATF_TC_BODY(aio_writev_empty_file_signal, tc)
+{
+	struct aiocb aio;
+	int fd;
+
+	ATF_REQUIRE_KERNEL_MODULE("aio");
+	ATF_REQUIRE_UNSAFE_AIO();
+
+	fd = open("testfile", O_RDWR | O_CREAT, 0600);
+	ATF_REQUIRE_MSG(fd != -1, "open failed: %s", strerror(errno));
+
+	bzero(&aio, sizeof(aio));
+	aio.aio_fildes = fd;
+	aio.aio_offset = 0;
+	aio.aio_iovcnt = 0;
+	aio.aio_sigevent = *setup_signal();
+
+	ATF_REQUIRE_EQ(0, aio_writev(&aio));
+	ATF_REQUIRE_EQ(0, poll_signaled(&aio));
+
+	close(fd);
+}
+
+// aio_writev and aio_readv should still work even if the iovcnt is greater
+// than the number of buffered AIO operations permitted per process.
+ATF_TC_WITH_CLEANUP(vectored_big_iovcnt);
+ATF_TC_HEAD(vectored_big_iovcnt, tc)
+{
+	atf_tc_set_md_var(tc, "descr",
+	    "Vectored AIO should still work even if the iovcnt is greater than "
+	    "the number of buffered AIO operations permitted by the process");
+	atf_tc_set_md_var(tc, "require.user", "root");
+}
+ATF_TC_BODY(vectored_big_iovcnt, tc)
+{
+	struct aiocb aio;
+	struct iovec *iov;
+	ssize_t len, buflen;
+	char *buffer;
+	const char *oid = "vfs.aio.max_buf_aio";
+	long seed;
+	int max_buf_aio;
+	int fd, i;
+	ssize_t sysctl_len = sizeof(max_buf_aio);
+
+	ATF_REQUIRE_KERNEL_MODULE("aio");
+	ATF_REQUIRE_UNSAFE_AIO();
+
+	if (sysctlbyname(oid, &max_buf_aio, &sysctl_len, NULL, 0) == -1)
+		atf_libc_error(errno, "Failed to read %s", oid);
+
+	seed = random();
+	buflen = 512 * (max_buf_aio + 1);
+	buffer = malloc(buflen);
+	aio_fill_buffer(buffer, buflen, seed);
+	iov = calloc(max_buf_aio + 1, sizeof(struct iovec));
+
+	fd = aio_md_setup();
+
+	bzero(&aio, sizeof(aio));
+	aio.aio_fildes = fd;
+	aio.aio_offset = 0;
+	for (i = 0; i < max_buf_aio + 1; i++) {
+		iov[i].iov_base = &buffer[i * 512];
+		iov[i].iov_len = 512;
+	}
+	aio.aio_iov = iov;
+	aio.aio_iovcnt = max_buf_aio + 1;
+
+	if (aio_writev(&aio) < 0)
+		atf_tc_fail("aio_writev failed: %s", strerror(errno));
+
+	len = poll(&aio);
+	if (len < 0)
+		atf_tc_fail("aio failed: %s", strerror(errno));
+
+	if (len != buflen)
+		atf_tc_fail("aio short write (%jd)", (intmax_t)len);
+	// TODO: aio_readv
+	close(fd);
+}
+ATF_TC_CLEANUP(vectored_big_iovcnt, tc)
+{
+	aio_md_cleanup();
 }
 
 ATF_TC_WITHOUT_HEAD(vectored_file_poll);
@@ -1333,6 +1426,67 @@ ATF_TC_WITHOUT_HEAD(vectored_socket_poll);
 ATF_TC_BODY(vectored_socket_poll, tc)
 {
 	aio_unix_socketpair_test(poll, NULL, true);
+}
+
+// aio_writev and aio_readv should still work even if the iov contains elements
+// that aren't a multiple of the device's sector size, and even if the total
+// amount if I/O _is_ a multiple of the device's sector size.
+ATF_TC_WITH_CLEANUP(vectored_unaligned);
+ATF_TC_HEAD(vectored_unaligned, tc)
+{
+	atf_tc_set_md_var(tc, "descr",
+	    "Vectored AIO should still work even if the iov contains elements "
+	    "that aren't a multiple of the sector size.");
+	atf_tc_set_md_var(tc, "require.user", "root");
+}
+ATF_TC_BODY(vectored_unaligned, tc)
+{
+	struct aio_context ac;
+	struct aiocb aio;
+	struct iovec iov[3];
+	ssize_t len, total_len;
+	int fd;
+
+	ATF_REQUIRE_KERNEL_MODULE("aio");
+	ATF_REQUIRE_UNSAFE_AIO();
+
+	fd = aio_md_setup();
+	aio_context_init(&ac, fd, fd, FILE_LEN);
+
+	/* Break the buffer into 3 parts:
+	 * * A 4kB part, aligned to 4kB
+	 * * Two other parts that add up to 4kB:
+	 *   - 256B
+	 *   - 4kB - 256B
+	 */
+	iov[0].iov_base = ac.ac_buffer;
+	iov[0].iov_len = 4096;
+	iov[1].iov_base = (void*)((uintptr_t)iov[0].iov_base + iov[0].iov_len);
+	iov[1].iov_len = 256;
+	iov[2].iov_base = (void*)((uintptr_t)iov[1].iov_base + iov[1].iov_len);
+	iov[2].iov_len = 4096 - iov[1].iov_len;
+	total_len = iov[0].iov_len + iov[1].iov_len + iov[2].iov_len;
+	bzero(&aio, sizeof(aio));
+	aio.aio_fildes = ac.ac_write_fd;
+	aio.aio_offset = 0;
+	aio.aio_iov = iov;
+	aio.aio_iovcnt = 3;
+
+	if (aio_writev(&aio) < 0)
+		atf_tc_fail("aio_writev failed: %s", strerror(errno));
+
+	len = poll(&aio);
+	if (len < 0)
+		atf_tc_fail("aio failed: %s", strerror(errno));
+
+	if (len != total_len)
+		atf_tc_fail("aio short write (%jd)", (intmax_t)len);
+	// TODO: aio_readv
+	close(fd);
+}
+ATF_TC_CLEANUP(vectored_unaligned, tc)
+{
+	aio_md_cleanup();
 }
 
 ATF_TP_ADD_TCS(tp)
@@ -1376,13 +1530,12 @@ ATF_TP_ADD_TCS(tp)
 	ATF_TP_ADD_TC(tp, aio_socket_short_write_cancel);
 	ATF_TP_ADD_TC(tp, aio_writev_dos_iov_len);
 	ATF_TP_ADD_TC(tp, aio_writev_dos_iovcnt);
-	ATF_TP_ADD_TC(tp, aio_writev_empty);
+	ATF_TP_ADD_TC(tp, aio_writev_empty_file_poll);
+	ATF_TP_ADD_TC(tp, aio_writev_empty_file_signal);
+	ATF_TP_ADD_TC(tp, vectored_big_iovcnt);
 	ATF_TP_ADD_TC(tp, vectored_file_poll);
-	/* 
-	 * TODO: add a test for vectored I/O to a md, where the individual
-	 * iovec elements are not sector-aligned
-	 */
 	ATF_TP_ADD_TC(tp, vectored_md_poll);
+	ATF_TP_ADD_TC(tp, vectored_unaligned);
 	ATF_TP_ADD_TC(tp, vectored_socket_poll);
 
 	return (atf_no_error());

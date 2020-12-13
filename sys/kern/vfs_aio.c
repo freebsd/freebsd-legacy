@@ -45,6 +45,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/proc.h>
 #include <sys/resourcevar.h>
 #include <sys/signalvar.h>
+#include <sys/sdt.h>
 #include <sys/syscallsubr.h>
 #include <sys/protosw.h>
 #include <sys/rwlock.h>
@@ -73,6 +74,8 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm_object.h>
 #include <vm/uma.h>
 #include <sys/aio.h>
+
+SDT_PROVIDER_DEFINE(aio);
 
 /*
  * Counter for allocating reference ids to new jobs.  Wrapped to 1 on
@@ -1218,6 +1221,8 @@ aio_newproc(int *start)
  * structure's reference count, preventing its deallocation for the
  * duration of this call.
  */
+SDT_PROBE_DEFINE2(aio, aio, aio_qbio, entry, "struct proc*", "struct kaiocb*");
+SDT_PROBE_DEFINE2(aio, aio, aio_qbio, dev, "struct kaiocb*", "struct cdev*");
 static int
 aio_qbio(struct proc *p, struct kaiocb *job)
 {
@@ -1238,6 +1243,8 @@ aio_qbio(struct proc *p, struct kaiocb *job)
 	cb = &job->uaiocb;
 	fp = job->fd_file;
 	opcode = cb->aio_lio_opcode;
+
+	SDT_PROBE2(aio, aio, aio_qbio, entry, p, job);
 
 	if (!(opcode == LIO_WRITE ||
 	    opcode == LIO_WRITEV ||
@@ -1262,17 +1269,25 @@ aio_qbio(struct proc *p, struct kaiocb *job)
 		error = copyinuio(cb->aio_iov, cb->aio_iovcnt, &auiop);
 		if (error)
 			return (error);
+		for (i = 0; i < iovcnt; i++) {
+			if (auiop->uio_iov[i].iov_len % vp->v_bufobj.bo_bsize) {
+				// TODO: are there any disk-like devices that
+				// would balk here but would work with
+				// aio_process_rw?  I don't know of any.  With
+				// md, at least, aio_process_rw calls physio,
+				// which has this same problem.
+				error = -1;
+				goto free_uio;
+			}
+		}
 		nbytes = auiop->uio_resid;
 	} else {
 		nbytes = cb->aio_nbytes;
+		if (nbytes % vp->v_bufobj.bo_bsize)
+			return (-1);
 		iovcnt = 1;
 	}
 	offset = cb->aio_offset;
-
-	if (nbytes % vp->v_bufobj.bo_bsize) {
-		error = -1;
-		goto free_uio;
-	}
 
 	ref = 0;
 	csw = devvn_refthread(vp, &dev, &ref);
@@ -1280,6 +1295,7 @@ aio_qbio(struct proc *p, struct kaiocb *job)
 		error = ENXIO;
 		goto free_uio;
 	}
+	SDT_PROBE2(aio, aio, aio_qbio, dev, job, dev);
 
 	if ((csw->d_flags & D_DISK) == 0) {
 		error = -1;
