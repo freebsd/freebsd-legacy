@@ -216,6 +216,7 @@ __BEGIN_DECLS
  * Asynchronously read from a file
  */
 int	aio_read(struct aiocb *);
+int	aio_readv(struct aiocb *);
 
 /*
  * Asynchronously write to file

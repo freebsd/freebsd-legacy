@@ -765,9 +765,11 @@ aio_process_rw(struct kaiocb *job)
 	long msgrcv_st, msgrcv_end;
 	long oublock_st, oublock_end;
 	long inblock_st, inblock_end;
-	int error;
+	int error, opcode;
+	bool vectored;
 
 	KASSERT(job->uaiocb.aio_lio_opcode == LIO_READ ||
+	    job->uaiocb.aio_lio_opcode == LIO_READV ||
 	    job->uaiocb.aio_lio_opcode == LIO_WRITE ||
 	    job->uaiocb.aio_lio_opcode == LIO_WRITEV,
 	    ("%s: opcode %d", __func__, job->uaiocb.aio_lio_opcode));
@@ -779,7 +781,9 @@ aio_process_rw(struct kaiocb *job)
 	cb = &job->uaiocb;
 	fp = job->fd_file;
 
-	if (job->uaiocb.aio_lio_opcode == LIO_WRITEV) {
+	opcode = job->uaiocb.aio_lio_opcode;
+	vectored = opcode == LIO_WRITEV || opcode == LIO_READV;
+	if (vectored) {
 		error = copyinuio(job->uaiocb.aio_iov, job->uaiocb.aio_iovcnt,
 		    &auiop);
 		if (error)
@@ -807,7 +811,7 @@ aio_process_rw(struct kaiocb *job)
 	 * aio_aqueue() acquires a reference to the file that is
 	 * released in aio_free_entry().
 	 */
-	if (cb->aio_lio_opcode == LIO_READ) {
+	if (opcode == LIO_READ || opcode == LIO_READV) {
 		auiop->uio_rw = UIO_READ;
 		if (auiop->uio_resid == 0)
 			error = 0;
@@ -832,7 +836,9 @@ aio_process_rw(struct kaiocb *job)
 	if ((error) && (auiop->uio_resid != cnt)) {
 		if (error == ERESTART || error == EINTR || error == EWOULDBLOCK)
 			error = 0;
-		if ((error == EPIPE) && (cb->aio_lio_opcode == LIO_WRITE)) {
+		if ((error == EPIPE) &&
+		    (opcode == LIO_WRITE || opcode == LIO_WRITEV))
+		{
 			PROC_LOCK(job->userproc);
 			kern_psignal(job->userproc, SIGPIPE);
 			PROC_UNLOCK(job->userproc);
@@ -840,7 +846,7 @@ aio_process_rw(struct kaiocb *job)
 	}
 
 	cnt -= auiop->uio_resid;
-	if (job->uaiocb.aio_lio_opcode == LIO_WRITEV)
+	if (vectored)
 		free(auiop, M_IOV);
 out:
 	td->td_ucred = td_savedcred;
@@ -1248,7 +1254,8 @@ aio_qbio(struct proc *p, struct kaiocb *job)
 
 	if (!(opcode == LIO_WRITE ||
 	    opcode == LIO_WRITEV ||
-	    opcode == LIO_READ))
+	    opcode == LIO_READ ||
+	    opcode == LIO_READV))
 		return (-1);
 	if (fp == NULL || fp->f_type != DTYPE_VNODE)
 		return (-1);
@@ -1261,7 +1268,7 @@ aio_qbio(struct proc *p, struct kaiocb *job)
 
 	bio_cmd = opcode == LIO_WRITE || opcode == LIO_WRITEV ? BIO_WRITE :
 	    BIO_READ;
-	vectored = opcode == LIO_WRITEV;
+	vectored = opcode == LIO_WRITEV || opcode == LIO_READV;
 	if (vectored) {
 		iovcnt = cb->aio_iovcnt;
 		if (iovcnt > max_buf_aio)
@@ -1271,11 +1278,6 @@ aio_qbio(struct proc *p, struct kaiocb *job)
 			return (error);
 		for (i = 0; i < iovcnt; i++) {
 			if (auiop->uio_iov[i].iov_len % vp->v_bufobj.bo_bsize) {
-				// TODO: are there any disk-like devices that
-				// would balk here but would work with
-				// aio_process_rw?  I don't know of any.  With
-				// md, at least, aio_process_rw calls physio,
-				// which has this same problem.
 				error = -1;
 				goto free_uio;
 			}
@@ -1358,7 +1360,7 @@ aio_qbio(struct proc *p, struct kaiocb *job)
 		bp->bio_caller2 = (void *)pbuf;
 
 		prot = VM_PROT_READ;
-		if (cb->aio_lio_opcode == LIO_READ)
+		if (opcode == LIO_READ || opcode == LIO_READV)
 			prot |= VM_PROT_WRITE;	/* Less backwards than it looks */
 		npages = vm_fault_quick_hold_pages(&curproc->p_vmspace->vm_map,
 		    (vm_offset_t)buf, bp->bio_length, prot, pages,
@@ -1608,6 +1610,7 @@ aio_aqueue(struct thread *td, struct aiocb *ujob, struct aioliojob *lj,
 		error = fget_write(td, fd, &cap_pwrite_rights, &fp);
 		break;
 	case LIO_READ:
+	case LIO_READV:
 		error = fget_read(td, fd, &cap_pread_rights, &fp);
 		break;
 	case LIO_SYNC:
@@ -1633,7 +1636,8 @@ aio_aqueue(struct thread *td, struct aiocb *ujob, struct aioliojob *lj,
 		goto aqueue_fail;
 	}
 
-	if ((opcode == LIO_READ || opcode == LIO_WRITE || opcode == LIO_WRITEV)
+	if ((opcode == LIO_READ || opcode == LIO_READV
+	    || opcode == LIO_WRITE || opcode == LIO_WRITEV)
 	    && job->uaiocb.aio_offset < 0
 	    && (fp->f_vnode == NULL || fp->f_vnode->v_type != VCHR)) {
 		error = EINVAL;
@@ -1691,7 +1695,7 @@ no_kqueue:
 		error = 0;
 	} else if (fp->f_ops->fo_aio_queue == NULL)
 		error = aio_queue_file(fp, job);
-	else if (opcode == LIO_WRITEV)
+	else if (opcode == LIO_WRITEV || opcode == LIO_READV)
 		error = EOPNOTSUPP;
 	else
 		error = fo_aio_queue(fp, job);
@@ -1797,6 +1801,7 @@ aio_queue_file(struct file *fp, struct kaiocb *job)
 
 	switch (job->uaiocb.aio_lio_opcode) {
 	case LIO_READ:
+	case LIO_READV:
 	case LIO_WRITE:
 	case LIO_WRITEV:
 		aio_schedule(job, aio_process_rw);
@@ -2172,6 +2177,13 @@ sys_aio_read(struct thread *td, struct aio_read_args *uap)
 	return (aio_aqueue(td, uap->aiocbp, NULL, LIO_READ, &aiocb_ops));
 }
 
+int
+sys_aio_readv(struct thread *td, struct aio_readv_args *uap)
+{
+
+	return (aio_aqueue(td, uap->aiocbp, NULL, LIO_READV, &aiocb_ops));
+}
+
 /* syscall - asynchronous write to a file (REALTIME) */
 #ifdef COMPAT_FREEBSD6
 int
@@ -2425,7 +2437,9 @@ aio_biowakeup(struct bio *bp)
 	struct kaioinfo *ki;
 	struct buf *pbuf = (struct buf*)bp->bio_caller2;;
 	size_t nbytes;
-	int error, nblks;
+	int error, opcode, nblks;
+
+	opcode = job->uaiocb.aio_lio_opcode;
 
 	/* Release mapping into kernel space. */
 	if (pbuf != NULL) {
@@ -2451,7 +2465,7 @@ aio_biowakeup(struct bio *bp)
 	// of whichever failed bio completed last.
 	if (bp->bio_flags & BIO_ERROR)
 		atomic_set_int(&job->error, bp->bio_error);
-	if (job->uaiocb.aio_lio_opcode == LIO_WRITE)
+	if (opcode == LIO_WRITE || opcode == LIO_WRITEV)
 		atomic_add_int(&job->outblock, nblks);
 	else
 		atomic_add_int(&job->inblock, nblks);
@@ -2923,6 +2937,14 @@ freebsd32_aio_read(struct thread *td, struct freebsd32_aio_read_args *uap)
 {
 
 	return (aio_aqueue(td, (struct aiocb *)uap->aiocbp, NULL, LIO_READ,
+	    &aiocb32_ops));
+}
+
+int
+freebsd32_aio_readv(struct thread *td, struct freebsd32_aio_readv_args *uap)
+{
+
+	return (aio_aqueue(td, (struct aiocb *)uap->aiocbp, NULL, LIO_READV,
 	    &aiocb32_ops));
 }
 

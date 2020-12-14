@@ -414,6 +414,7 @@ FBSD_1.6 {
 	shm_create_largepage;
 	shm_rename;
 	aio_writev;
+	aio_readv;
 };
 
 FBSDprivate_1.0 {

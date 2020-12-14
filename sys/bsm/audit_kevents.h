@@ -660,6 +660,7 @@
 #define	AUE_REALPATHAT		43264	/* FreeBSD-specific. */
 #define	AUE_CLOSERANGE		43265	/* FreeBSD-specific. */
 #define	AUE_AIO_WRITEV		43266	/* FreeBSD-specific. */
+#define	AUE_AIO_READV		43267	/* FreeBSD-specific. */
 
 /*
  * Darwin BSM uses a number of AUE_O_* definitions, which are aliased to the

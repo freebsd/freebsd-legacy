@@ -302,11 +302,9 @@ aio_writev_test(struct aio_context *ac, completion comp, struct sigevent *sev)
 	aio.aio_offset = 0;
 	len0 = ac->ac_buflen * 3 / 4;
 	len1 = ac->ac_buflen / 4;
-	// TODO: once aio_readv is ready, swap the offsets of the two parts of
-	// the buffer.
-	iov[0].iov_base = ac->ac_buffer;
+	iov[0].iov_base = ac->ac_buffer + len1;
 	iov[0].iov_len = len0;
-	iov[1].iov_base = ac->ac_buffer + len0;
+	iov[1].iov_base = ac->ac_buffer;
 	iov[1].iov_len = len1;
 	aio.aio_iov = iov;
 	aio.aio_iovcnt = 2;
@@ -357,6 +355,43 @@ aio_read_test(struct aio_context *ac, completion comp, struct sigevent *sev)
 		atf_tc_fail("buffer mismatched");
 }
 
+static void
+aio_readv_test(struct aio_context *ac, completion comp, struct sigevent *sev)
+{
+	struct aiocb aio;
+	struct iovec iov[2];
+	size_t len0, len1;
+	ssize_t len;
+
+	bzero(ac->ac_buffer, ac->ac_buflen);
+	bzero(&aio, sizeof(aio));
+	aio.aio_fildes = ac->ac_write_fd;
+	aio.aio_offset = 0;
+	len0 = ac->ac_buflen * 3 / 4;
+	len1 = ac->ac_buflen / 4;
+	iov[0].iov_base = ac->ac_buffer + len1;
+	iov[0].iov_len = len0;
+	iov[1].iov_base = ac->ac_buffer;
+	iov[1].iov_len = len1;
+	aio.aio_iov = iov;
+	aio.aio_iovcnt = 2;
+	if (sev)
+		aio.aio_sigevent = *sev;
+
+	if (aio_readv(&aio) < 0)
+		atf_tc_fail("aio_read failed: %s", strerror(errno));
+
+	len = comp(&aio);
+	if (len < 0)
+		atf_tc_fail("aio failed: %s", strerror(errno));
+
+	ATF_REQUIRE_EQ_MSG(len, ac->ac_buflen,
+	    "aio short read (%jd)", (intmax_t)len);
+
+	if (aio_test_buffer(ac->ac_buffer, ac->ac_buflen, ac->ac_seed) == 0)
+		atf_tc_fail("buffer mismatched");
+}
+
 /*
  * Series of type-specific tests for AIO.  For now, we just make sure we can
  * issue a write and then a read to each type.  We assume that once a write
@@ -383,11 +418,13 @@ aio_file_test(completion comp, struct sigevent *sev, bool vectored)
 	ATF_REQUIRE_MSG(fd != -1, "open failed: %s", strerror(errno));
 
 	aio_context_init(&ac, fd, fd, FILE_LEN);
-	if (vectored)
+	if (vectored) {
 		aio_writev_test(&ac, comp, sev);
-	else
+		aio_readv_test(&ac, comp, sev);
+	} else {
 		aio_write_test(&ac, comp, sev);
-	aio_read_test(&ac, comp, sev);
+		aio_read_test(&ac, comp, sev);
+	}
 	close(fd);
 }
 
@@ -754,11 +791,13 @@ aio_md_test(completion comp, struct sigevent *sev, bool vectored)
 
 	fd = aio_md_setup();
 	aio_context_init(&ac, fd, fd, MD_LEN);
-	if (vectored)
+	if (vectored) {
 		aio_writev_test(&ac, comp, sev);
-	else
+		aio_readv_test(&ac, comp, sev);
+	} else {
 		aio_write_test(&ac, comp, sev);
-	aio_read_test(&ac, comp, sev);
+		aio_read_test(&ac, comp, sev);
+	}
 	
 	close(fd);
 }
@@ -1441,7 +1480,26 @@ ATF_TC_BODY(vectored_big_iovcnt, tc)
 
 	if (len != buflen)
 		atf_tc_fail("aio short write (%jd)", (intmax_t)len);
-	// TODO: aio_readv
+
+	bzero(&aio, sizeof(aio));
+	aio.aio_fildes = fd;
+	aio.aio_offset = 0;
+	aio.aio_iov = iov;
+	aio.aio_iovcnt = max_buf_aio + 1;
+
+	if (aio_readv(&aio) < 0)
+		atf_tc_fail("aio_readv failed: %s", strerror(errno));
+
+	len = poll(&aio);
+	if (len < 0)
+		atf_tc_fail("aio failed: %s", strerror(errno));
+
+	if (len != buflen)
+		atf_tc_fail("aio short read (%jd)", (intmax_t)len);
+
+	if (aio_test_buffer(buffer, buflen, seed) == 0)
+		atf_tc_fail("buffer mismatched");
+
 	close(fd);
 }
 ATF_TC_CLEANUP(vectored_big_iovcnt, tc)
@@ -1532,7 +1590,20 @@ ATF_TC_BODY(vectored_unaligned, tc)
 
 	if (len != total_len)
 		atf_tc_fail("aio short write (%jd)", (intmax_t)len);
-	// TODO: aio_readv
+
+	bzero(&aio, sizeof(aio));
+	aio.aio_fildes = ac.ac_read_fd;
+	aio.aio_offset = 0;
+	aio.aio_iov = iov;
+	aio.aio_iovcnt = 3;
+
+	if (aio_readv(&aio) < 0)
+		atf_tc_fail("aio_readv failed: %s", strerror(errno));
+	len = poll(&aio);
+
+	ATF_REQUIRE_MSG(aio_test_buffer(ac.ac_buffer, total_len,
+	    ac.ac_seed) != 0, "aio_test_buffer: internal error");
+
 	close(fd);
 }
 ATF_TC_CLEANUP(vectored_unaligned, tc)
@@ -1548,11 +1619,13 @@ aio_zvol_test(completion comp, struct sigevent *sev, bool vectored)
 
 	fd = aio_zvol_setup();
 	aio_context_init(&ac, fd, fd, MD_LEN);
-	if (vectored)
+	if (vectored) {
 		aio_writev_test(&ac, comp, sev);
-	else
+		aio_readv_test(&ac, comp, sev);
+	} else {
 		aio_write_test(&ac, comp, sev);
-	aio_read_test(&ac, comp, sev);
+		aio_read_test(&ac, comp, sev);
+	}
 	
 	close(fd);
 }
