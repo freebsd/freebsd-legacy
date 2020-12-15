@@ -365,7 +365,7 @@ aio_readv_test(struct aio_context *ac, completion comp, struct sigevent *sev)
 
 	bzero(ac->ac_buffer, ac->ac_buflen);
 	bzero(&aio, sizeof(aio));
-	aio.aio_fildes = ac->ac_write_fd;
+	aio.aio_fildes = ac->ac_read_fd;
 	aio.aio_offset = 0;
 	len0 = ac->ac_buflen * 3 / 4;
 	len1 = ac->ac_buflen / 4;
@@ -543,17 +543,16 @@ aio_unix_socketpair_test(completion comp, struct sigevent *sev, bool vectored)
 	aio_context_init(&ac, sockets[0], sockets[1], UNIX_SOCKETPAIR_LEN);
 	ATF_REQUIRE_MSG(getrusage(RUSAGE_SELF, &ru_before) != -1,
 	    "getrusage failed: %s", strerror(errno));
-	if (vectored)
+	if (vectored) {
 		aio_writev_test(&ac, comp, sev);
-	else
+		aio_readv_test(&ac, comp, sev);
+	} else {
 		aio_write_test(&ac, comp, sev);
+		aio_read_test(&ac, comp, sev);
+	}
 	ATF_REQUIRE_MSG(getrusage(RUSAGE_SELF, &ru_after) != -1,
 	    "getrusage failed: %s", strerror(errno));
 	ATF_REQUIRE(ru_after.ru_msgsnd == ru_before.ru_msgsnd + 1);
-	ru_before = ru_after;
-	aio_read_test(&ac, comp, sev);
-	ATF_REQUIRE_MSG(getrusage(RUSAGE_SELF, &ru_after) != -1,
-	    "getrusage failed: %s", strerror(errno));
 	ATF_REQUIRE(ru_after.ru_msgrcv == ru_before.ru_msgrcv + 1);
 
 	close(sockets[0]);
@@ -1054,14 +1053,11 @@ ATF_TC_BODY(aio_socket_two_reads, tc)
 	close(s[0]);
 }
 
-/*
- * This test ensures that aio_write() on a blocking socket of a "large"
- * buffer does not return a short completion.
- */
-ATF_TC_WITHOUT_HEAD(aio_socket_blocking_short_write);
-ATF_TC_BODY(aio_socket_blocking_short_write, tc)
+static void
+aio_socket_blocking_short_write_test(bool vectored)
 {
 	struct aiocb iocb, *iocbp;
+	struct iovec iov[2];
 	char *buffer[2];
 	ssize_t done;
 	int buffer_size, sb_size;
@@ -1101,9 +1097,19 @@ ATF_TC_BODY(aio_socket_blocking_short_write, tc)
 
 	memset(&iocb, 0, sizeof(iocb));
 	iocb.aio_fildes = s[1];
-	iocb.aio_buf = buffer[1];
-	iocb.aio_nbytes = buffer_size;
-	ATF_REQUIRE(aio_write(&iocb) == 0);
+	if (vectored) {
+		iov[0].iov_base = buffer[1];
+		iov[0].iov_len = buffer_size / 2 + 1;
+		iov[1].iov_base = buffer[1] + buffer_size / 2 + 1;
+		iov[1].iov_len = buffer_size / 2 - 1;
+		iocb.aio_iov = iov;
+		iocb.aio_iovcnt = 2;
+		ATF_REQUIRE(aio_writev(&iocb) == 0);
+	} else {
+		iocb.aio_buf = buffer[1];
+		iocb.aio_nbytes = buffer_size;
+		ATF_REQUIRE(aio_write(&iocb) == 0);
+	}
 
 	done = recv(s[0], buffer[0], buffer_size, MSG_WAITALL);
 	ATF_REQUIRE(done == buffer_size);
@@ -1116,6 +1122,26 @@ ATF_TC_BODY(aio_socket_blocking_short_write, tc)
 
 	close(s[1]);
 	close(s[0]);
+}
+
+/*
+ * This test ensures that aio_write() on a blocking socket of a "large"
+ * buffer does not return a short completion.
+ */
+ATF_TC_WITHOUT_HEAD(aio_socket_blocking_short_write);
+ATF_TC_BODY(aio_socket_blocking_short_write, tc)
+{
+	aio_socket_blocking_short_write_test(false);
+}
+
+/*
+ * Like aio_socket_blocking_short_write, but also tests that partially
+ * completed vectored sends can be retried correctly.
+ */
+ATF_TC_WITHOUT_HEAD(aio_socket_blocking_short_write_vectored);
+ATF_TC_BODY(aio_socket_blocking_short_write_vectored, tc)
+{
+	aio_socket_blocking_short_write_test(true);
 }
 
 /*
@@ -1686,6 +1712,7 @@ ATF_TP_ADD_TCS(tp)
 	ATF_TP_ADD_TC(tp, aio_large_read_test);
 	ATF_TP_ADD_TC(tp, aio_socket_two_reads);
 	ATF_TP_ADD_TC(tp, aio_socket_blocking_short_write);
+	ATF_TP_ADD_TC(tp, aio_socket_blocking_short_write_vectored);
 	ATF_TP_ADD_TC(tp, aio_socket_short_write_cancel);
 	ATF_TP_ADD_TC(tp, aio_writev_dos_iov_len);
 	ATF_TP_ADD_TC(tp, aio_writev_dos_iovcnt);

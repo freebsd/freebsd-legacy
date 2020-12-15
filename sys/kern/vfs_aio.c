@@ -1695,8 +1695,6 @@ no_kqueue:
 		error = 0;
 	} else if (fp->f_ops->fo_aio_queue == NULL)
 		error = aio_queue_file(fp, job);
-	else if (opcode == LIO_WRITEV || opcode == LIO_READV)
-		error = EOPNOTSUPP;
 	else
 		error = fo_aio_queue(fp, job);
 	if (error)

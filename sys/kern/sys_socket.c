@@ -459,6 +459,25 @@ static int soaio_lifetime;
 SYSCTL_INT(_kern_ipc_aio, OID_AUTO, lifetime, CTLFLAG_RW, &soaio_lifetime, 0,
     "Maximum lifetime for idle aiod");
 
+/* Advance the cursor in a uio by n bytes */
+static void
+soaio_advance_uio(struct uio *uio, int n)
+{
+	while (n > 0) {
+		int m = MIN(n, uio->uio_iov[0].iov_len);
+		n -= m;
+		uio->uio_iov[0].iov_base = (char*)uio->uio_iov[0].iov_base + m;
+		uio->uio_iov[0].iov_len -= m;
+		MPASS(uio->uio_resid >= m);
+		uio->uio_resid -= m;
+		if (uio->uio_iov[0].iov_len == 0) {
+			MPASS(uio->uio_iovcnt >= 1);
+			uio->uio_iov++;
+			uio->uio_iovcnt--;
+		}
+	}
+}
+
 static void
 soaio_kproc_loop(void *arg)
 {
@@ -600,30 +619,48 @@ soaio_process_job(struct socket *so, struct sockbuf *sb, struct kaiocb *job)
 	struct ucred *td_savedcred;
 	struct thread *td;
 	struct file *fp;
-	struct uio uio;
+	struct uio uio, *auiop;
 	struct iovec iov;
-	size_t cnt, done;
+	size_t cnt, done, job_total_nbytes;
 	long ru_before;
-	int error, flags;
+	int error, flags, opcode;
+	bool vectored;
 
 	SOCKBUF_UNLOCK(sb);
 	aio_switch_vmspace(job);
 	td = curthread;
 	fp = job->fd_file;
+	opcode = job->uaiocb.aio_lio_opcode;
+	vectored = opcode == LIO_WRITEV || opcode == LIO_READV;
 retry:
 	td_savedcred = td->td_ucred;
-	td->td_ucred = job->cred;
 
+	if (vectored) {
+		error = copyinuio(job->uaiocb.aio_iov, job->uaiocb.aio_iovcnt,
+		    &auiop);
+		if (error) {
+			aio_complete(job, -1, error);
+			SOCKBUF_LOCK(sb);
+			return;
+		}
+	} else {
+		iov.iov_base = (void *)((uintptr_t)job->uaiocb.aio_buf);
+		uio.uio_resid = job->uaiocb.aio_nbytes;
+		iov.iov_len = uio.uio_resid;
+		uio.uio_iov = &iov;
+		uio.uio_iovcnt = 1;
+		uio.uio_segflg = UIO_USERSPACE;
+		auiop = &uio;
+	}
+	job_total_nbytes = auiop->uio_resid;
+	auiop->uio_offset = 0;
+	auiop->uio_td = td;
+
+	td->td_ucred = job->cred;
 	done = job->aio_done;
-	cnt = job->uaiocb.aio_nbytes - done;
-	iov.iov_base = (void *)((uintptr_t)job->uaiocb.aio_buf + done);
-	iov.iov_len = cnt;
-	uio.uio_iov = &iov;
-	uio.uio_iovcnt = 1;
-	uio.uio_offset = 0;
-	uio.uio_resid = cnt;
-	uio.uio_segflg = UIO_USERSPACE;
-	uio.uio_td = td;
+	soaio_advance_uio(auiop, done);
+	cnt = auiop->uio_resid;
+	MPASS(cnt == job_total_nbytes - done);
 	flags = MSG_NBIO;
 
 	/*
@@ -633,26 +670,26 @@ retry:
 	 */
 
 	if (sb == &so->so_rcv) {
-		uio.uio_rw = UIO_READ;
+		auiop->uio_rw = UIO_READ;
 		ru_before = td->td_ru.ru_msgrcv;
 #ifdef MAC
 		error = mac_socket_check_receive(fp->f_cred, so);
 		if (error == 0)
 
 #endif
-			error = soreceive(so, NULL, &uio, NULL, NULL, &flags);
+			error = soreceive(so, NULL, auiop, NULL, NULL, &flags);
 		if (td->td_ru.ru_msgrcv != ru_before)
 			job->msgrcv = 1;
 	} else {
 		if (!TAILQ_EMPTY(&sb->sb_aiojobq))
 			flags |= MSG_MORETOCOME;
-		uio.uio_rw = UIO_WRITE;
+		auiop->uio_rw = UIO_WRITE;
 		ru_before = td->td_ru.ru_msgsnd;
 #ifdef MAC
 		error = mac_socket_check_send(fp->f_cred, so);
 		if (error == 0)
 #endif
-			error = sosend(so, NULL, &uio, NULL, NULL, flags, td);
+			error = sosend(so, NULL, auiop, NULL, NULL, flags, td);
 		if (td->td_ru.ru_msgsnd != ru_before)
 			job->msgsnd = 1;
 		if (error == EPIPE && (so->so_options & SO_NOSIGPIPE) == 0) {
@@ -662,7 +699,7 @@ retry:
 		}
 	}
 
-	done += cnt - uio.uio_resid;
+	done += cnt - auiop->uio_resid;
 	job->aio_done = done;
 	td->td_ucred = td_savedcred;
 
@@ -676,7 +713,7 @@ retry:
 		 * been made, requeue this request at the head of the
 		 * queue to try again when the socket is ready.
 		 */
-		MPASS(done != job->uaiocb.aio_nbytes);
+		MPASS(done != job_total_nbytes);
 		SOCKBUF_LOCK(sb);
 		if (done == 0 || !(so->so_state & SS_NBIO)) {
 			empty_results++;
@@ -696,7 +733,7 @@ retry:
 			} else {
 				TAILQ_INSERT_HEAD(&sb->sb_aiojobq, job, list);
 			}
-			return;
+			goto out;
 		}
 		SOCKBUF_UNLOCK(sb);
 	}		
@@ -708,6 +745,10 @@ retry:
 	else
 		aio_complete(job, done, 0);
 	SOCKBUF_LOCK(sb);
+
+out:
+	if (vectored)
+		free(auiop, M_IOV);
 }
 
 static void
@@ -782,10 +823,10 @@ soo_aio_cancel(struct kaiocb *job)
 
 	so = job->fd_file->f_data;
 	opcode = job->uaiocb.aio_lio_opcode;
-	if (opcode == LIO_READ)
+	if (opcode == LIO_READ || opcode == LIO_READV)
 		sb = &so->so_rcv;
 	else {
-		MPASS(opcode == LIO_WRITE);
+		MPASS(opcode == LIO_WRITE || opcode == LIO_WRITEV);
 		sb = &so->so_snd;
 	}
 
@@ -817,9 +858,11 @@ soo_aio_queue(struct file *fp, struct kaiocb *job)
 
 	switch (job->uaiocb.aio_lio_opcode) {
 	case LIO_READ:
+	case LIO_READV:
 		sb = &so->so_rcv;
 		break;
 	case LIO_WRITE:
+	case LIO_WRITEV:
 		sb = &so->so_snd;
 		break;
 	default:
